@@ -20,6 +20,8 @@ import {
   getSegment,
   mapLocation,
 } from "./enrichmentHelpers.js";
+import { calculateWipAging } from "./wipAgingCalculator.js";
+import { parseCustomDate } from "../../utils/dateParser.js";
 
 interface IndexedLookup<TRecord> {
   records: Map<string, TRecord>;
@@ -215,12 +217,8 @@ function classifyMatchStatus(
 }
 
 function toIsoString(value: Date | string | null | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  const parsed = parseCustomDate(value);
+  return parsed ? parsed.toISOString() : null;
 }
 
 function buildEnrichedRow(
@@ -239,7 +237,7 @@ function buildEnrichedRow(
     ticket_id: flexWip?.ticketId ?? renderways?.ticketId ?? callPlan?.ticketId ?? "",
     case_id: flexWip?.caseId ?? renderways?.caseId ?? "",
     case_created_time: toIsoString(flexWip?.createTime),
-    wip_aging: renderways?.wipAging ?? null,
+    wip_aging: calculateWipAging(toIsoString(flexWip?.createTime)) ?? renderways?.wipAging ?? null,
     rtpl_status: renderways?.rtplStatus ?? callPlan?.morningStatus ?? "",
     segment: getSegment(renderways?.productType, renderways?.callClassification),
     engineer: callPlan?.engineer ?? null,

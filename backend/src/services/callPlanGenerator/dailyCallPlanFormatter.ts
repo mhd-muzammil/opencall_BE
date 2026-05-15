@@ -70,7 +70,7 @@ export function formatDailyCallPlanRow(
     "Ticket ID": valueOrEmpty(row.ticket_id),
     "Case ID": valueOrManual(row.case_id),
     "Case Created Time": formatDisplayDateTime(row.case_created_time),
-    "WIP aging": valueOrManual(row.wip_aging),
+    "WIP aging": valueOrEmpty(row.wip_aging),
     "RTPL status": valueOrManual(row.rtpl_status),
     Segment: valueOrManual(row.segment),
     Engineer: valueOrManual(row.engineer),

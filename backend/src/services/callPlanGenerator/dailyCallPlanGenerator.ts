@@ -50,6 +50,7 @@ import {
 } from "./dailyCallPlanFormatter.js";
 import { manualFieldCarryForwardService } from "./manualFieldCarryForwardService.js";
 import { validateReportGenerationTransaction } from "./reportGenerationValidation.js";
+import { calculateWipAging } from "../compareService/wipAgingCalculator.js";
 
 function countDuplicateTickets(rows: readonly GeneratedDailyCallPlanRow[]): number {
   const counts = new Map<string, number>();
@@ -443,10 +444,26 @@ export async function generateDailyCallPlanReport(
       comparison = metadataFromComparison(reportComparison);
     }
 
+    // ── Recalculate WIP aging from case_created_time for every row ──
+    const reportNow = new Date();
+    const updateAging = () => {
+      for (const row of rows) {
+        const computed = calculateWipAging(row.enriched.case_created_time, reportNow);
+        if (computed !== null) {
+          row.enriched.wip_aging = computed;
+          row.output["WIP aging"] = computed;
+        }
+      }
+    };
+
     if (!existingReportId) {
+      updateAging();
       await insertDailyCallPlanReportRows(client, reportId, rows);
     } else {
       await applyPersistedRowMetadata(client, reportId, rows);
+      // Recalculate again after applying metadata to ensure aging is up-to-date
+      // and accounts for any manually updated case_created_time.
+      updateAging();
     }
 
     return {

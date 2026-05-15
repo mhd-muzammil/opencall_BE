@@ -52,7 +52,6 @@ const REQUIRED_MANUAL_FIELD_VALUE_BY_RESPONSE_FIELD: Record<
   engineer: "engineer",
   location: "location",
   case_created_time: "caseCreatedTime",
-  wip_aging: "wipAging",
   hp_owner_status: "hpOwnerStatus",
   customer_mail: "customerMail",
   rca: "rca",
@@ -78,7 +77,6 @@ const MANUAL_FIELD_BY_EDITABLE_FIELD: Partial<
   location: "location",
   segment: "segment",
   caseCreatedTime: "case_created_time",
-  wipAging: "wip_aging",
   hpOwnerStatus: "hp_owner_status",
 };
 
