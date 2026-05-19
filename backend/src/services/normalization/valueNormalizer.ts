@@ -31,9 +31,33 @@ export function normalizePincode(value: unknown): string | null {
   return digits.length > 0 ? digits : null;
 }
 
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+function dateFromIstWallClock(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  millisecond = 0,
+): Date {
+  return new Date(
+    Date.UTC(year, month - 1, day, hour, minute, second, millisecond) - IST_OFFSET_MS,
+  );
+}
+
 export function parseExcelDate(value: unknown): Date | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value;
+    return dateFromIstWallClock(
+      value.getFullYear(),
+      value.getMonth() + 1,
+      value.getDate(),
+      value.getHours(),
+      value.getMinutes(),
+      value.getSeconds(),
+      value.getMilliseconds(),
+    );
   }
 
   const cleaned = cleanString(value)?.replace(/^Cre:\s*/i, "");
@@ -55,9 +79,9 @@ export function parseExcelDate(value: unknown): Date | null {
       }
     }
 
-    const parsed = new Date(
+    const parsed = dateFromIstWallClock(
       Number(year),
-      Number(month) - 1,
+      Number(month),
       Number(day),
       normalizedHour,
       Number(minute),
