@@ -7,6 +7,7 @@ import { badRequest } from "../utils/httpError.js";
 
 const ALLOWED_EXTENSIONS = new Set([".xls", ".xlsx"]);
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+const MAX_CALL_PLAN_FILES = 5;
 
 const storage = multer.diskStorage({
   destination: (_request, _file, callback) => {
@@ -32,7 +33,7 @@ export const uploadReportsMiddleware = multer({
   storage,
   limits: {
     fileSize: MAX_FILE_SIZE_BYTES,
-    files: 3,
+    files: 2 + MAX_CALL_PLAN_FILES,
   },
   fileFilter: (_request, file, callback) => {
     const extension = path.extname(file.originalname).toLowerCase();
@@ -52,5 +53,5 @@ export const uploadReportsMiddleware = multer({
 }).fields([
   { name: "flexWipReport", maxCount: 1 },
   { name: "renderwaysReport", maxCount: 1 },
-  { name: "callPlan", maxCount: 1 },
+  { name: "callPlan", maxCount: MAX_CALL_PLAN_FILES },
 ]);

@@ -34,16 +34,16 @@ export function getUploadedSourceFiles(
   }
 
   return ALL_FIELDS.flatMap((fieldName) => {
-    const file = files[fieldName]?.[0];
+    const uploadedFiles = files[fieldName] ?? [];
 
-    if (!file) {
+    if (uploadedFiles.length === 0) {
       return [];
     }
 
-    return [{
+    return uploadedFiles.map((file) => ({
       fieldName,
       sourceType: FIELD_TO_SOURCE[fieldName],
       file,
-    }];
+    }));
   });
 }
