@@ -6,7 +6,7 @@ import { closeDatabasePool, pool } from "../config/database.js";
 const apiSrcDir = path.dirname(fileURLToPath(import.meta.url));
 const migrationPath = path.resolve(
   apiSrcDir,
-  "../../../../infra/postgres/migrations/014_user_activity_log.sql",
+  "../../../infra/postgres/migrations/014_user_activity_log.sql",
 );
 
 async function run(): Promise<void> {
