@@ -6,6 +6,7 @@ import {
   type ActivityRow,
 } from "../../repositories/activityLogRepository.js";
 import { listRegions, type Region } from "../../repositories/regionRepository.js";
+import { aspCodesForRegion } from "../rbac/regionRowAccess.js";
 import type { UserRole } from "@opencall/shared";
 
 export interface MonitoringDashboardSummary {
@@ -80,13 +81,13 @@ interface ActiveUserCountRow {
   count: string;
 }
 
-interface PendingManualRow {
-  region_id: string | null;
+interface PendingManualWorkLocationRow {
+  work_location: string | null;
   count: string;
 }
 
-interface RtplRow {
-  region_id: string | null;
+interface RtplWorkLocationRow {
+  work_location: string | null;
   rtpl_status: string;
   count: string;
 }
@@ -155,46 +156,53 @@ async function fetchFailedBatchCounts(since: string): Promise<Map<string | null,
   return map;
 }
 
-async function fetchPendingManualCounts(): Promise<Map<string | null, number>> {
-  const result = await query<PendingManualRow>(
+async function fetchPendingManualCountsByWorkLocation(): Promise<Map<string, number>> {
+  const result = await query<PendingManualWorkLocationRow>(
     `
-      SELECT reports.region_id, COUNT(*)::TEXT AS count
+      SELECT
+        UPPER(TRIM(COALESCE(rows.work_location, ''))) AS work_location,
+        COUNT(*)::TEXT AS count
       FROM daily_call_plan_report_rows rows
-      JOIN daily_call_plan_reports reports ON reports.id = rows.report_id
       WHERE rows.manual_fields_completed = FALSE
-      GROUP BY reports.region_id
+      GROUP BY UPPER(TRIM(COALESCE(rows.work_location, '')))
     `,
   );
-  const map = new Map<string | null, number>();
+  const map = new Map<string, number>();
   for (const row of result.rows) {
-    map.set(row.region_id, Number(row.count));
+    if (row.work_location) {
+      map.set(row.work_location, Number(row.count));
+    }
   }
   return map;
 }
 
-async function fetchRtplBreakdown(): Promise<Map<string | null, Array<{ rtplStatus: string; count: number }>>> {
-  const result = await query<RtplRow>(
+async function fetchRtplBreakdownByWorkLocation(): Promise<
+  Map<string, Array<{ rtplStatus: string; count: number }>>
+> {
+  const result = await query<RtplWorkLocationRow>(
     `
       WITH latest_report AS (
-        SELECT DISTINCT ON (region_id) id, region_id
+        SELECT id
         FROM daily_call_plan_reports
-        ORDER BY region_id, created_at DESC
+        ORDER BY created_at DESC
+        LIMIT 1
       )
       SELECT
-        latest_report.region_id,
+        UPPER(TRIM(COALESCE(rows.work_location, ''))) AS work_location,
         COALESCE(NULLIF(TRIM(rows.rtpl_status), ''), 'Manual Entry Required') AS rtpl_status,
         COUNT(*)::TEXT AS count
       FROM latest_report
       JOIN daily_call_plan_report_rows rows ON rows.report_id = latest_report.id
-      GROUP BY latest_report.region_id, rtpl_status
-      ORDER BY latest_report.region_id, count DESC
+      GROUP BY UPPER(TRIM(COALESCE(rows.work_location, ''))), rtpl_status
+      ORDER BY UPPER(TRIM(COALESCE(rows.work_location, ''))), count DESC
     `,
   );
-  const map = new Map<string | null, Array<{ rtplStatus: string; count: number }>>();
+  const map = new Map<string, Array<{ rtplStatus: string; count: number }>>();
   for (const row of result.rows) {
-    const list = map.get(row.region_id) ?? [];
+    if (!row.work_location) continue;
+    const list = map.get(row.work_location) ?? [];
     list.push({ rtplStatus: row.rtpl_status, count: Number(row.count) });
-    map.set(row.region_id, list);
+    map.set(row.work_location, list);
   }
   return map;
 }
@@ -267,17 +275,51 @@ async function fetchRecentReports(limit: number): Promise<RecentReportRow[]> {
   }));
 }
 
+function aggregateByRegionWorkLocations(
+  region: Region,
+  pendingByWorkLocation: Map<string, number>,
+  rtplByWorkLocation: Map<string, Array<{ rtplStatus: string; count: number }>>,
+): {
+  pendingManualEntries: number;
+  rtplMetrics: Array<{ rtplStatus: string; count: number }>;
+} {
+  const aspCodes = aspCodesForRegion(region);
+  let pendingManualEntries = 0;
+  const rtplAccumulator = new Map<string, number>();
+  for (const aspCode of aspCodes) {
+    pendingManualEntries += pendingByWorkLocation.get(aspCode) ?? 0;
+    const entries = rtplByWorkLocation.get(aspCode);
+    if (entries) {
+      for (const entry of entries) {
+        rtplAccumulator.set(
+          entry.rtplStatus,
+          (rtplAccumulator.get(entry.rtplStatus) ?? 0) + entry.count,
+        );
+      }
+    }
+  }
+  const rtplMetrics = Array.from(rtplAccumulator.entries())
+    .map(([rtplStatus, count]) => ({ rtplStatus, count }))
+    .sort((a, b) => b.count - a.count);
+  return { pendingManualEntries, rtplMetrics };
+}
+
 function buildRegionEntry(
   region: Region,
   activeUsers: Map<string | null, number>,
   failedBatches: Map<string | null, number>,
-  pendingManual: Map<string | null, number>,
-  rtpl: Map<string | null, Array<{ rtplStatus: string; count: number }>>,
+  pendingByWorkLocation: Map<string, number>,
+  rtplByWorkLocation: Map<string, Array<{ rtplStatus: string; count: number }>>,
   loginCounts24h: Map<string | null, number>,
   reportCounts30d: Map<string | null, number>,
   lastEvents: Map<string | null, { lastLogin: string | null; lastUpload: string | null; lastReport: string | null }>,
 ): RegionDashboardEntry {
   const evt = lastEvents.get(region.id);
+  const { pendingManualEntries, rtplMetrics } = aggregateByRegionWorkLocations(
+    region,
+    pendingByWorkLocation,
+    rtplByWorkLocation,
+  );
   return {
     regionId: region.id,
     regionCode: region.code,
@@ -287,11 +329,11 @@ function buildRegionEntry(
     recentLoginCount24h: loginCounts24h.get(region.id) ?? 0,
     reportCount30d: reportCounts30d.get(region.id) ?? 0,
     failedBatchCount30d: failedBatches.get(region.id) ?? 0,
-    pendingManualEntries: pendingManual.get(region.id) ?? 0,
+    pendingManualEntries,
     lastLoginAt: evt?.lastLogin ?? null,
     lastUploadAt: evt?.lastUpload ?? null,
     lastReportGeneratedAt: evt?.lastReport ?? null,
-    rtplMetrics: rtpl.get(region.id) ?? [],
+    rtplMetrics,
   };
 }
 
@@ -307,8 +349,8 @@ export async function buildMonitoringDashboard(options: {
     regions,
     activeUsers,
     failedBatches,
-    pendingManual,
-    rtpl,
+    pendingByWorkLocation,
+    rtplByWorkLocation,
     counts30d,
     counts24h,
     lastEventsRows,
@@ -319,8 +361,8 @@ export async function buildMonitoringDashboard(options: {
     listRegions(),
     fetchActiveUserCounts(),
     fetchFailedBatchCounts(since30d),
-    fetchPendingManualCounts(),
-    fetchRtplBreakdown(),
+    fetchPendingManualCountsByWorkLocation(),
+    fetchRtplBreakdownByWorkLocation(),
     countByRegionAndEvent(since30d),
     countByRegionAndEvent(since24h),
     lastEventTimestampsByRegion(),
@@ -355,8 +397,8 @@ export async function buildMonitoringDashboard(options: {
       region,
       activeUsers,
       failedBatches,
-      pendingManual,
-      rtpl,
+      pendingByWorkLocation,
+      rtplByWorkLocation,
       loginCounts24h,
       reportCounts30d,
       lastEvents,
@@ -369,7 +411,7 @@ export async function buildMonitoringDashboard(options: {
   }
   const totalReports30d = Array.from(reportCounts30d.values()).reduce((a, b) => a + b, 0);
   let totalPendingManualEntries = 0;
-  for (const count of pendingManual.values()) {
+  for (const count of pendingByWorkLocation.values()) {
     totalPendingManualEntries += count;
   }
 
