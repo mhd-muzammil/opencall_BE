@@ -530,8 +530,8 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         WHERE sessions.status = 'COMPLETED'
           AND sessions.daily_call_plan_report_id IS NOT NULL
           AND sessions.region_id IS NOT DISTINCT FROM $2
-          AND reports.report_date = $1::date - 1
-        ORDER BY sessions.updated_at DESC, sessions.id ASC
+          AND reports.report_date < $1::date
+        ORDER BY reports.report_date DESC, sessions.updated_at DESC, sessions.id ASC
         LIMIT 1
       )
       SELECT

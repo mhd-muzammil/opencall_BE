@@ -1,11 +1,37 @@
 import type { RequestHandler } from "express";
+import { findRegionById } from "../repositories/regionRepository.js";
 import { generateDailyCallPlanReport } from "../services/callPlanGenerator/dailyCallPlanGenerator.js";
 import {
   requireCurrentUser,
   resolveEffectiveRegionId,
 } from "../services/rbac/regionAccessService.js";
+import type { GeneratedDailyCallPlanReport } from "../types/reportGeneration.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { reportGenerationRequestSchema } from "../validators/reportGenerationRequestValidator.js";
+
+function filterReportForRegion(
+  report: GeneratedDailyCallPlanReport,
+  regionCode: string,
+): GeneratedDailyCallPlanReport {
+  const wantedCode = regionCode.trim().toUpperCase();
+  const filteredRows = report.rows.filter((row) => {
+    const aspCode = String(
+      row.output["Work Location"] ?? row.enriched.work_location ?? "",
+    )
+      .trim()
+      .toUpperCase();
+    return aspCode === wantedCode;
+  });
+  const filteredRegionBreakdown = report.regionBreakdown.filter(
+    (entry) => entry.aspCode === wantedCode,
+  );
+  return {
+    ...report,
+    rows: filteredRows,
+    totalRows: filteredRows.length,
+    regionBreakdown: filteredRegionBreakdown,
+  };
+}
 
 export const generateDailyCallPlanReportController: RequestHandler =
   asyncHandler(async (request, response) => {
@@ -19,11 +45,23 @@ export const generateDailyCallPlanReportController: RequestHandler =
       currentUser,
       body.regionId ?? null,
     );
+    const isRegionAdmin = currentUser.role === "REGION_ADMIN";
     const report = await generateDailyCallPlanReport({
       ...body,
       generatedBy: currentUser.id,
       regionId,
+      allowCreate: !isRegionAdmin,
     });
+
+    if (isRegionAdmin && currentUser.regionId) {
+      const region = await findRegionById(currentUser.regionId);
+      if (region) {
+        response.status(201).json({
+          data: filterReportForRegion(report, region.code),
+        });
+        return;
+      }
+    }
 
     response.status(201).json({
       data: report,

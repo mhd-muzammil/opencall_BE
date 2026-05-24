@@ -34,7 +34,7 @@ import type {
   ManualCarryForwardRowMetadata,
 } from "../../types/reportGeneration.js";
 import { MANUAL_CARRY_FORWARD_FIELDS } from "../../types/reportGeneration.js";
-import { unprocessableEntity } from "../../utils/httpError.js";
+import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
 import { matchSourceRecords } from "../compareService/matchingEngine.js";
 import {
   dedupeRowsByTicket,
@@ -289,6 +289,12 @@ export async function generateDailyCallPlanReport(
 ): Promise<GeneratedDailyCallPlanReport> {
   return withTransaction(async (client) => {
     const existingReportId = await validateReportGenerationTransaction(client, input);
+
+    if (!existingReportId && input.allowCreate === false) {
+      throw forbidden(
+        "Only a SUPER_ADMIN can generate a new report. Open an existing report from history instead.",
+      );
+    }
 
     const flexWip = await findFlexWipRecordsByBatchId(
       client,

@@ -1,11 +1,13 @@
 import { Router } from "express";
+import { adminRouter } from "./adminRoutes.js";
 import { authRouter } from "./authRoutes.js";
 import { healthRouter } from "./healthRoutes.js";
+import { historyRouter } from "./historyRoutes.js";
 import { matchRouter } from "./matchRoutes.js";
+import { meRouter } from "./meRoutes.js";
 import { reportRouter } from "./reportRoutes.js";
 import { reportRowRouter } from "./reportRowRoutes.js";
 import { uploadRouter } from "./uploadRoutes.js";
-import { historyRouter } from "./historyRoutes.js";
 
 export const apiRouter = Router();
 
@@ -16,3 +18,5 @@ apiRouter.use("/reports", reportRouter);
 apiRouter.use("/report-rows", reportRowRouter);
 apiRouter.use("/uploads", uploadRouter);
 apiRouter.use("/report-history", historyRouter);
+apiRouter.use("/admin", adminRouter);
+apiRouter.use("/me", meRouter);

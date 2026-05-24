@@ -98,8 +98,7 @@ export async function findOrCreateCompletedHistorySessionForReport(
       WITH candidate AS (
         SELECT id
         FROM report_history_sessions
-        WHERE user_id = $1
-          AND flex_upload_batch_id = $4
+        WHERE flex_upload_batch_id = $4
           AND renderways_upload_batch_id IS NOT DISTINCT FROM $5
           AND call_plan_upload_batch_id IS NOT DISTINCT FROM $6
         ORDER BY
@@ -174,9 +173,30 @@ export async function findOrCreateCompletedHistorySessionForReport(
   return inserted;
 }
 
-export async function getHistorySessionsByUser(
-  userId: string,
+export interface ListHistorySessionsFilters {
+  userId?: string;
+  includeCompletedFromOthers?: boolean;
+}
+
+export async function listHistorySessions(
+  filters: ListHistorySessionsFilters,
 ): Promise<ReportHistorySessionRow[]> {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.userId && !filters.includeCompletedFromOthers) {
+    params.push(filters.userId);
+    conditions.push(`sessions.user_id = $${params.length}`);
+  } else if (filters.userId && filters.includeCompletedFromOthers) {
+    params.push(filters.userId);
+    conditions.push(
+      `(sessions.user_id = $${params.length} OR sessions.status = 'COMPLETED')`,
+    );
+  } else if (filters.includeCompletedFromOthers) {
+    conditions.push(`sessions.status = 'COMPLETED'`);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const sql = `
     SELECT
       sessions.*,
@@ -184,11 +204,34 @@ export async function getHistorySessionsByUser(
     FROM report_history_sessions sessions
     LEFT JOIN daily_call_plan_reports reports
       ON reports.id = sessions.daily_call_plan_report_id
-    WHERE sessions.user_id = $1
+    ${where}
     ORDER BY sessions.created_at DESC;
   `;
-  const result = await query<ReportHistorySessionRow>(sql, [userId]);
+  const result = await query<ReportHistorySessionRow>(sql, params);
   return result.rows;
+}
+
+export async function getHistorySessionsByUser(
+  userId: string,
+): Promise<ReportHistorySessionRow[]> {
+  return listHistorySessions({ userId });
+}
+
+export async function findHistorySessionById(
+  id: string,
+): Promise<ReportHistorySessionRow | null> {
+  const sql = `
+    SELECT
+      sessions.*,
+      reports.report_date::TEXT AS report_date
+    FROM report_history_sessions sessions
+    LEFT JOIN daily_call_plan_reports reports
+      ON reports.id = sessions.daily_call_plan_report_id
+    WHERE sessions.id = $1
+    LIMIT 1;
+  `;
+  const result = await query<ReportHistorySessionRow>(sql, [id]);
+  return result.rows[0] ?? null;
 }
 
 export async function getHistorySessionById(
