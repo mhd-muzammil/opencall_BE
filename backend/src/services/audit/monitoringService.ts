@@ -76,6 +76,64 @@ export interface MonitoringDashboard {
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+interface RegionGroup {
+  canonical: Region;
+  regionIds: Set<string>;
+}
+
+function dedupeRegionsByName(regions: Region[]): RegionGroup[] {
+  const grouped = new Map<string, Region[]>();
+  for (const region of regions) {
+    const key = region.name.trim().toUpperCase();
+    const list = grouped.get(key) ?? [];
+    list.push(region);
+    grouped.set(key, list);
+  }
+  const aspCodePattern = /^ASPS\d+$/i;
+  const result: RegionGroup[] = [];
+  for (const list of grouped.values()) {
+    const canonical =
+      list.find((r) => aspCodePattern.test(r.code)) ??
+      list.find((r) => r.isActive) ??
+      list[0]!;
+    result.push({
+      canonical,
+      regionIds: new Set(list.map((r) => r.id)),
+    });
+  }
+  return result.sort((a, b) =>
+    a.canonical.name.localeCompare(b.canonical.name),
+  );
+}
+
+function sumGroup<T extends number>(
+  group: RegionGroup,
+  source: Map<string | null, T>,
+): number {
+  let total = 0;
+  for (const regionId of group.regionIds) {
+    total += (source.get(regionId) ?? 0) as number;
+  }
+  return total;
+}
+
+function latestInGroup(
+  group: RegionGroup,
+  source: Map<string | null, { lastLogin: string | null; lastUpload: string | null; lastReport: string | null }>,
+): { lastLogin: string | null; lastUpload: string | null; lastReport: string | null } {
+  let lastLogin: string | null = null;
+  let lastUpload: string | null = null;
+  let lastReport: string | null = null;
+  for (const regionId of group.regionIds) {
+    const evt = source.get(regionId);
+    if (!evt) continue;
+    if (evt.lastLogin && (!lastLogin || evt.lastLogin > lastLogin)) lastLogin = evt.lastLogin;
+    if (evt.lastUpload && (!lastUpload || evt.lastUpload > lastUpload)) lastUpload = evt.lastUpload;
+    if (evt.lastReport && (!lastReport || evt.lastReport > lastReport)) lastReport = evt.lastReport;
+  }
+  return { lastLogin, lastUpload, lastReport };
+}
+
 interface ActiveUserCountRow {
   region_id: string | null;
   count: string;
@@ -140,12 +198,20 @@ async function fetchActiveUserCounts(): Promise<Map<string | null, number>> {
 }
 
 async function fetchFailedBatchCounts(since: string): Promise<Map<string | null, number>> {
+  // Only count failed uploads where a REGION_ADMIN of that region uploaded.
+  // With the new workflow SUPER_ADMIN uploads centrally and selects an
+  // arbitrary region on upload, so attributing failures by that selection
+  // misleads (a region with zero users would still appear to have failures).
   const result = await query<{ region_id: string | null; count: string }>(
     `
-      SELECT region_id, COUNT(*)::TEXT AS count
-      FROM source_upload_batches
-      WHERE status = 'FAILED' AND created_at >= $1::timestamptz
-      GROUP BY region_id
+      SELECT batches.region_id, COUNT(*)::TEXT AS count
+      FROM source_upload_batches batches
+      LEFT JOIN users ON users.id = batches.uploaded_by
+      WHERE batches.status = 'FAILED'
+        AND batches.created_at >= $1::timestamptz
+        AND users.role = 'REGION_ADMIN'
+        AND users.region_id = batches.region_id
+      GROUP BY batches.region_id
     `,
     [since],
   );
@@ -157,12 +223,21 @@ async function fetchFailedBatchCounts(since: string): Promise<Map<string | null,
 }
 
 async function fetchPendingManualCountsByWorkLocation(): Promise<Map<string, number>> {
+  // Scope to the single most recent report so the counters reflect what
+  // operators need to act on today, not the running total across history.
   const result = await query<PendingManualWorkLocationRow>(
     `
+      WITH latest_report AS (
+        SELECT id
+        FROM daily_call_plan_reports
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
       SELECT
         UPPER(TRIM(COALESCE(rows.work_location, ''))) AS work_location,
         COUNT(*)::TEXT AS count
-      FROM daily_call_plan_report_rows rows
+      FROM latest_report
+      JOIN daily_call_plan_report_rows rows ON rows.report_id = latest_report.id
       WHERE rows.manual_fields_completed = FALSE
       GROUP BY UPPER(TRIM(COALESCE(rows.work_location, '')))
     `,
@@ -305,7 +380,7 @@ function aggregateByRegionWorkLocations(
 }
 
 function buildRegionEntry(
-  region: Region,
+  group: RegionGroup,
   activeUsers: Map<string | null, number>,
   failedBatches: Map<string | null, number>,
   pendingByWorkLocation: Map<string, number>,
@@ -314,25 +389,26 @@ function buildRegionEntry(
   reportCounts30d: Map<string | null, number>,
   lastEvents: Map<string | null, { lastLogin: string | null; lastUpload: string | null; lastReport: string | null }>,
 ): RegionDashboardEntry {
-  const evt = lastEvents.get(region.id);
+  const region = group.canonical;
   const { pendingManualEntries, rtplMetrics } = aggregateByRegionWorkLocations(
     region,
     pendingByWorkLocation,
     rtplByWorkLocation,
   );
+  const evt = latestInGroup(group, lastEvents);
   return {
     regionId: region.id,
     regionCode: region.code,
     regionName: region.name,
     regionIsActive: region.isActive,
-    activeUserCount: activeUsers.get(region.id) ?? 0,
-    recentLoginCount24h: loginCounts24h.get(region.id) ?? 0,
-    reportCount30d: reportCounts30d.get(region.id) ?? 0,
-    failedBatchCount30d: failedBatches.get(region.id) ?? 0,
+    activeUserCount: sumGroup(group, activeUsers),
+    recentLoginCount24h: sumGroup(group, loginCounts24h),
+    reportCount30d: sumGroup(group, reportCounts30d),
+    failedBatchCount30d: sumGroup(group, failedBatches),
     pendingManualEntries,
-    lastLoginAt: evt?.lastLogin ?? null,
-    lastUploadAt: evt?.lastUpload ?? null,
-    lastReportGeneratedAt: evt?.lastReport ?? null,
+    lastLoginAt: evt.lastLogin,
+    lastUploadAt: evt.lastUpload,
+    lastReportGeneratedAt: evt.lastReport,
     rtplMetrics,
   };
 }
@@ -392,9 +468,10 @@ export async function buildMonitoringDashboard(options: {
     });
   }
 
-  const regionEntries = regions.map((region) =>
+  const regionGroups = dedupeRegionsByName(regions);
+  const regionEntries = regionGroups.map((group) =>
     buildRegionEntry(
-      region,
+      group,
       activeUsers,
       failedBatches,
       pendingByWorkLocation,
@@ -418,8 +495,8 @@ export async function buildMonitoringDashboard(options: {
   return {
     generatedAt: now.toISOString(),
     summary: {
-      activeRegions: regions.filter((r) => r.isActive).length,
-      totalRegions: regions.length,
+      activeRegions: regionGroups.filter((g) => g.canonical.isActive).length,
+      totalRegions: regionGroups.length,
       totalActiveUsers,
       totalReports30d,
       totalPendingManualEntries,
