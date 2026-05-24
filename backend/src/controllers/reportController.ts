@@ -1,36 +1,14 @@
 import type { RequestHandler } from "express";
-import { ASP_CODE_REGION_MAP } from "@opencall/shared";
 import { findRegionById, type Region } from "../repositories/regionRepository.js";
 import { generateDailyCallPlanReport } from "../services/callPlanGenerator/dailyCallPlanGenerator.js";
 import {
   requireCurrentUser,
   resolveEffectiveRegionId,
 } from "../services/rbac/regionAccessService.js";
+import { aspCodesForRegion } from "../services/rbac/regionRowAccess.js";
 import type { GeneratedDailyCallPlanReport } from "../types/reportGeneration.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { reportGenerationRequestSchema } from "../validators/reportGenerationRequestValidator.js";
-
-function aspCodesForRegion(region: Region): Set<string> {
-  const wanted = new Set<string>();
-  const regionCodeUpper = region.code.trim().toUpperCase();
-  const regionNameUpper = region.name.trim().toUpperCase();
-
-  // 1. Direct match: regions.code is the ASP code (e.g. "ASPS01463")
-  if (regionCodeUpper) {
-    wanted.add(regionCodeUpper);
-  }
-
-  // 2. Reverse lookup: regions.code or regions.name is the canonical region name
-  //    ("VELLORE", "CHENNAI", ...). Find every ASP code that maps to it.
-  for (const [aspCode, regionName] of Object.entries(ASP_CODE_REGION_MAP)) {
-    const canonicalName = regionName.trim().toUpperCase();
-    if (canonicalName === regionNameUpper || canonicalName === regionCodeUpper) {
-      wanted.add(aspCode.toUpperCase());
-    }
-  }
-
-  return wanted;
-}
 
 function filterReportForRegion(
   report: GeneratedDailyCallPlanReport,

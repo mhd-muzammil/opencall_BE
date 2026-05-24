@@ -85,6 +85,7 @@ export interface EditedReportRow {
   id: string;
   reportId: string;
   regionId: string | null;
+  workLocation: string | null;
   caseCreatedTime: string | null;
   wipAging: string | null;
   hpOwnerStatus: string | null;
@@ -109,6 +110,7 @@ interface EditedReportRowDbRow {
   id: string;
   report_id: string;
   region_id: string | null;
+  work_location: string | null;
   case_created_time: string | null;
   wip_aging: string | null;
   hp_owner_status: string | null;
@@ -231,6 +233,7 @@ function mapEditedReportRow(row: EditedReportRowDbRow): EditedReportRow {
     id: row.id,
     reportId: row.report_id,
     regionId: row.region_id,
+    workLocation: row.work_location,
     caseCreatedTime: row.case_created_time,
     wipAging: row.wip_aging,
     hpOwnerStatus: row.hp_owner_status,
@@ -611,6 +614,7 @@ export async function updateDailyCallPlanReportRowManualFields(
         rows.id,
         rows.report_id,
         reports.region_id::TEXT AS region_id,
+        rows.work_location,
         rows.case_created_time::TEXT AS case_created_time,
         rows.wip_aging,
         rows.hp_owner_status,
@@ -661,6 +665,7 @@ export async function findDailyCallPlanReportRowForEdit(
         rows.id,
         rows.report_id,
         reports.region_id::TEXT AS region_id,
+        rows.work_location,
         rows.case_created_time::TEXT AS case_created_time,
         rows.wip_aging,
         rows.hp_owner_status,

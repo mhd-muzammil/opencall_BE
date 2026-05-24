@@ -9,6 +9,8 @@ import {
   updateDailyCallPlanReportRowManualFields,
   type EditedReportRow,
 } from "../../repositories/dailyCallPlanReportRepository.js";
+import { findRegionById } from "../../repositories/regionRepository.js";
+import { workLocationMatchesRegion } from "../rbac/regionRowAccess.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
 
 export const EDITABLE_REPORT_ROW_FIELDS = [
@@ -183,15 +185,22 @@ export async function updateReportRowManualFields(input: {
     });
   }
 
-  if (
-    input.user.role !== "SUPER_ADMIN" &&
-    current.regionId !== null &&
-    current.regionId !== input.user.regionId
-  ) {
-    throw forbidden("Cannot edit report rows from another region", {
-      rowRegionId: current.regionId,
-      userRegionId: input.user.regionId,
-    });
+  if (input.user.role !== "SUPER_ADMIN") {
+    if (!input.user.regionId) {
+      throw forbidden("REGION_ADMIN user is not assigned to a region");
+    }
+    const region = await findRegionById(input.user.regionId);
+    if (!region) {
+      throw forbidden("REGION_ADMIN user's region was not found", {
+        userRegionId: input.user.regionId,
+      });
+    }
+    if (!workLocationMatchesRegion(current.workLocation, region)) {
+      throw forbidden("Cannot edit report rows from another region", {
+        rowWorkLocation: current.workLocation,
+        userRegionId: input.user.regionId,
+      });
+    }
   }
 
   const merged = mergeRowValues(current, input.values);
