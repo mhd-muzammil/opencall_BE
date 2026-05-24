@@ -16,6 +16,10 @@ import {
   getRegionDrillDownController,
   listAdminActivityController,
 } from "../controllers/adminMonitoringController.js";
+import {
+  getRcaTimelineController,
+  listRcaCasesController,
+} from "../controllers/adminRcaController.js";
 import { requireAuthenticatedUser } from "../middlewares/authMiddleware.js";
 import { requireRole } from "../middlewares/roleMiddleware.js";
 
@@ -45,6 +49,18 @@ adminRouter.get(
   "/activity",
   requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
   listAdminActivityController,
+);
+
+adminRouter.get(
+  "/rca/cases",
+  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
+  listRcaCasesController,
+);
+
+adminRouter.get(
+  "/rca/cases/:ticketId",
+  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
+  getRcaTimelineController,
 );
 
 adminRouter.get(

@@ -7,6 +7,10 @@ import {
 } from "../../repositories/activityLogRepository.js";
 import { listRegions, type Region } from "../../repositories/regionRepository.js";
 import { aspCodesForRegion } from "../rbac/regionRowAccess.js";
+import {
+  dedupeRegionsByName,
+  type RegionGroup,
+} from "../rbac/regionGroups.js";
 import type { UserRole } from "@opencall/shared";
 
 export interface MonitoringDashboardSummary {
@@ -75,36 +79,6 @@ export interface MonitoringDashboard {
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-
-interface RegionGroup {
-  canonical: Region;
-  regionIds: Set<string>;
-}
-
-function dedupeRegionsByName(regions: Region[]): RegionGroup[] {
-  const grouped = new Map<string, Region[]>();
-  for (const region of regions) {
-    const key = region.name.trim().toUpperCase();
-    const list = grouped.get(key) ?? [];
-    list.push(region);
-    grouped.set(key, list);
-  }
-  const aspCodePattern = /^ASPS\d+$/i;
-  const result: RegionGroup[] = [];
-  for (const list of grouped.values()) {
-    const canonical =
-      list.find((r) => aspCodePattern.test(r.code)) ??
-      list.find((r) => r.isActive) ??
-      list[0]!;
-    result.push({
-      canonical,
-      regionIds: new Set(list.map((r) => r.id)),
-    });
-  }
-  return result.sort((a, b) =>
-    a.canonical.name.localeCompare(b.canonical.name),
-  );
-}
 
 function sumGroup<T extends number>(
   group: RegionGroup,
