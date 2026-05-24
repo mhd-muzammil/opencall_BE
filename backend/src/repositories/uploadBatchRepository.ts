@@ -22,6 +22,7 @@ export interface UploadBatchValidationRecord {
   rowCount: number;
   errorCount: number;
   regionId: string | null;
+  uploaderRole: "SUPER_ADMIN" | "REGION_ADMIN" | null;
 }
 
 interface UploadBatchValidationRow {
@@ -31,6 +32,7 @@ interface UploadBatchValidationRow {
   row_count: number;
   error_count: number;
   region_id: string | null;
+  uploader_role: "SUPER_ADMIN" | "REGION_ADMIN" | null;
 }
 
 export async function createUploadBatch(
@@ -102,15 +104,17 @@ export async function findUploadBatchesForValidation(
   const result = await client.query<UploadBatchValidationRow>(
     `
       SELECT
-        id,
-        source_type,
-        status,
-        row_count,
-        error_count,
-        region_id
-      FROM source_upload_batches
-      WHERE id = ANY($1::uuid[])
-      FOR SHARE
+        batches.id,
+        batches.source_type,
+        batches.status,
+        batches.row_count,
+        batches.error_count,
+        batches.region_id,
+        users.role AS uploader_role
+      FROM source_upload_batches batches
+      LEFT JOIN users ON users.id = batches.uploaded_by
+      WHERE batches.id = ANY($1::uuid[])
+      FOR SHARE OF batches
     `,
     [uploadBatchIds],
   );
@@ -122,5 +126,6 @@ export async function findUploadBatchesForValidation(
     rowCount: row.row_count,
     errorCount: row.error_count,
     regionId: row.region_id,
+    uploaderRole: row.uploader_role,
   }));
 }

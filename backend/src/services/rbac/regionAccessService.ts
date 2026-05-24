@@ -49,6 +49,9 @@ export function assertCanAccessBatchRegions(
   }
 
   const blockedBatches = batches.filter((batch) => {
+    if (batch.uploaderRole === "SUPER_ADMIN") {
+      return false;
+    }
     return batch.regionId !== null && batch.regionId !== user.regionId;
   });
 
