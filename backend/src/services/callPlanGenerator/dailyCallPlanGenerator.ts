@@ -217,7 +217,7 @@ async function applyPersistedRowMetadata(
   client: Parameters<typeof findDailyCallPlanReportRowMetadataByReportId>[0],
   reportId: string,
   rows: GeneratedDailyCallPlanRow[],
-): Promise<void> {
+): Promise<GeneratedDailyCallPlanRow[]> {
   const metadata = await findDailyCallPlanReportRowMetadataByReportId(
     client,
     reportId,
@@ -256,6 +256,12 @@ async function applyPersistedRowMetadata(
       formatDailyCallPlanRow(row.serialNo, row.enriched),
     );
   }
+
+  return rows.filter((row) => {
+    const ticketKey = getNormalizedTicketKey(row.enriched.ticket_id);
+    const persisted = ticketKey ? metadataByTicket.get(ticketKey) : null;
+    return !persisted?.isExcluded;
+  });
 }
 
 function metadataFromComparison(
@@ -385,7 +391,7 @@ export async function generateDailyCallPlanReport(
       currentRows: generatedRows,
       previousFinalRows,
     });
-    const rows = carryForwardResult.rows;
+    let rows = carryForwardResult.rows;
     const duplicateTicketCount = countDuplicateTickets(rows);
     const unmatchedTicketCount = countUnmatchedRows(rows);
     
@@ -472,7 +478,7 @@ export async function generateDailyCallPlanReport(
       updateAging();
       await insertDailyCallPlanReportRows(client, reportId, rows);
     } else {
-      await applyPersistedRowMetadata(client, reportId, rows);
+      rows = await applyPersistedRowMetadata(client, reportId, rows);
       // Recalculate again after applying metadata to ensure aging is up-to-date
       // and accounts for any manually updated case_created_time.
       updateAging();

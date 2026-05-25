@@ -7,6 +7,7 @@ import {
 import {
   findDailyCallPlanReportRowForEdit,
   updateDailyCallPlanReportRowManualFields,
+  deleteDailyCallPlanReportRow,
   type EditedReportRow,
 } from "../../repositories/dailyCallPlanReportRepository.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
@@ -225,6 +226,37 @@ export async function updateReportRowManualFields(input: {
 
     return updated;
   });
+}
+
+export async function deleteReportRowService(input: {
+  rowId: string;
+  user: AuthenticatedUser;
+}): Promise<void> {
+  const current = await findDailyCallPlanReportRowForEdit(input.rowId);
+
+  if (!current) {
+    throw unprocessableEntity("Report row does not exist", {
+      rowId: input.rowId,
+    });
+  }
+
+  if (
+    input.user.role !== "SUPER_ADMIN" &&
+    current.regionId !== null &&
+    current.regionId !== input.user.regionId
+  ) {
+    throw forbidden("Cannot delete report rows from another region", {
+      rowRegionId: current.regionId,
+      userRegionId: input.user.regionId,
+    });
+  }
+
+  const success = await deleteDailyCallPlanReportRow(input.rowId, input.user.id);
+  if (!success) {
+    throw unprocessableEntity("Report row could not be deleted", {
+      rowId: input.rowId,
+    });
+  }
 }
 
 export const OPTIONAL_REPORT_ROW_EDIT_FIELDS =

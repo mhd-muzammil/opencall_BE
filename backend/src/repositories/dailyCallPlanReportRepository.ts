@@ -39,6 +39,7 @@ export interface PersistedReportRowSnapshot extends PersistedReportRowMetadata {
   carriedForwardFields: ManualCarryForwardField[];
   manualFieldsCompleted: boolean;
   manualFieldsMissing: ManualCarryForwardField[];
+  isExcluded: boolean;
 }
 
 interface PersistedReportRowSnapshotDbRow {
@@ -59,8 +60,10 @@ interface PersistedReportRowSnapshotDbRow {
   carried_forward_fields: ManualCarryForwardField[];
   manual_fields_completed: boolean;
   manual_fields_missing: ManualCarryForwardField[];
+  manual_fields_missing: ManualCarryForwardField[];
   updated_at: string | null;
   updated_by: string | null;
+  is_excluded: boolean;
 }
 
 export interface ReportRowEditPayload {
@@ -275,6 +278,7 @@ function mapPersistedReportRowMetadata(
     manualFieldsMissing: row.manual_fields_missing,
     updatedAt: row.updated_at,
     updatedBy: row.updated_by,
+    isExcluded: row.is_excluded,
   };
 }
 
@@ -469,6 +473,7 @@ export async function findFinalReportRowsForManualCarryForwardBySessionId(
       WHERE sessions.id = $1
         AND sessions.status = 'COMPLETED'
         AND sessions.daily_call_plan_report_id IS NOT NULL
+        AND NOT rows.is_excluded
       ORDER BY rows.serial_no ASC, rows.id ASC
     `,
     [sessionId],
@@ -502,7 +507,8 @@ export async function findDailyCallPlanReportRowMetadataByReportId(
         manual_fields_completed,
         manual_fields_missing,
         updated_at::TEXT AS updated_at,
-        updated_by::TEXT AS updated_by
+        updated_by::TEXT AS updated_by,
+        is_excluded
       FROM daily_call_plan_report_rows
       WHERE report_id = $1
       ORDER BY serial_no ASC, id ASC
@@ -565,6 +571,7 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         ON sessions.id = previous_session.id
       JOIN daily_call_plan_report_rows rows
         ON rows.report_id = sessions.daily_call_plan_report_id
+      WHERE NOT rows.is_excluded
       ORDER BY rows.serial_no ASC, rows.id ASC
     `,
     [input.reportDate, input.regionId],
@@ -688,4 +695,24 @@ export async function findDailyCallPlanReportRowForEdit(
 
   const row = result.rows[0];
   return row ? mapEditedReportRow(row) : null;
+}
+
+export async function deleteDailyCallPlanReportRow(
+  rowId: string,
+  updatedBy: string,
+): Promise<boolean> {
+  const result = await query(
+    `
+      UPDATE daily_call_plan_report_rows
+      SET
+        is_excluded = TRUE,
+        updated_at = NOW(),
+        updated_by = $2
+      WHERE id = $1
+        AND NOT is_excluded
+    `,
+    [rowId, updatedBy],
+  );
+
+  return (result.rowCount ?? 0) > 0;
 }

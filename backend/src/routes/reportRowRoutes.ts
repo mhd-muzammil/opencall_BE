@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { updateReportRowController } from "../controllers/reportRowController.js";
+import { updateReportRowController, deleteReportRowController } from "../controllers/reportRowController.js";
 import { requireAuthenticatedUser } from "../middlewares/authMiddleware.js";
 import { requireRole } from "../middlewares/roleMiddleware.js";
 
@@ -10,4 +10,11 @@ reportRowRouter.patch(
   requireAuthenticatedUser,
   requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
   updateReportRowController,
+);
+
+reportRowRouter.delete(
+  "/:id",
+  requireAuthenticatedUser,
+  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
+  deleteReportRowController,
 );
