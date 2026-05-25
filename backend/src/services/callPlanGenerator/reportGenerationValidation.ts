@@ -152,7 +152,8 @@ export async function validateReportGenerationTransaction(
     if (
       input.regionId &&
       batch.regionId &&
-      batch.regionId !== input.regionId
+      batch.regionId !== input.regionId &&
+      batch.uploaderRole !== "SUPER_ADMIN"
     ) {
       validationErrors.push({
         source: expectedBatch.label,

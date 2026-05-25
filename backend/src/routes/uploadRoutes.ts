@@ -9,7 +9,7 @@ export const uploadRouter = Router();
 uploadRouter.post(
   "/",
   requireAuthenticatedUser,
-  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
+  requireRole(["SUPER_ADMIN"]),
   uploadReportsMiddleware,
   uploadReportsController,
 );

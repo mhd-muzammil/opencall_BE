@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "db:check": "tsx src/scripts/checkDatabase.ts",
+    "migrate:user-management": "tsx src/scripts/applyUserManagementMigration.ts",
+    "migrate:activity-log": "tsx src/scripts/applyActivityLogMigration.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "user:upsert-admin": "node dist/scripts/upsertAdminUser.js",

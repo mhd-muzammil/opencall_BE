@@ -54,6 +54,7 @@ export interface GenerateDailyCallPlanInput {
   flexUploadBatchId: string;
   renderwaysUploadBatchId?: string | null | undefined;
   callPlanUploadBatchId?: string | null | undefined;
+  allowCreate?: boolean;
 }
 
 export interface GeneratedDailyCallPlanRow {

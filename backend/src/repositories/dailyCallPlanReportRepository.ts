@@ -88,6 +88,7 @@ export interface EditedReportRow {
   id: string;
   reportId: string;
   regionId: string | null;
+  workLocation: string | null;
   caseCreatedTime: string | null;
   wipAging: string | null;
   hpOwnerStatus: string | null;
@@ -112,6 +113,7 @@ interface EditedReportRowDbRow {
   id: string;
   report_id: string;
   region_id: string | null;
+  work_location: string | null;
   case_created_time: string | null;
   wip_aging: string | null;
   hp_owner_status: string | null;
@@ -234,6 +236,7 @@ function mapEditedReportRow(row: EditedReportRowDbRow): EditedReportRow {
     id: row.id,
     reportId: row.report_id,
     regionId: row.region_id,
+    workLocation: row.work_location,
     caseCreatedTime: row.case_created_time,
     wipAging: row.wip_aging,
     hpOwnerStatus: row.hp_owner_status,
@@ -536,8 +539,8 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         WHERE sessions.status = 'COMPLETED'
           AND sessions.daily_call_plan_report_id IS NOT NULL
           AND sessions.region_id IS NOT DISTINCT FROM $2
-          AND reports.report_date = $1::date - 1
-        ORDER BY sessions.updated_at DESC, sessions.id ASC
+          AND reports.report_date < $1::date
+        ORDER BY reports.report_date DESC, sessions.updated_at DESC, sessions.id ASC
         LIMIT 1
       )
       SELECT
@@ -618,6 +621,7 @@ export async function updateDailyCallPlanReportRowManualFields(
         rows.id,
         rows.report_id,
         reports.region_id::TEXT AS region_id,
+        rows.work_location,
         rows.case_created_time::TEXT AS case_created_time,
         rows.wip_aging,
         rows.hp_owner_status,
@@ -668,6 +672,7 @@ export async function findDailyCallPlanReportRowForEdit(
         rows.id,
         rows.report_id,
         reports.region_id::TEXT AS region_id,
+        rows.work_location,
         rows.case_created_time::TEXT AS case_created_time,
         rows.wip_aging,
         rows.hp_owner_status,

@@ -3,6 +3,8 @@ import {
   requireCurrentUser,
 } from "../services/rbac/regionAccessService.js";
 import { updateReportRowManualFields, deleteReportRowService } from "../services/reportRows/reportRowEditService.js";
+import { recordActivity } from "../services/audit/activityLogger.js";
+import { updateReportRowManualFields } from "../services/reportRows/reportRowEditService.js";
 import type { ReportRowEditInput } from "../services/reportRows/reportRowEditService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { badRequest } from "../utils/httpError.js";
@@ -25,6 +27,23 @@ export const updateReportRowController: RequestHandler = asyncHandler(
       rowId,
       user: currentUser,
       values,
+    });
+
+    recordActivity({
+      eventType: "REPORT_ROW_EDITED",
+      actor: {
+        id: currentUser.id,
+        email: currentUser.email,
+        role: currentUser.role,
+      },
+      regionId: row.regionId ?? currentUser.regionId ?? null,
+      targetType: "report_row",
+      targetId: row.id,
+      metadata: {
+        reportId: row.reportId,
+        changedFields: Object.keys(values),
+      },
+      request,
     });
 
     response.json({

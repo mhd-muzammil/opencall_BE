@@ -1,14 +1,29 @@
+import type { AuthenticatedUser } from "../types/auth.js";
 import {
-  getHistorySessionsByUser,
-  getHistorySessionById,
-  updateHistorySessionTitle,
-  deleteHistorySession,
   createHistorySession,
+  deleteHistorySession,
+  findHistorySessionById,
+  getHistorySessionById,
+  listHistorySessions,
+  updateHistorySessionTitle,
 } from "../repositories/historyRepository.js";
+import { forbidden, unprocessableEntity } from "../utils/httpError.js";
 
-export async function listReportHistory(userId: string) {
-  const sessions = await getHistorySessionsByUser(userId);
-  return sessions.map((s) => ({
+function mapHistorySession(s: {
+  id: string;
+  title: string;
+  status: "DRAFT" | "COMPLETED";
+  region_id: string | null;
+  flex_upload_batch_id: string | null;
+  renderways_upload_batch_id: string | null;
+  call_plan_upload_batch_id: string | null;
+  daily_call_plan_report_id: string | null;
+  report_date: string | null;
+  total_rows: number;
+  created_at: string;
+  updated_at: string;
+}) {
+  return {
     id: s.id,
     title: s.title,
     status: s.status,
@@ -21,62 +36,91 @@ export async function listReportHistory(userId: string) {
     totalRows: s.total_rows,
     createdAt: s.created_at,
     updatedAt: s.updated_at,
-  }));
-}
-
-export async function getReportHistoryDetail(id: string, userId: string) {
-  const session = await getHistorySessionById(id, userId);
-  if (!session) {
-    throw new Error("History session not found");
-  }
-  
-  // We return the batch IDs so the frontend can use them
-  return {
-    id: session.id,
-    title: session.title,
-    status: session.status,
-    regionId: session.region_id,
-    flexUploadBatchId: session.flex_upload_batch_id,
-    renderwaysUploadBatchId: session.renderways_upload_batch_id,
-    callPlanUploadBatchId: session.call_plan_upload_batch_id,
-    reportId: session.daily_call_plan_report_id,
-    reportDate: session.report_date,
-    totalRows: session.total_rows,
-    createdAt: session.created_at,
-    updatedAt: session.updated_at,
   };
 }
 
-export async function renameReportHistory(id: string, userId: string, title: string) {
-  const session = await updateHistorySessionTitle(id, userId, title);
+export async function listReportHistory(user: AuthenticatedUser) {
+  const sessions = await listHistorySessions({
+    userId: user.id,
+    includeCompletedFromOthers: user.role === "REGION_ADMIN",
+  });
+  return sessions.map(mapHistorySession);
+}
+
+export async function getReportHistoryDetail(
+  id: string,
+  user: AuthenticatedUser,
+) {
+  const ownSession = await getHistorySessionById(id, user.id);
+  if (ownSession) {
+    return mapHistorySession(ownSession);
+  }
+
+  if (user.role === "REGION_ADMIN") {
+    const sharedSession = await findHistorySessionById(id);
+    if (sharedSession && sharedSession.status === "COMPLETED") {
+      return mapHistorySession(sharedSession);
+    }
+  }
+
+  throw unprocessableEntity("History session not found");
+}
+
+export async function renameReportHistory(
+  id: string,
+  user: AuthenticatedUser,
+  title: string,
+) {
+  if (user.role !== "SUPER_ADMIN") {
+    const ownSession = await getHistorySessionById(id, user.id);
+    if (!ownSession) {
+      throw forbidden("REGION_ADMIN cannot rename history sessions owned by other users");
+    }
+  }
+  const session = await updateHistorySessionTitle(id, user.id, title);
   if (!session) {
-    throw new Error("History session not found");
+    throw unprocessableEntity("History session not found");
   }
   return { id: session.id, title: session.title };
 }
 
-export async function removeReportHistory(id: string, userId: string) {
-  const success = await deleteHistorySession(id, userId);
+export async function removeReportHistory(
+  id: string,
+  user: AuthenticatedUser,
+) {
+  if (user.role !== "SUPER_ADMIN") {
+    const ownSession = await getHistorySessionById(id, user.id);
+    if (!ownSession) {
+      throw forbidden("REGION_ADMIN cannot delete history sessions owned by other users");
+    }
+  }
+  const success = await deleteHistorySession(id, user.id);
   if (!success) {
-    throw new Error("History session not found or could not be deleted");
+    throw unprocessableEntity("History session not found or could not be deleted");
   }
   return { success };
 }
 
-export async function duplicateReportHistory(id: string, userId: string) {
-  const existing = await getHistorySessionById(id, userId);
-  if (!existing) {
-    throw new Error("History session not found");
+export async function duplicateReportHistory(
+  id: string,
+  user: AuthenticatedUser,
+) {
+  if (user.role !== "SUPER_ADMIN") {
+    throw forbidden("Only SUPER_ADMIN can duplicate report history sessions");
   }
-  
+  const existing = await getHistorySessionById(id, user.id);
+  if (!existing) {
+    throw unprocessableEntity("History session not found");
+  }
+
   const duplicated = await createHistorySession(null, {
-    userId,
+    userId: user.id,
     title: `${existing.title} (Copy)`,
     regionId: existing.region_id,
     flexUploadBatchId: existing.flex_upload_batch_id,
     renderwaysUploadBatchId: existing.renderways_upload_batch_id,
     callPlanUploadBatchId: existing.call_plan_upload_batch_id,
   });
-  
+
   return { id: duplicated.id, title: duplicated.title };
 }
