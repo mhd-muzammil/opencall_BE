@@ -74,6 +74,10 @@ export function readExcelSheet(
     }
 
     const worksheet = workbook.Sheets[targetSheet];
+    if (!worksheet) {
+      throw new Error("Open Call worksheet is undefined");
+    }
+
     const rawRows = xlsx.utils.sheet_to_json<unknown[]>(worksheet, {
       header: 1,
       blankrows: false,

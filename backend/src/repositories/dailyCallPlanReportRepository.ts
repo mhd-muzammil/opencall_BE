@@ -60,7 +60,6 @@ interface PersistedReportRowSnapshotDbRow {
   carried_forward_fields: ManualCarryForwardField[];
   manual_fields_completed: boolean;
   manual_fields_missing: ManualCarryForwardField[];
-  manual_fields_missing: ManualCarryForwardField[];
   updated_at: string | null;
   updated_by: string | null;
   is_excluded: boolean;

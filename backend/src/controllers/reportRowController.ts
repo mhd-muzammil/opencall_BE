@@ -4,7 +4,6 @@ import {
 } from "../services/rbac/regionAccessService.js";
 import { updateReportRowManualFields, deleteReportRowService } from "../services/reportRows/reportRowEditService.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
-import { updateReportRowManualFields } from "../services/reportRows/reportRowEditService.js";
 import type { ReportRowEditInput } from "../services/reportRows/reportRowEditService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { badRequest } from "../utils/httpError.js";
