@@ -9,6 +9,7 @@
     "migrate:user-management": "tsx src/scripts/applyUserManagementMigration.ts",
     "migrate:activity-log": "tsx src/scripts/applyActivityLogMigration.ts",
     "migrate:required-regions": "tsx src/scripts/applyRequiredRegionSeedMigration.ts",
+    "migrate:engineers": "tsx src/scripts/applyEngineersMigration.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "user:upsert-admin": "node dist/scripts/upsertAdminUser.js",
