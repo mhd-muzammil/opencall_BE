@@ -113,8 +113,9 @@ function cleanEditableValue(value: string | null | undefined): string | null {
   return cleaned.length > 0 ? cleaned : null;
 }
 
-function isCarryForwardValue(value: string | null): boolean {
-  return value !== null && !PLACEHOLDER_VALUES.has(value.toLowerCase());
+function isCarryForwardValue(value: string | null | undefined): boolean {
+  if (value === null || value === undefined) return false;
+  return !PLACEHOLDER_VALUES.has(value.toLowerCase());
 }
 
 function manualFieldsMissing(values: EditedReportRow): ManualCarryForwardField[] {
