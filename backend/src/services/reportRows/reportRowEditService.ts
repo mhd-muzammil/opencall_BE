@@ -9,6 +9,7 @@ import {
   updateDailyCallPlanReportRowManualFields,
   deleteDailyCallPlanReportRow,
   type EditedReportRow,
+  type RtplStatusChange,
 } from "../../repositories/dailyCallPlanReportRepository.js";
 import { findRegionById } from "../../repositories/regionRepository.js";
 import { workLocationMatchesRegion } from "../rbac/regionRowAccess.js";
@@ -83,6 +84,7 @@ const MANUAL_FIELD_BY_EDITABLE_FIELD: Partial<
   location: "location",
   segment: "segment",
   caseCreatedTime: "case_created_time",
+  statusAging: "status_aging",
   hpOwnerStatus: "hp_owner_status",
 };
 
@@ -167,6 +169,43 @@ function mergeRowValues(
   };
 }
 
+function hasEditedField(
+  values: ReportRowEditInput,
+  field: EditableReportRowField,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(values, field);
+}
+
+function buildRtplStatusChange(
+  current: EditedReportRow,
+  updated: EditedReportRow,
+  values: ReportRowEditInput,
+): RtplStatusChange | null {
+  if (!hasEditedField(values, "rtplStatus")) {
+    return null;
+  }
+
+  const fromStatus = cleanEditableValue(current.rtplStatus);
+  const toStatus = cleanEditableValue(updated.rtplStatus);
+
+  if (fromStatus === toStatus) {
+    return null;
+  }
+
+  return {
+    rowId: updated.id,
+    reportId: updated.reportId,
+    serialNo: updated.serialNo,
+    ticketId: updated.ticketId,
+    caseId: updated.caseId,
+    workLocation: updated.workLocation,
+    fromStatus,
+    toStatus,
+    changedAt: updated.updatedAt,
+    changedBy: updated.updatedBy,
+  };
+}
+
 export function assertOnlyEditableFields(body: Record<string, unknown>): void {
   const editable = new Set<string>(EDITABLE_REPORT_ROW_FIELDS);
   const invalidFields = Object.keys(body).filter((field) => !editable.has(field));
@@ -227,6 +266,7 @@ export async function updateReportRowManualFields(input: {
     segment: merged.segment,
     caseCreatedTime: merged.caseCreatedTime,
     wipAging: merged.wipAging,
+    statusAging: merged.statusAging,
     hpOwnerStatus: merged.hpOwnerStatus,
     clearedCarryForwardFields,
     manualFieldsCompleted: missing.length === 0,
@@ -239,7 +279,10 @@ export async function updateReportRowManualFields(input: {
       });
     }
 
-    return updated;
+    return {
+      ...updated,
+      rtplStatusChange: buildRtplStatusChange(current, updated, input.values),
+    };
   });
 }
 

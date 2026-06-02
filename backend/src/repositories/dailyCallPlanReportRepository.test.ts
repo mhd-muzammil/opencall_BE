@@ -129,11 +129,11 @@ describe("insertDailyCallPlanReportRows", () => {
     expect(sql).toContain("manual_fields_missing");
     expect(sql).toContain("product_line_name");
     expect(sql).toContain("work_location");
-    expect(values[10]).toBe("Commercial");
-    expect(values[11]).toBe("ASPS01461");
-    expect(values[32]).toBe(JSON.stringify(["engineer", "customer_mail"]));
-    expect(values[33]).toBe(true);
-    expect(values[34]).toEqual([]);
+    expect(values[11]).toBe("Commercial");
+    expect(values[12]).toBe("ASPS01461");
+    expect(values[33]).toBe(JSON.stringify(["engineer", "customer_mail"]));
+    expect(values[34]).toBe(true);
+    expect(values[35]).toEqual([]);
   });
 
   it("loads persisted manual fields for regenerated history reports", async () => {
@@ -176,7 +176,15 @@ describe("insertDailyCallPlanReportRows", () => {
         {
           id: "row-1",
           report_id: "report-1",
+          serial_no: 1,
+          ticket_id: "WO-123",
+          case_id: "CASE-1",
           region_id: "region-1",
+          work_location: "ASPS01461",
+          case_created_time: null,
+          wip_aging: "2",
+          status_aging: "4",
+          hp_owner_status: "Open",
           engineer: "Mike",
           rtpl_status: "Pending",
           customer_mail: "customer@example.com",
@@ -185,6 +193,7 @@ describe("insertDailyCallPlanReportRows", () => {
           manual_notes: null,
           location: "Chennai",
           segment: "Enterprise",
+          carried_forward_fields: [],
           manual_fields_completed: true,
           manual_fields_missing: [],
           updated_at: "2026-05-07T00:00:00.000Z",
@@ -202,6 +211,7 @@ describe("insertDailyCallPlanReportRows", () => {
       manualNotes: null,
       location: "Chennai",
       segment: "Enterprise",
+      statusAging: "4",
       manualFieldsCompleted: true,
       manualFieldsMissing: [],
       updatedBy: "user-1",
@@ -213,5 +223,6 @@ describe("insertDailyCallPlanReportRows", () => {
     expect(sql).not.toContain("DELETE");
     expect(sql).not.toContain("daily_call_plan_reports SET");
     expect(values[0]).toBe("row-1");
+    expect(values[11]).toBe("4");
   });
 });

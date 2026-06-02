@@ -55,6 +55,20 @@ export interface ActivityRow {
   regionName: string | null;
 }
 
+export interface RtplStatusChangeActivity {
+  id: string;
+  rowId: string;
+  reportId: string;
+  serialNo: number;
+  ticketId: string;
+  caseId: string | null;
+  workLocation: string | null;
+  fromStatus: string | null;
+  toStatus: string | null;
+  changedAt: string;
+  changedBy: string | null;
+}
+
 interface ActivityRowDb {
   id: string;
   occurred_at: string;
@@ -72,6 +86,20 @@ interface ActivityRowDb {
   actor_username: string | null;
   region_code: string | null;
   region_name: string | null;
+}
+
+interface RtplStatusChangeActivityDb {
+  id: string;
+  row_id: string;
+  report_id: string;
+  serial_no: string | null;
+  ticket_id: string | null;
+  case_id: string | null;
+  work_location: string | null;
+  from_status: string | null;
+  to_status: string | null;
+  changed_at: string;
+  changed_by: string | null;
 }
 
 function mapActivityRow(row: ActivityRowDb): ActivityRow {
@@ -92,6 +120,24 @@ function mapActivityRow(row: ActivityRowDb): ActivityRow {
     actorUsername: row.actor_username,
     regionCode: row.region_code,
     regionName: row.region_name,
+  };
+}
+
+function mapRtplStatusChangeActivity(
+  row: RtplStatusChangeActivityDb,
+): RtplStatusChangeActivity {
+  return {
+    id: row.id,
+    rowId: row.row_id,
+    reportId: row.report_id,
+    serialNo: Number(row.serial_no ?? "0"),
+    ticketId: row.ticket_id ?? "",
+    caseId: row.case_id,
+    workLocation: row.work_location,
+    fromStatus: row.from_status,
+    toStatus: row.to_status,
+    changedAt: row.changed_at,
+    changedBy: row.changed_by,
   };
 }
 
@@ -123,6 +169,70 @@ export async function insertActivity(input: InsertActivityInput): Promise<void> 
       input.status,
     ],
   );
+}
+
+export async function listRtplStatusChanges(filters: {
+  reportId: string;
+  regionId?: string | null;
+  workLocationCodes?: readonly string[];
+  limit?: number;
+}): Promise<RtplStatusChangeActivity[]> {
+  const conditions = [
+    `a.event_type = 'REPORT_ROW_EDITED'::activity_event_type`,
+    `a.status = 'SUCCESS'`,
+    `a.metadata ? 'rtplStatusChange'`,
+  ];
+  const params: unknown[] = [filters.reportId];
+  conditions.push(`a.metadata->>'reportId' = $1`);
+
+  const workLocationCodes = (filters.workLocationCodes ?? [])
+    .map((code) => code.trim().toUpperCase())
+    .filter(Boolean);
+
+  if (filters.regionId && workLocationCodes.length > 0) {
+    params.push(filters.regionId);
+    const regionParam = params.length;
+    params.push(workLocationCodes);
+    const codesParam = params.length;
+    conditions.push(
+      `(a.region_id = $${regionParam} OR UPPER(a.metadata->>'workLocation') = ANY($${codesParam}::text[]))`,
+    );
+  } else if (filters.regionId) {
+    params.push(filters.regionId);
+    conditions.push(`a.region_id = $${params.length}`);
+  } else if (workLocationCodes.length > 0) {
+    params.push(workLocationCodes);
+    conditions.push(`UPPER(a.metadata->>'workLocation') = ANY($${params.length}::text[])`);
+  }
+
+  const limit = Math.min(Math.max(filters.limit ?? 50, 1), 200);
+  params.push(limit);
+  const limitParam = params.length;
+
+  const result = await query<RtplStatusChangeActivityDb>(
+    `
+      SELECT
+        a.id,
+        a.target_id AS row_id,
+        a.metadata->>'reportId' AS report_id,
+        a.metadata->>'serialNo' AS serial_no,
+        a.metadata->>'ticketId' AS ticket_id,
+        a.metadata->>'caseId' AS case_id,
+        a.metadata->>'workLocation' AS work_location,
+        a.metadata#>>'{rtplStatusChange,fromStatus}' AS from_status,
+        a.metadata#>>'{rtplStatusChange,toStatus}' AS to_status,
+        a.occurred_at::TEXT AS changed_at,
+        COALESCE(users.username, a.actor_email, a.actor_user_id::TEXT) AS changed_by
+      FROM user_activity_log a
+      LEFT JOIN users ON users.id = a.actor_user_id
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY a.occurred_at DESC, a.id DESC
+      LIMIT $${limitParam}
+    `,
+    params,
+  );
+
+  return result.rows.map(mapRtplStatusChangeActivity);
 }
 
 export interface ActivityFilters {

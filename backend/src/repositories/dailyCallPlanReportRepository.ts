@@ -107,6 +107,9 @@ export interface ReportRowCarryForwardBackfillPayload {
 export interface EditedReportRow {
   id: string;
   reportId: string;
+  serialNo: number;
+  ticketId: string;
+  caseId: string | null;
   regionId: string | null;
   workLocation: string | null;
   caseCreatedTime: string | null;
@@ -128,11 +131,28 @@ export interface EditedReportRow {
   updatedBy: string | null;
   rowEditable: boolean;
   carryForwardSource: "PREVIOUS_FINAL_REPORT";
+  rtplStatusChange?: RtplStatusChange | null;
+}
+
+export interface RtplStatusChange {
+  rowId: string;
+  reportId: string;
+  serialNo: number;
+  ticketId: string;
+  caseId: string | null;
+  workLocation: string | null;
+  fromStatus: string | null;
+  toStatus: string | null;
+  changedAt: string;
+  changedBy: string | null;
 }
 
 interface EditedReportRowDbRow {
   id: string;
   report_id: string;
+  serial_no: number;
+  ticket_id: string;
+  case_id: string | null;
   region_id: string | null;
   work_location: string | null;
   case_created_time: string | null;
@@ -259,6 +279,9 @@ function mapEditedReportRow(row: EditedReportRowDbRow): EditedReportRow {
   return {
     id: row.id,
     reportId: row.report_id,
+    serialNo: row.serial_no,
+    ticketId: row.ticket_id,
+    caseId: row.case_id,
     regionId: row.region_id,
     workLocation: row.work_location,
     caseCreatedTime: row.case_created_time,
@@ -672,6 +695,9 @@ export async function updateDailyCallPlanReportRowManualFields(
       RETURNING
         rows.id,
         rows.report_id,
+        rows.serial_no,
+        rows.ticket_id,
+        rows.case_id,
         reports.region_id::TEXT AS region_id,
         rows.work_location,
         rows.case_created_time::TEXT AS case_created_time,
@@ -802,10 +828,14 @@ export async function findDailyCallPlanReportRowForEdit(
       SELECT
         rows.id,
         rows.report_id,
+        rows.serial_no,
+        rows.ticket_id,
+        rows.case_id,
         reports.region_id::TEXT AS region_id,
         rows.work_location,
         rows.case_created_time::TEXT AS case_created_time,
         rows.wip_aging,
+        rows.status_aging,
         rows.hp_owner_status,
         rows.engineer,
         rows.rtpl_status,
