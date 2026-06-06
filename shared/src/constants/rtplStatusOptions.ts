@@ -4,7 +4,7 @@
 export const RTPL_STATUS_GROUPS = [
   {
     group: "General Activity",
-    options: ["Actionable", "CX Pending", "Problem Resolution", "work in progress", "under observation", "OTP", "WO-closed"]
+    options: ["Actionable", "CX Pending", "Problem Resolution", "work in progress", "under observation"]
   },
   {
     group: "Scheduling & Engineer",
@@ -24,7 +24,7 @@ export const RTPL_STATUS_GROUPS = [
   },
   {
     group: "Cancellations & Closures",
-    options: ["Need to Cancel", "Need to Cancel Mail", "Need to Close"]
+    options: ["Need to Cancel", "Need to Cancel Mail", "Need to Close", "OTP", "WO-closed", "Closed-cancellation"]
   },
   {
     group: "Returns & Yank",
