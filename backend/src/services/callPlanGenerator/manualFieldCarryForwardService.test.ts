@@ -28,6 +28,7 @@ function enrichedRow(
     wo_otc_code: "OTC",
     account_name: "Account",
     customer_name: "Customer",
+    customer_type: "Consumer",
     location: null,
     contact: null,
     part: null,

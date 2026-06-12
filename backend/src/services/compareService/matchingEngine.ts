@@ -252,6 +252,7 @@ function buildEnrichedRow(
     wo_otc_code: flexWip?.woOtcCode ?? null,
     account_name: flexWip?.accountName ?? null,
     customer_name: flexWip?.customerName ?? null,
+    customer_type: renderways?.customerType ?? null,
     location: callPlan?.location ?? mapLocation(flexWip?.customerPincode, input.areaNameByPincode),
     contact: flexWip?.contact ?? null,
     part: flexWip?.partDescription ?? null,

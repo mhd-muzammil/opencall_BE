@@ -152,6 +152,9 @@ function closedRowToEnriched(
     wo_otc_code: row.woOtcCode,
     account_name: row.accountName,
     customer_name: row.customerName,
+    // Closed synthetic rows are excluded from the active dashboard, so customer
+    // type is not carried forward from the persisted final report.
+    customer_type: null,
     location: previousFieldValue(row, "location"),
     contact: row.contact,
     part: row.part,

@@ -49,6 +49,7 @@ export interface RenderwaysParsedRecord {
   rcaMessage: string | null;
   productType: string | null;
   callClassification: string | null;
+  customerType: string | null;
   wipChangedFromMorningReport: string | null;
   rawRow: Record<string, unknown>;
   rowNumber: number;

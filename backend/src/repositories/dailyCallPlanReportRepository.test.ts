@@ -34,6 +34,7 @@ function enrichedRow(): EnrichedCallPlanRow {
     wo_otc_code: "OTC",
     account_name: "Account",
     customer_name: "Customer",
+    customer_type: "Consumer",
     location: "Chennai",
     contact: null,
     part: null,

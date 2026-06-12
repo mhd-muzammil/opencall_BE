@@ -49,6 +49,7 @@ export interface EnrichedCallPlanRow {
   wo_otc_code: string | null;
   account_name: string | null;
   customer_name: string | null;
+  customer_type: string | null;
   location: string | null;
   contact: string | null;
   part: string | null;

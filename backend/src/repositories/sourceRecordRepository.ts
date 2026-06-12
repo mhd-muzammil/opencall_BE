@@ -302,6 +302,7 @@ export async function findRenderwaysRecordsByBatchId(
     rcaMessage: row.rca_message,
     productType: row.product_type,
     callClassification: row.call_classification,
+    customerType: cleanString(getCell(row.raw_row as Record<string, unknown>, ["Customer Type", "CustomerType", "Customer type"])),
     wipChangedFromMorningReport: cleanString(getCell(row.raw_row as Record<string, unknown>, ["WIP Changed From Morning Report", "WIP Changes From Morning Report", "Wip Chnages From Morning Report", "WIP Changed"])),
     rawRow: row.raw_row,
     rowNumber: row.row_number,

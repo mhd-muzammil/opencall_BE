@@ -141,6 +141,7 @@ export function parseRenderwaysReport(
       rcaMessage: cleanString(getCell(row.values, ["RCA Message", "RCA"])),
       productType: cleanString(getCell(row.values, ["Product Type", "Product"])),
       callClassification: cleanString(getCell(row.values, ["Call Classification", "Segment"])),
+      customerType: cleanString(getCell(row.values, ["Customer Type", "CustomerType", "Customer type"])),
       wipChangedFromMorningReport: cleanString(getCell(row.values, ["WIP Changed From Morning Report", "WIP Changes From Morning Report", "Wip Chnages From Morning Report", "WIP Changed"])),
       rawRow: row.rawRow,
       rowNumber: row.rowNumber,
