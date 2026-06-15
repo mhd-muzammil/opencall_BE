@@ -73,6 +73,7 @@ export function formatDailyCallPlanRow(
     "WIP aging": valueOrEmpty(row.wip_aging),
     Location: valueOrManual(row.location),
     "RTPL status": valueOrManual(row.rtpl_status),
+    "Current Remarks": valueOrEmpty(row.remarks),
     Engineer: valueOrManual(row.engineer),
     "Flex Status": valueOrEmpty(row.flex_status),
     "Status Aging": valueOrManual(row.status_aging),
