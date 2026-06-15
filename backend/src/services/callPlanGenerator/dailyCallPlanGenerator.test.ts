@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   findAreaNameByPincode: vi.fn(),
   matchSourceRecords: vi.fn(),
   findPreviousFinalReportRowsForManualCarryForward: vi.fn(),
+  findFlexStatusHistoryForUnchangedDays: vi.fn(),
   findDailyCallPlanReportRowMetadataByReportId: vi.fn(),
   backfillMissingDailyCallPlanReportRowCarryForward: vi.fn(),
   createDailyCallPlanReport: vi.fn(),
@@ -40,6 +41,8 @@ vi.mock("../../repositories/dailyCallPlanReportRepository.js", () => ({
     mocks.findDailyCallPlanReportRowMetadataByReportId,
   findPreviousFinalReportRowsForManualCarryForward:
     mocks.findPreviousFinalReportRowsForManualCarryForward,
+  findFlexStatusHistoryForUnchangedDays:
+    mocks.findFlexStatusHistoryForUnchangedDays,
   insertDailyCallPlanReportRows: mocks.insertDailyCallPlanReportRows,
 }));
 
@@ -191,6 +194,7 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([
       previousFinalRow(),
     ]);
+    mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
     mocks.findDailyCallPlanReportRowMetadataByReportId.mockResolvedValue([
       {
         id: "row-1",

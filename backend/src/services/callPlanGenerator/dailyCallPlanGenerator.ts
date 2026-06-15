@@ -9,9 +9,10 @@ import {
   backfillMissingDailyCallPlanReportRowCarryForward,
   createDailyCallPlanReport,
   findDailyCallPlanReportRowMetadataByReportId,
+  findFlexStatusHistoryForUnchangedDays,
   findPreviousFinalReportRowsForManualCarryForward,
   insertDailyCallPlanReportRows,
-  type FinalReportManualCarryForwardRow,
+  type FlexStatusHistoryReport,
 } from "../../repositories/dailyCallPlanReportRepository.js";
 import { findOrCreateCompletedHistorySessionForReport } from "../../repositories/historyRepository.js";
 import {
@@ -52,7 +53,7 @@ import {
   formatDailyCallPlanRow,
   orderedDailyCallPlanRow,
 } from "./dailyCallPlanFormatter.js";
-import { computeFlexStatusUnchangedDays } from "./flexStatusUnchangedDays.js";
+import { computeFlexStatusUnchangedDaysFromHistory } from "./flexStatusUnchangedDays.js";
 import {
   cleanManualValue,
   manualFieldCarryForwardService,
@@ -245,47 +246,54 @@ function emptyComparisonInsight(): ReportRowComparisonInsight {
 }
 
 /**
- * Computes the consecutive-days-Flex-Status-unchanged counter for each row using
- * the previously persisted final report (matched by normalized ticket id, the
- * same matching mechanism used by manual carry-forward). The result is attached
- * to each row's comparison insight so it serializes to
+ * Computes the "Flex Status unchanged for X days" counter for each row from the
+ * actual Flex Status history (one prior report per calendar day, ordered
+ * most-recent first), matched by normalized ticket id. The value is real
+ * calendar days: the number of days from today back to the oldest consecutive
+ * prior report that still carried the ticket's current Flex Status, so multi-day
+ * gaps between non-daily reports are bridged. The result is attached to each
+ * row's comparison insight so it serializes to
  * `row.comparison.flexStatusUnchangedDays`.
  */
 function applyFlexStatusUnchangedDaysToRows(
   rows: GeneratedDailyCallPlanRow[],
-  previousFinalRows: readonly FinalReportManualCarryForwardRow[],
+  flexStatusHistory: readonly FlexStatusHistoryReport[],
+  reportDate: string,
 ): void {
-  const hadPreviousReport = previousFinalRows.length > 0;
-  const previousByTicket = new Map<string, FinalReportManualCarryForwardRow>();
+  const hadPreviousReport = flexStatusHistory.length > 0;
 
-  for (const previous of previousFinalRows) {
-    const ticketKey = getNormalizedTicketKey(previous.ticketId);
-    if (!ticketKey || previousByTicket.has(ticketKey)) {
-      continue;
+  // One normalized-ticket -> Flex Status map per prior report (plus its date),
+  // preserving the most-recent-first ordering returned by the repository.
+  const historyMaps = flexStatusHistory.map((report) => {
+    const flexByTicket = new Map<string, string | null>();
+    for (const entry of report.entries) {
+      const ticketKey = getNormalizedTicketKey(entry.ticketId);
+      if (!ticketKey || flexByTicket.has(ticketKey)) {
+        continue;
+      }
+      flexByTicket.set(ticketKey, entry.flexStatus);
     }
-    previousByTicket.set(ticketKey, previous);
-  }
+    return { reportDate: report.reportDate, flexByTicket };
+  });
 
   for (const row of rows) {
-    // Closed synthetic rows are carried straight from the previous report and
-    // already own a comparison insight; preserve their stored streak.
-    if (row.carryForward.closedSyntheticRow) {
-      if (row.comparison) {
-        const ticketKey = getNormalizedTicketKey(row.enriched.ticket_id);
-        const previous = ticketKey ? previousByTicket.get(ticketKey) : undefined;
-        row.comparison.flexStatusUnchangedDays =
-          previous?.flexStatusUnchangedDays ?? null;
-      }
-      continue;
-    }
-
     const ticketKey = getNormalizedTicketKey(row.enriched.ticket_id);
-    const previous = ticketKey ? previousByTicket.get(ticketKey) : undefined;
 
-    const flexStatusUnchangedDays = computeFlexStatusUnchangedDays({
+    // This ticket's Flex Status in each prior report (most-recent first).
+    // `undefined` = ticket absent that day (breaks the run); `null` = blank.
+    const previousReports = ticketKey
+      ? historyMaps.map((history) => ({
+          reportDate: history.reportDate,
+          flexStatus: history.flexByTicket.has(ticketKey)
+            ? history.flexByTicket.get(ticketKey) ?? null
+            : undefined,
+        }))
+      : [];
+
+    const flexStatusUnchangedDays = computeFlexStatusUnchangedDaysFromHistory({
       currentFlexStatus: row.enriched.flex_status,
-      previousFlexStatus: previous ? previous.flexStatus : undefined,
-      previousCount: previous?.flexStatusUnchangedDays,
+      reportDate,
+      previousReports,
       hadPreviousReport,
     });
 
@@ -709,6 +717,15 @@ export async function generateDailyCallPlanReport(
         reportDate: input.reportDate,
         regionId: input.regionId,
       });
+    // Full Flex Status history (one report per prior day, most-recent first) so
+    // the unchanged-days streak is computed from actual history, not a counter.
+    const flexStatusHistory = await findFlexStatusHistoryForUnchangedDays(
+      client,
+      {
+        reportDate: input.reportDate,
+        regionId: input.regionId,
+      },
+    );
     const carryForwardResult = manualFieldCarryForwardService.apply({
       currentRows: generatedRows,
       previousFinalRows,
@@ -793,10 +810,10 @@ export async function generateDailyCallPlanReport(
       comparison = metadataFromComparison(reportComparison);
     }
 
-    // Accumulate the consecutive-days-Flex-Status-unchanged counter from the
-    // previous final report (matched by normalized ticket id). Runs whether or
-    // not a previous comparison session exists so the value is always exposed.
-    applyFlexStatusUnchangedDaysToRows(rows, previousFinalRows);
+    // Compute the "Flex Status unchanged for X days" counter (real calendar
+    // days) from the Flex Status history, matched by normalized ticket id. Runs
+    // whether or not a previous comparison session exists so it is always set.
+    applyFlexStatusUnchangedDaysToRows(rows, flexStatusHistory, input.reportDate);
 
     // Prefer Renderways WIP Aging when uploaded; otherwise calculate from case_created_time.
     const reportNow = new Date();

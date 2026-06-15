@@ -664,6 +664,121 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
   return result.rows.map(mapFinalReportManualCarryForwardRow);
 }
 
+/** One ticket's Flex Status within a prior report. */
+export interface FlexStatusHistoryEntry {
+  ticketId: string;
+  flexStatus: string | null;
+}
+
+/** One prior report (its date + every ticket's Flex Status that day). */
+export interface FlexStatusHistoryReport {
+  /** Effective report date, `YYYY-MM-DD`. */
+  reportDate: string;
+  entries: FlexStatusHistoryEntry[];
+}
+
+interface FlexStatusHistoryDbRow {
+  rank: number;
+  report_date: string;
+  ticket_id: string;
+  flex_status: string | null;
+}
+
+/**
+ * Returns the Flex Status of every ticket across prior completed reports for the
+ * same region, collapsed to one report per calendar day and ordered most-recent
+ * first (index 0 = the most recent prior report). Each report carries its date so
+ * the unchanged-days counter can measure real calendar days (bridging the gaps
+ * between non-daily reports) rather than just counting reports.
+ */
+export async function findFlexStatusHistoryForUnchangedDays(
+  client: PoolClient,
+  input: {
+    reportDate: string;
+    regionId: string | null;
+    maxReports?: number;
+  },
+): Promise<FlexStatusHistoryReport[]> {
+  const maxReports =
+    input.maxReports && input.maxReports > 0 ? input.maxReports : 120;
+
+  const result = await client.query<FlexStatusHistoryDbRow>(
+    `
+      WITH completed_sessions AS (
+        SELECT
+          sessions.id,
+          sessions.updated_at,
+          COALESCE(
+            CASE
+              WHEN title_date.parts IS NULL THEN NULL
+              ELSE make_date(
+                (title_date.parts)[3]::INT,
+                (title_date.parts)[2]::INT,
+                (title_date.parts)[1]::INT
+              )
+            END,
+            reports.report_date
+          ) AS effective_report_date
+        FROM report_history_sessions sessions
+        JOIN daily_call_plan_reports reports
+          ON reports.id = sessions.daily_call_plan_report_id
+        LEFT JOIN LATERAL regexp_match(
+          sessions.title,
+          'Report Session\s+([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})'
+        ) AS title_date(parts) ON TRUE
+        WHERE sessions.status = 'COMPLETED'
+          AND sessions.daily_call_plan_report_id IS NOT NULL
+          AND sessions.region_id IS NOT DISTINCT FROM $2
+      ),
+      daily_sessions AS (
+        SELECT DISTINCT ON (effective_report_date)
+          id,
+          effective_report_date
+        FROM completed_sessions
+        WHERE effective_report_date < $1::date
+        ORDER BY effective_report_date DESC, updated_at DESC, id ASC
+      ),
+      ranked_sessions AS (
+        SELECT
+          id,
+          effective_report_date,
+          ROW_NUMBER() OVER (ORDER BY effective_report_date DESC) AS rank
+        FROM daily_sessions
+        ORDER BY effective_report_date DESC
+        LIMIT $3
+      )
+      SELECT
+        ranked_sessions.rank,
+        ranked_sessions.effective_report_date::TEXT AS report_date,
+        rows.ticket_id,
+        rows.flex_status
+      FROM ranked_sessions
+      JOIN report_history_sessions sessions
+        ON sessions.id = ranked_sessions.id
+      JOIN daily_call_plan_report_rows rows
+        ON rows.report_id = sessions.daily_call_plan_report_id
+      WHERE NOT rows.is_excluded
+      ORDER BY ranked_sessions.rank ASC, rows.serial_no ASC, rows.id ASC
+    `,
+    [input.reportDate, input.regionId, maxReports],
+  );
+
+  // Group the flat rows into one bucket per prior report, preserving the
+  // most-recent-first ordering carried by `rank` (1-based and gapless).
+  const reports: FlexStatusHistoryReport[] = [];
+  for (const row of result.rows) {
+    const index = Number(row.rank) - 1;
+    let bucket = reports[index];
+    if (!bucket) {
+      bucket = { reportDate: row.report_date, entries: [] };
+      reports[index] = bucket;
+    }
+    bucket.entries.push({ ticketId: row.ticket_id, flexStatus: row.flex_status });
+  }
+
+  return reports;
+}
+
 export async function updateDailyCallPlanReportRowManualFields(
   rowId: string,
   edit: ReportRowEditPayload,
