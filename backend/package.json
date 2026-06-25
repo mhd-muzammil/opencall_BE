@@ -10,6 +10,7 @@
     "migrate:activity-log": "tsx src/scripts/applyActivityLogMigration.ts",
     "migrate:required-regions": "tsx src/scripts/applyRequiredRegionSeedMigration.ts",
     "migrate:engineers": "tsx src/scripts/applyEngineersMigration.ts",
+    "migrate:rtpl-statuses": "tsx src/scripts/applyRtplStatusesMigration.ts",
     "migrate:status-aging": "tsx src/scripts/applyStatusAgingMigration.ts",
     "migrate:flex-status-days": "tsx src/scripts/applyFlexStatusUnchangedDaysMigration.ts",
     "build": "tsc -p tsconfig.json",

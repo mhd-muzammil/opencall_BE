@@ -18,7 +18,10 @@ export type ActivityEventType =
   | "REPORT_ROW_EDITED"
   | "ENGINEER_CREATED"
   | "ENGINEER_UPDATED"
-  | "ENGINEER_DEACTIVATED";
+  | "ENGINEER_DEACTIVATED"
+  | "RTPL_STATUS_CREATED"
+  | "RTPL_STATUS_UPDATED"
+  | "RTPL_STATUS_DELETED";
 
 export type ActivityStatus = "SUCCESS" | "FAILURE";
 

@@ -28,6 +28,15 @@ import {
   reactivateAdminEngineerController,
   updateAdminEngineerController,
 } from "../controllers/adminEngineerController.js";
+import {
+  createAdminRtplStatusController,
+  deactivateAdminRtplStatusController,
+  deleteAdminRtplStatusController,
+  getRtplStatusesDropdownController,
+  listAdminRtplStatusesController,
+  reactivateAdminRtplStatusController,
+  updateAdminRtplStatusController,
+} from "../controllers/adminRtplStatusController.js";
 import { requireAuthenticatedUser } from "../middlewares/authMiddleware.js";
 import { requireRole } from "../middlewares/roleMiddleware.js";
 
@@ -105,6 +114,50 @@ adminRouter.post(
   "/engineers/:id/reactivate",
   requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
   reactivateAdminEngineerController,
+);
+
+// RTPL statuses — dropdown readable by any admin (used in the operational app);
+// management (create/update/delete) restricted to SUPER_ADMIN. The list is global.
+adminRouter.get(
+  "/rtpl-statuses/dropdown",
+  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
+  getRtplStatusesDropdownController,
+);
+
+adminRouter.get(
+  "/rtpl-statuses",
+  requireRole(["SUPER_ADMIN"]),
+  listAdminRtplStatusesController,
+);
+
+adminRouter.post(
+  "/rtpl-statuses",
+  requireRole(["SUPER_ADMIN"]),
+  createAdminRtplStatusController,
+);
+
+adminRouter.patch(
+  "/rtpl-statuses/:id",
+  requireRole(["SUPER_ADMIN"]),
+  updateAdminRtplStatusController,
+);
+
+adminRouter.post(
+  "/rtpl-statuses/:id/deactivate",
+  requireRole(["SUPER_ADMIN"]),
+  deactivateAdminRtplStatusController,
+);
+
+adminRouter.post(
+  "/rtpl-statuses/:id/reactivate",
+  requireRole(["SUPER_ADMIN"]),
+  reactivateAdminRtplStatusController,
+);
+
+adminRouter.delete(
+  "/rtpl-statuses/:id",
+  requireRole(["SUPER_ADMIN"]),
+  deleteAdminRtplStatusController,
 );
 
 adminRouter.get(
