@@ -42,7 +42,10 @@ function mapHistorySession(s: {
 export async function listReportHistory(user: AuthenticatedUser) {
   const sessions = await listHistorySessions({
     userId: user.id,
-    includeCompletedFromOthers: user.role === "REGION_ADMIN",
+    // Completed reports are shared, all-region artifacts. Every role sees all
+    // completed sessions (plus their own drafts) so the latest uploaded report
+    // is the global default for everyone, regardless of who generated it.
+    includeCompletedFromOthers: true,
   });
   return sessions.map(mapHistorySession);
 }
@@ -56,11 +59,11 @@ export async function getReportHistoryDetail(
     return mapHistorySession(ownSession);
   }
 
-  if (user.role === "REGION_ADMIN") {
-    const sharedSession = await findHistorySessionById(id);
-    if (sharedSession && sharedSession.status === "COMPLETED") {
-      return mapHistorySession(sharedSession);
-    }
+  // Any authenticated user may open a shared COMPLETED report — required so the
+  // global latest report can be auto-restored regardless of who created it.
+  const sharedSession = await findHistorySessionById(id);
+  if (sharedSession && sharedSession.status === "COMPLETED") {
+    return mapHistorySession(sharedSession);
   }
 
   throw unprocessableEntity("History session not found");
