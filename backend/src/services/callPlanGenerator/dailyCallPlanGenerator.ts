@@ -503,6 +503,14 @@ async function applyPersistedRowMetadata(
       "remarks",
       "manual_notes",
     ] as const) {
+      // Segment is recomputed from the FieldEZ file on every run (getSegment);
+      // the persisted value must never override it, otherwise a stale segment
+      // (e.g. a raw "MPS", or a pre-fix warranty/trade split) is frozen across
+      // regenerations. Keep it out of the manual persisted-override entirely.
+      if (field === "segment") {
+        continue;
+      }
+
       const persistedValue = persistedManualFieldValue(persisted, field);
       const generatedValue = manualFieldValue(row, field);
 
