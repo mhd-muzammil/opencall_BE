@@ -140,6 +140,7 @@ function currentMatch(): MatchedCallPlanRecord {
       partDescription: null,
       customerEmail: null,
       productSerialNo: null,
+      businessSegment: null,
       rawRow: {},
     },
     callPlan: null,

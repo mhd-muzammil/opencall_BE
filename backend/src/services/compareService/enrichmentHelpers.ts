@@ -1,6 +1,12 @@
 import { cleanString, normalizePincode } from "../normalization/valueNormalizer.js";
 
-export type Segment = "PC" | "Print" | "Install" | "";
+export type Segment =
+  | "PC"
+  | "Print"
+  | "Install"
+  | "Trade PC"
+  | "Trade Print"
+  | "";
 
 export type LookupSource = ReadonlyMap<string, string> | Record<string, string>;
 
@@ -10,20 +16,59 @@ function isReadonlyMap<TValue>(
   return typeof (lookup as ReadonlyMap<string, TValue>).get === "function";
 }
 
-export function getSegment(
-  productType: string | null | undefined,
-  callClassification: string | null | undefined,
-): Segment {
-  const normalizedProductType = cleanString(productType)?.toUpperCase() ?? "";
-  const normalizedClassification =
-    cleanString(callClassification)?.toUpperCase() ?? "";
+/** Uppercased, collapsed WO OTC code (e.g. "05F - Comp Field Install" -> "05F-COMP FIELD INSTALL"). */
+function normalizeWoOtcCode(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[–—−]/g, "-")
+    .replace(/\s*-\s*/g, "-")
+    .replace(/\s+/g, " ");
+}
 
-  if (normalizedProductType === "PC") {
-    return "PC";
+/** "01 - Trade" family: non-warranty billable work. */
+function isTradeWoOtcCode(code: string): boolean {
+  return code.includes("TRADE") || code.startsWith("01");
+}
+
+/** "05F - Comp Field Install": component field installation. */
+function isCompFieldInstallWoOtcCode(code: string): boolean {
+  return /^05F/.test(code);
+}
+
+/**
+ * Derives the case segment from the FieldEZ (Flex WIP) report alone, using
+ * the "Business Segment" (Computing / Printing) and "WO OTC Code" columns:
+ *
+ *   Computing      + 01-Trade / 05F Comp Field Install  -> "Trade PC"
+ *   Computing      + any other OTC code                 -> "PC"
+ *   Printing/dMPS  + 01-Trade                           -> "Trade Print"
+ *   Printing/dMPS  + 05F Comp Field Install             -> "Install"
+ *   Printing/dMPS  + any other OTC code                 -> "Print"
+ *   (unknown business segment)                          -> ""
+ */
+export function getSegment(
+  businessSegment: string | null | undefined,
+  woOtcCode: string | null | undefined,
+): Segment {
+  const normalizedSegment = cleanString(businessSegment)?.toUpperCase() ?? "";
+  const code = normalizeWoOtcCode(woOtcCode);
+  const isTrade = isTradeWoOtcCode(code);
+  const isCompFieldInstall = isCompFieldInstallWoOtcCode(code);
+
+  const isComputing = normalizedSegment.includes("COMPUT") || normalizedSegment === "PC";
+  // "Printing", "dMPS" (Managed Print Services) and bare "MPS" are all print-side.
+  const isPrinting = normalizedSegment.includes("PRINT") || normalizedSegment.includes("MPS");
+
+  if (isComputing) {
+    return isTrade || isCompFieldInstall ? "Trade PC" : "PC";
   }
 
-  if (normalizedProductType === "PRINT") {
-    return normalizedClassification === "INSTALL" ? "Install" : "Print";
+  if (isPrinting) {
+    if (isTrade) {
+      return "Trade Print";
+    }
+    return isCompFieldInstall ? "Install" : "Print";
   }
 
   return "";

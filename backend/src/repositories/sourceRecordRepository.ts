@@ -254,6 +254,7 @@ export async function findFlexWipRecordsByBatchId(
     productLineName: row.product_line_name,
     workLocation: row.work_location,
     productSerialNo: cleanString(getCell(row.raw_row as Record<string, unknown>, ["Product Serial No", "Product S.No", "Product SN", "Serial No", "Serial Number"])),
+    businessSegment: cleanString(getCell(row.raw_row as Record<string, unknown>, ["Business Segment", "BusinessSegment", "Business segment"])),
     rawRow: row.raw_row,
     rowNumber: row.row_number,
   }));
