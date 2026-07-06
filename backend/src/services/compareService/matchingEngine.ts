@@ -241,7 +241,7 @@ function buildEnrichedRow(
     case_created_time: caseCreatedTime,
     wip_aging: renderways?.wipAging ?? calculatedWipAging ?? null,
     rtpl_status: renderways?.rtplStatus ?? callPlan?.morningStatus ?? "",
-    segment: getSegment(renderways?.productType, renderways?.callClassification),
+    segment: getSegment(flexWip?.businessSegment, flexWip?.woOtcCode),
     engineer: callPlan?.engineer ?? null,
     product: flexWip?.product ?? null,
     product_line_name: flexWip?.productLineName ?? null,

@@ -229,6 +229,13 @@ export class ManualFieldCarryForwardService {
 
       if (previousRow) {
         for (const field of ALL_CARRY_FORWARD_FIELDS) {
+          // Segment is deterministically derived from the FieldEZ file every
+          // run (see getSegment). It must never be carried from a previous
+          // report, or a stale/misclassified value freezes forever (e.g. a
+          // "Trade Print" reverting to warranty "Print", or a raw "MPS").
+          if (field === "segment") {
+            continue;
+          }
           if (currentFieldValue(enriched, field)) {
             continue;
           }

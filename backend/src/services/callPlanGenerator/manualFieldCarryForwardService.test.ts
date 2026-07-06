@@ -159,6 +159,8 @@ describe("ManualFieldCarryForwardService", () => {
       currentRows: [
         generatedRow({
           rtpl_status: "Today status",
+          // Segment is freshly derived from the flex file, never carried.
+          segment: "Print",
           engineer: null,
           customer_mail: "",
         }),
@@ -172,8 +174,10 @@ describe("ManualFieldCarryForwardService", () => {
     expect(row?.enriched.engineer).toBe("Priya");
     expect(row?.enriched.customer_mail).toBe("customer@example.com");
     expect(row?.enriched.product).toBe("Notebook");
+    // Segment keeps its freshly-computed value; the previous report's segment
+    // ("Enterprise") is NOT carried forward.
+    expect(row?.enriched.segment).toBe("Print");
     expect(row?.carryForward.carriedForwardFields).toEqual([
-      "segment",
       "engineer",
       "location",
       "case_created_time",
@@ -185,10 +189,23 @@ describe("ManualFieldCarryForwardService", () => {
       "manual_notes",
     ]);
     expect(result.summary).toEqual({
-      totalFieldsCarried: 10,
+      totalFieldsCarried: 9,
       rowsAutoCompleted: 1,
       rowsStillManual: 0,
     });
+  });
+
+  it("never carries the segment forward, even when the current value is blank", () => {
+    const result = service.apply({
+      currentRows: [generatedRow({ segment: "" })],
+      previousFinalRows: [previousFinalRow({ segment: "Print" })],
+    });
+
+    const [row] = result.rows;
+
+    // Blank stays blank; the previous report's "Print" is NOT pulled in.
+    expect(row?.enriched.segment).toBe("");
+    expect(row?.carryForward.carriedForwardFields).not.toContain("segment");
   });
 
   it("uses the latest saved previous manual value during tomorrow generation", () => {
@@ -223,7 +240,8 @@ describe("ManualFieldCarryForwardService", () => {
 
   it("does not carry placeholders and marks remaining manual fields", () => {
     const result = service.apply({
-      currentRows: [generatedRow({ ticket_id: "WO-999" })],
+      // Segment is computed from the flex file (never carried), so give it a value.
+      currentRows: [generatedRow({ ticket_id: "WO-999", segment: "Print" })],
       previousFinalRows: [
         previousFinalRow({
           ticketId: "999",

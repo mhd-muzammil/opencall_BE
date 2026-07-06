@@ -31,6 +31,8 @@ export interface FlexWipParsedRecord {
   productLineName: string | null;
   workLocation: string | null;
   productSerialNo: string | null;
+  /** FieldEZ "Business Segment" (Computing / Printing). Drives segment classification. */
+  businessSegment: string | null;
   rawRow: Record<string, unknown>;
   rowNumber: number;
 }
