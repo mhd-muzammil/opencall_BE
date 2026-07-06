@@ -39,6 +39,7 @@ export const reportRowEditRequestSchema = z
     wip_aging: editableTextSchema,
     status_aging: editableTextSchema,
     hp_owner_status: editableTextSchema,
+    part: editableTextSchema,
   })
   .strict()
   .refine((body) => Object.keys(body).length > 0, {
@@ -57,4 +58,5 @@ export const reportRowEditRequestSchema = z
     wipAging: body.wip_aging,
     statusAging: body.status_aging,
     hpOwnerStatus: body.hp_owner_status,
+    part: body.part,
   }));

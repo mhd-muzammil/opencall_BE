@@ -55,6 +55,8 @@ function editedRow(overrides: Partial<EditedReportRow> = {}): EditedReportRow {
     manualNotes: null,
     location: "Chennai",
     segment: "Commercial",
+    part: null,
+    customerName: null,
     carriedForwardFields: ["rtpl_status", "status_aging"],
     manualFieldsCompleted: true,
     manualFieldsMissing: [],

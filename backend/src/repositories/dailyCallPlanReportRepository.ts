@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { query } from "../config/database.js";
+import { syncPartToInventory } from "../services/inventorySyncService.js";
 import type {
   GeneratedDailyCallPlanRow,
   GenerateDailyCallPlanInput,
@@ -80,6 +81,7 @@ export interface ReportRowEditPayload {
   wipAging?: string | null;
   statusAging?: string | null;
   hpOwnerStatus?: string | null;
+  part?: string | null;
   clearedCarryForwardFields?: readonly ManualCarryForwardField[];
   manualFieldsCompleted: boolean;
   manualFieldsMissing: readonly ManualCarryForwardField[];
@@ -124,6 +126,8 @@ export interface EditedReportRow {
   manualNotes: string | null;
   location: string | null;
   segment: string | null;
+  part: string | null;
+  customerName: string | null;
   carriedForwardFields: ManualCarryForwardField[];
   manualFieldsCompleted: boolean;
   manualFieldsMissing: ManualCarryForwardField[];
@@ -167,6 +171,8 @@ interface EditedReportRowDbRow {
   manual_notes: string | null;
   location: string | null;
   segment: string | null;
+  part: string | null;
+  customer_name: string | null;
   carried_forward_fields: ManualCarryForwardField[];
   manual_fields_completed: boolean;
   manual_fields_missing: ManualCarryForwardField[];
@@ -301,6 +307,8 @@ function mapEditedReportRow(row: EditedReportRowDbRow): EditedReportRow {
     manualNotes: row.manual_notes,
     location: row.location,
     segment: row.segment,
+    part: row.part,
+    customerName: row.customer_name,
     carriedForwardFields: row.carried_forward_fields,
     manualFieldsCompleted: row.manual_fields_completed,
     manualFieldsMissing: row.manual_fields_missing,
@@ -493,6 +501,17 @@ export async function insertDailyCallPlanReportRows(
     row.id = inserted.id;
     row.updatedAt = inserted.updated_at;
     row.updatedBy = inserted.updated_by;
+
+    if (row.enriched.case_id && row.enriched.part) {
+      syncPartToInventory({
+        case_id: row.enriched.case_id,
+        ticket_id: row.enriched.ticket_id,
+        part: row.enriched.part,
+        work_location: row.enriched.work_location,
+        engineer: row.enriched.engineer,
+        customer_name: row.enriched.customer_name,
+      });
+    }
   }
 }
 
@@ -802,18 +821,19 @@ export async function updateDailyCallPlanReportRowManualFields(
         wip_aging = $11,
         status_aging = $12,
         hp_owner_status = $13,
+        part = $14,
         carried_forward_fields = COALESCE(
           (
             SELECT jsonb_agg(field)
             FROM jsonb_array_elements_text(rows.carried_forward_fields) AS field
-            WHERE NOT (field = ANY($14::text[]))
+            WHERE NOT (field = ANY($15::text[]))
           ),
           '[]'::jsonb
         ),
-        manual_fields_completed = $15,
-        manual_fields_missing = $16::text[],
+        manual_fields_completed = $16,
+        manual_fields_missing = $17::text[],
         updated_at = NOW(),
-        updated_by = $17
+        updated_by = $18
       FROM daily_call_plan_reports reports
       WHERE rows.id = $1
         AND reports.id = rows.report_id
@@ -837,6 +857,8 @@ export async function updateDailyCallPlanReportRowManualFields(
         rows.manual_notes,
         rows.location,
         rows.segment,
+        rows.part,
+        rows.customer_name,
         rows.carried_forward_fields,
         rows.manual_fields_completed,
         rows.manual_fields_missing,
@@ -857,6 +879,7 @@ export async function updateDailyCallPlanReportRowManualFields(
       edit.wipAging,
       edit.statusAging,
       edit.hpOwnerStatus,
+      edit.part,
       edit.clearedCarryForwardFields ?? [],
       edit.manualFieldsCompleted,
       edit.manualFieldsMissing,
@@ -865,7 +888,18 @@ export async function updateDailyCallPlanReportRowManualFields(
   );
 
   const row = result.rows[0];
-  return row ? mapEditedReportRow(row) : null;
+  const mapped = row ? mapEditedReportRow(row) : null;
+  if (mapped && mapped.caseId && mapped.part) {
+    syncPartToInventory({
+      case_id: mapped.caseId,
+      ticket_id: mapped.ticketId,
+      part: mapped.part,
+      work_location: mapped.workLocation,
+      engineer: mapped.engineer,
+      customer_name: mapped.customerName,
+    });
+  }
+  return mapped;
 }
 
 export async function backfillMissingDailyCallPlanReportRowCarryForward(
@@ -970,6 +1004,8 @@ export async function findDailyCallPlanReportRowForEdit(
         rows.manual_notes,
         rows.location,
         rows.segment,
+        rows.part,
+        rows.customer_name,
         rows.carried_forward_fields,
         rows.manual_fields_completed,
         rows.manual_fields_missing,

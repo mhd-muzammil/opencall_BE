@@ -28,6 +28,7 @@ export const EDITABLE_REPORT_ROW_FIELDS = [
   "wipAging",
   "statusAging",
   "hpOwnerStatus",
+  "part",
 ] as const;
 
 export type EditableReportRowField =
@@ -154,6 +155,8 @@ function mergeRowValues(
       input.location === undefined ? current.location : cleanEditableValue(input.location),
     segment:
       input.segment === undefined ? current.segment : cleanEditableValue(input.segment),
+    part:
+      input.part === undefined ? current.part : cleanEditableValue(input.part),
     caseCreatedTime:
       input.caseCreatedTime === undefined
         ? current.caseCreatedTime
@@ -268,6 +271,7 @@ export async function updateReportRowManualFields(input: {
     wipAging: merged.wipAging,
     statusAging: merged.statusAging,
     hpOwnerStatus: merged.hpOwnerStatus,
+    part: merged.part,
     clearedCarryForwardFields,
     manualFieldsCompleted: missing.length === 0,
     manualFieldsMissing: missing,
