@@ -20,6 +20,168 @@ export interface SyncRowInput {
   customer_name?: string | null;
 }
 
+// --- Inventory HTTP API client (prod-grade sync path) ---
+
+let cachedInventoryToken: { access: string; expiresAt: number } | null = null;
+
+function inventoryApiBase(): string {
+  return (process.env.INVENTORY_API_URL || "").replace(/\/+$/, "");
+}
+
+async function getInventoryToken(forceRefresh = false): Promise<string> {
+  const now = Date.now();
+  if (
+    !forceRefresh &&
+    cachedInventoryToken &&
+    cachedInventoryToken.expiresAt > now
+  ) {
+    return cachedInventoryToken.access;
+  }
+
+  const username = process.env.INVENTORY_API_USER;
+  const password = process.env.INVENTORY_API_PASSWORD;
+  if (!username || !password) {
+    throw new Error(
+      "INVENTORY_API_USER and INVENTORY_API_PASSWORD must be set when INVENTORY_API_URL is configured",
+    );
+  }
+
+  const res = await fetch(`${inventoryApiBase()}/auth/login/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Inventory login failed (${res.status}): ${await res.text()}`,
+    );
+  }
+  const data = (await res.json()) as { access?: string };
+  if (!data.access) {
+    throw new Error("Inventory login response did not include an access token");
+  }
+  // simplejwt default access lifetime is 5 min; cache 4 min and re-login on 401.
+  cachedInventoryToken = { access: data.access, expiresAt: now + 4 * 60 * 1000 };
+  return data.access;
+}
+
+async function inventoryFetch(
+  path: string,
+  init: { method: string; body?: string },
+  retryOn401 = true,
+): Promise<Response> {
+  const token = await getInventoryToken();
+  const options: RequestInit = {
+    method: init.method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  };
+  if (init.body !== undefined) {
+    options.body = init.body;
+  }
+  const res = await fetch(`${inventoryApiBase()}${path}`, options);
+  if (res.status === 401 && retryOn401) {
+    await getInventoryToken(true); // token expired/rotated — force re-login
+    return inventoryFetch(path, init, false);
+  }
+  return res;
+}
+
+async function syncViaInventoryApi(
+  row: SyncRowInput,
+  detailsString: string,
+  detailsObj: any,
+  latestMeta: any,
+): Promise<void> {
+  const caseId = String(row.case_id);
+  const mappedRegion = mapAspCodeToRegion(row.work_location);
+
+  let caseCreatedIso: string | null = null;
+  if (latestMeta?.case_created_time) {
+    const parsed = new Date(latestMeta.case_created_time);
+    if (!Number.isNaN(parsed.getTime())) {
+      caseCreatedIso = parsed.toISOString();
+    }
+  }
+
+  // 1. Look up an existing HP Stock item by case_id. The service user must be an
+  //    admin/super_admin/manager so this lookup is NOT region-scoped — otherwise
+  //    dedup would miss items in other regions and create duplicates.
+  const searchRes = await inventoryFetch(
+    `/hp-stock/items/?search=${encodeURIComponent(caseId)}&per_page=100`,
+    { method: "GET" },
+  );
+  if (!searchRes.ok) {
+    throw new Error(
+      `HP stock lookup failed (${searchRes.status}): ${await searchRes.text()}`,
+    );
+  }
+  const searchData = (await searchRes.json()) as {
+    items?: Array<Record<string, any>>;
+  };
+  const existing = (searchData.items || []).find(
+    (it) => String(it.case_id) === caseId,
+  );
+
+  if (!existing) {
+    // 2a. Create a new HP Stock item (status starts at PENDING / "Stock Entry").
+    const body = {
+      case_id: row.case_id,
+      work_order_id: row.ticket_id,
+      delivery_no: "",
+      service_event_no: "",
+      material_order_no: "",
+      hp_sales_order_no: "",
+      gvrma_no: "",
+      region: mappedRegion,
+      status: "PENDING",
+      engineer_name: row.engineer ?? "",
+      engineer_phone: "",
+      part_description: row.part ?? "",
+      customer_name: row.customer_name ?? "",
+      inventory_details: detailsString,
+      opencall_case_details: detailsObj,
+      case_created_time: caseCreatedIso,
+    };
+    const res = await inventoryFetch(`/hp-stock/items/`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `HP stock create failed (${res.status}): ${await res.text()}`,
+      );
+    }
+    console.info(`[InventorySync] Created HPStockItem via API for case ${caseId}`);
+  } else {
+    // 2b. Refresh the latest-snapshot fields and fill blanks only. Never overwrite
+    //     status or transition_history (transition_history is read-only in the API).
+    const patch: Record<string, any> = {
+      inventory_details: detailsString,
+      opencall_case_details: detailsObj,
+      case_created_time: caseCreatedIso,
+    };
+    if (!existing.work_order_id) patch.work_order_id = row.ticket_id;
+    if (!existing.region) patch.region = mappedRegion;
+    if (!existing.engineer_name) patch.engineer_name = row.engineer ?? "";
+    if (!existing.part_description) patch.part_description = row.part ?? "";
+    if (!existing.customer_name) patch.customer_name = row.customer_name ?? "";
+
+    const res = await inventoryFetch(`/hp-stock/items/${existing.id}/`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `HP stock update failed (${res.status}): ${await res.text()}`,
+      );
+    }
+    console.info(`[InventorySync] Updated HPStockItem via API for case ${caseId}`);
+  }
+}
+
 export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
   if (!row.case_id || !row.part) {
     return;
@@ -39,6 +201,7 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
   let detailsString = "";
   let caseDetailsJson = "{}";
   let latestMeta: any = null;
+  let detailsObj: any = {};
   try {
     const historyResult = await pgQuery<{
       effective_date: string | null;
@@ -153,7 +316,7 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
       "HP Owner Status": latestMeta.hp_owner_status || "",
     } : {};
 
-    const detailsObj = {
+    detailsObj = {
       output: outputDict,
       flex_status_unchanged_days: latestMeta?.flex_status_unchanged_days ?? null,
       status_aging: latestMeta?.status_aging ?? null,
@@ -167,7 +330,18 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
     console.error("[InventorySync] Failed to fetch case history/details from PG:", pgError);
   }
 
-  // Path to the inventry-web sqlite database (configurable via env for production)
+  // Prod-grade sync: push through the Inventory HTTP API when configured.
+  // Local dev without INVENTORY_API_URL falls back to the direct SQLite write below.
+  if (process.env.INVENTORY_API_URL) {
+    try {
+      await syncViaInventoryApi(row, detailsString, detailsObj, latestMeta);
+    } catch (error) {
+      console.error("[InventorySync] Error syncing to inventory API:", error);
+    }
+    return;
+  }
+
+  // Path to the inventry-web sqlite database (local dev fallback)
   const dbPath =
     process.env.INVENTORY_DB_PATH ||
     "c:/Users/mohamed vaseem/Documents/company ptoject/inventry-web/inventory_backend/db.sqlite3";
