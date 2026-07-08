@@ -12,6 +12,7 @@ import {
   findFlexStatusHistoryForUnchangedDays,
   findPreviousFinalReportRowsForManualCarryForward,
   insertDailyCallPlanReportRows,
+  overwriteCarriedForwardFieldValues,
   type FlexStatusHistoryReport,
 } from "../../repositories/dailyCallPlanReportRepository.js";
 import { findOrCreateCompletedHistorySessionForReport } from "../../repositories/historyRepository.js";
@@ -497,6 +498,10 @@ async function applyPersistedRowMetadata(
       persisted.carriedForwardFields,
     );
     const repairedFields: ManualCarryForwardField[] = [];
+    // Inherited-only fields whose value changed at the source (the latest prior
+    // report) since this report was generated. These must be overwritten in the
+    // persisted row, not just filled-if-empty, so the freshest work survives.
+    const refreshedFields: ManualCarryForwardField[] = [];
 
     for (const field of [
       ...MANUAL_CARRY_FORWARD_FIELDS,
@@ -532,6 +537,25 @@ async function applyPersistedRowMetadata(
         continue;
       }
 
+      // A field this report only *inherited* (carried forward, never manually
+      // edited here — so it is still in the persisted carried-forward set) must
+      // track its source. If the latest prior report now holds a newer value
+      // (e.g. an edit made on that report after this one was generated), adopt
+      // it instead of this report's frozen snapshot. Fields genuinely edited on
+      // this report have been removed from carried_forward_fields on save, so
+      // they fall through to the persisted-value-wins branch below.
+      const wasInheritedOnly = persisted.carriedForwardFields.includes(field);
+      if (
+        wasInheritedOnly &&
+        cleanManualValue(generatedValue) &&
+        cleanManualValue(generatedValue) !== cleanManualValue(persistedValue)
+      ) {
+        setManualFieldValue(row, field, generatedValue);
+        carriedForwardFields.add(field);
+        refreshedFields.push(field);
+        continue;
+      }
+
       if (cleanManualValue(persistedValue)) {
         setManualFieldValue(row, field, persistedValue);
         continue;
@@ -561,7 +585,27 @@ async function applyPersistedRowMetadata(
       formatDailyCallPlanRow(row.serialNo, row.enriched),
     );
 
-    if (repairedFields.length > 0) {
+    if (refreshedFields.length > 0) {
+      // Overwrite: an inherited field's source value actually changed, so the
+      // frozen snapshot must be replaced (fill-if-empty would keep the stale
+      // value and lose the newer work on the next day's carry-forward).
+      await overwriteCarriedForwardFieldValues(client, {
+        rowId: persisted.id,
+        rtplStatus: row.enriched.rtpl_status,
+        engineer: row.enriched.engineer,
+        location: row.enriched.location,
+        caseCreatedTime: row.enriched.case_created_time,
+        hpOwnerStatus: row.enriched.hp_owner_status,
+        statusAging: row.enriched.status_aging,
+        customerMail: row.enriched.customer_mail,
+        rca: row.enriched.rca,
+        remarks: row.enriched.remarks,
+        manualNotes: row.enriched.manual_notes,
+        carriedForwardFields: row.carryForward.carriedForwardFields,
+        manualFieldsCompleted: row.carryForward.manualFieldsCompleted,
+        manualFieldsMissing: row.carryForward.manualFieldsMissing,
+      });
+    } else if (repairedFields.length > 0) {
       await backfillMissingDailyCallPlanReportRowCarryForward(client, {
         rowId: persisted.id,
         rtplStatus: row.enriched.rtpl_status,
@@ -724,6 +768,10 @@ export async function generateDailyCallPlanReport(
       await findPreviousFinalReportRowsForManualCarryForward(client, {
         reportDate: input.reportDate,
         regionId: input.regionId,
+        // Never carry forward from the report currently being regenerated; the
+        // most recent *other* report (incl. an earlier one uploaded today) is
+        // the source so same-day manual work is preserved.
+        excludeReportId: existingReportId,
       });
     // Full Flex Status history (one report per prior day, most-recent first) so
     // the unchanged-days streak is computed from actual history, not a counter.

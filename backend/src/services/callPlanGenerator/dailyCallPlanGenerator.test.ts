@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PoolClient } from "pg";
 import type { MatchedCallPlanRecord } from "../../types/matching.js";
 import type { FinalReportManualCarryForwardRow } from "../../repositories/dailyCallPlanReportRepository.js";
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   findFlexStatusHistoryForUnchangedDays: vi.fn(),
   findDailyCallPlanReportRowMetadataByReportId: vi.fn(),
   backfillMissingDailyCallPlanReportRowCarryForward: vi.fn(),
+  overwriteCarriedForwardFieldValues: vi.fn(),
   createDailyCallPlanReport: vi.fn(),
   insertDailyCallPlanReportRows: vi.fn(),
   findOrCreateCompletedHistorySessionForReport: vi.fn(),
@@ -36,6 +37,8 @@ vi.mock("../../repositories/businessRuleRepository.js", () => ({
 vi.mock("../../repositories/dailyCallPlanReportRepository.js", () => ({
   backfillMissingDailyCallPlanReportRowCarryForward:
     mocks.backfillMissingDailyCallPlanReportRowCarryForward,
+  overwriteCarriedForwardFieldValues:
+    mocks.overwriteCarriedForwardFieldValues,
   createDailyCallPlanReport: mocks.createDailyCallPlanReport,
   findDailyCallPlanReportRowMetadataByReportId:
     mocks.findDailyCallPlanReportRowMetadataByReportId,
@@ -183,6 +186,10 @@ function currentMatch(): MatchedCallPlanRecord {
 }
 
 describe("generateDailyCallPlanReport", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("does not let blank persisted RTPL erase previous-final carry-forward on existing reports", async () => {
     const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
     const client = {} as PoolClient;
@@ -247,5 +254,77 @@ describe("generateDailyCallPlanReport", () => {
         rtplStatus: "Part Pending",
       }),
     );
+  });
+
+  it("refreshes an inherited field when the source report now holds a newer value", async () => {
+    const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
+    const client = {} as PoolClient;
+
+    // The latest prior (source) report now has a newer RTPL status than the
+    // snapshot this report froze when it was generated.
+    const source = previousFinalRow();
+    source.rtplStatus = "Escalated";
+    source.manualValues = { ...source.manualValues, rtpl_status: "Escalated" };
+
+    mocks.withTransaction.mockImplementation(async (callback) => callback(client));
+    mocks.validateReportGenerationTransaction.mockResolvedValue("report-1");
+    mocks.findFlexWipRecordsByBatchId.mockResolvedValue([{ ticketId: "WO-123", rowNumber: 1 }]);
+    mocks.findRenderwaysRecordsByBatchId.mockResolvedValue([]);
+    mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
+    mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
+    mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
+    mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([source]);
+    mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
+    // This report only *inherited* RTPL (it is in carriedForwardFields, never
+    // edited here) and still holds the stale "Part Pending" snapshot.
+    mocks.findDailyCallPlanReportRowMetadataByReportId.mockResolvedValue([
+      {
+        id: "row-1",
+        serialNo: 1,
+        ticketId: "WO-123",
+        caseCreatedTime: null,
+        wipAging: "1",
+        statusAging: null,
+        hpOwnerStatus: null,
+        rtplStatus: "Part Pending",
+        segment: "",
+        engineer: "Priya",
+        location: "Chennai",
+        customerMail: "customer@example.com",
+        rca: "Awaiting part",
+        remarks: null,
+        manualNotes: null,
+        carriedForwardFields: ["rtpl_status"],
+        manualFieldsCompleted: true,
+        manualFieldsMissing: [],
+        updatedAt: null,
+        updatedBy: null,
+        isExcluded: false,
+      },
+    ]);
+    mocks.findOrCreateCompletedHistorySessionForReport.mockResolvedValue({
+      id: "session-1",
+    });
+    mocks.findPreviousCompletedComparisonSession.mockResolvedValue(null);
+
+    const report = await generateDailyCallPlanReport({
+      reportDate: "2026-05-26",
+      generatedBy: "user-1",
+      regionId: "region-1",
+      flexUploadBatchId: "batch-flex",
+    });
+
+    // In-memory row reflects the newer source value, not the frozen snapshot.
+    expect(report.rows[0]?.enriched.rtpl_status).toBe("Escalated");
+    expect(report.rows[0]?.output["RTPL status"]).toBe("Escalated");
+    // And it is persisted via an overwrite (not the fill-if-empty backfill).
+    expect(mocks.overwriteCarriedForwardFieldValues).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({ rowId: "row-1", rtplStatus: "Escalated" }),
+    );
+    expect(
+      mocks.backfillMissingDailyCallPlanReportRowCarryForward,
+    ).not.toHaveBeenCalled();
   });
 });

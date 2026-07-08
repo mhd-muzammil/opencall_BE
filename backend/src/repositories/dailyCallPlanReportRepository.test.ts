@@ -4,6 +4,7 @@ import type { EnrichedCallPlanRow, MatchedCallPlanRecord } from "../types/matchi
 import type { GeneratedDailyCallPlanRow } from "../types/reportGeneration.js";
 import {
   findDailyCallPlanReportRowMetadataByReportId,
+  findPreviousFinalReportRowsForManualCarryForward,
   insertDailyCallPlanReportRows,
   updateDailyCallPlanReportRowManualFields,
 } from "./dailyCallPlanReportRepository.js";
@@ -174,6 +175,39 @@ describe("insertDailyCallPlanReportRows", () => {
     expect(rows[0]?.rtplStatus).toBe("Pending customer");
     expect(rows[0]?.manualFieldsCompleted).toBe(true);
     expect(rows[0]?.manualFieldsMissing).toEqual([]);
+  });
+
+  it("sources carry-forward from the latest report on or before today, excluding the current one", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const client = { query } as unknown as PoolClient;
+
+    await findPreviousFinalReportRowsForManualCarryForward(client, {
+      reportDate: "2026-07-08",
+      regionId: "region-1",
+      excludeReportId: "report-current",
+    });
+
+    const [sql, values] = query.mock.calls[0] as [string, unknown[]];
+
+    // Same-day reports must be eligible so an afternoon re-upload inherits the
+    // morning report's manual work, not just yesterday's final report.
+    expect(sql).toContain("effective_report_date <= $1::date");
+    // The report being (re)generated must never be its own carry-forward source.
+    expect(sql).toContain("report_id::text <> $3::text");
+    expect(values).toEqual(["2026-07-08", "region-1", "report-current"]);
+  });
+
+  it("passes a null exclusion when generating a brand-new report", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const client = { query } as unknown as PoolClient;
+
+    await findPreviousFinalReportRowsForManualCarryForward(client, {
+      reportDate: "2026-07-08",
+      regionId: "region-1",
+    });
+
+    const [, values] = query.mock.calls[0] as [string, unknown[]];
+    expect(values[2]).toBeNull();
   });
 
   it("updates only the addressed report row for persisted manual edits", async () => {

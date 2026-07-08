@@ -106,6 +106,27 @@ export interface ReportRowCarryForwardBackfillPayload {
   manualFieldsMissing: readonly ManualCarryForwardField[];
 }
 
+// Same shape as the fill-if-empty backfill, minus segment (segment is never
+// carried forward — it is recomputed from the source file each run). Used to
+// *overwrite* inherited fields whose source value changed after this report was
+// generated, so the row is never left showing a stale carried-forward snapshot.
+export interface ReportRowCarryForwardOverwritePayload {
+  rowId: string;
+  rtplStatus: string | null;
+  engineer: string | null;
+  location: string | null;
+  caseCreatedTime: string | null;
+  statusAging: string | null;
+  hpOwnerStatus: string | null;
+  customerMail: string | null;
+  rca: string | null;
+  remarks: string | null;
+  manualNotes: string | null;
+  carriedForwardFields: readonly ManualCarryForwardField[];
+  manualFieldsCompleted: boolean;
+  manualFieldsMissing: readonly ManualCarryForwardField[];
+}
+
 export interface EditedReportRow {
   id: string;
   reportId: string;
@@ -607,6 +628,9 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
   input: {
     reportDate: string;
     regionId: string | null;
+    // The report currently being (re)generated, so carry-forward never sources
+    // from itself. Null when generating a brand-new report.
+    excludeReportId?: string | null;
   },
 ): Promise<FinalReportManualCarryForwardRow[]> {
   const result = await client.query<FinalReportManualCarryForwardDbRow>(
@@ -615,6 +639,7 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         SELECT
           sessions.id,
           sessions.updated_at,
+          reports.id AS report_id,
           COALESCE(
             reports.report_date,
             CASE
@@ -640,8 +665,14 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
       previous_session AS (
         SELECT id
         FROM completed_sessions
-        WHERE effective_report_date < $1::date
-        ORDER BY effective_report_date DESC, updated_at DESC, id ASC
+        -- On or before today: multiple reports are uploaded per day, and each
+        -- new report must inherit the accumulated manual work from the most
+        -- recent prior report (e.g. this morning's), not just yesterday's.
+        WHERE effective_report_date <= $1::date
+          AND ($3::text IS NULL OR report_id::text <> $3::text)
+        -- Prefer the latest report: newest date, then most recent activity,
+        -- then newest row id, so same-day ties resolve to the current report.
+        ORDER BY effective_report_date DESC, updated_at DESC, id DESC
         LIMIT 1
       )
       SELECT
@@ -680,7 +711,7 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
       WHERE NOT rows.is_excluded
       ORDER BY rows.serial_no ASC, rows.id ASC
     `,
-    [input.reportDate, input.regionId],
+    [input.reportDate, input.regionId, input.excludeReportId ?? null],
   );
 
   return result.rows.map(mapFinalReportManualCarryForwardRow);
@@ -963,6 +994,57 @@ export async function backfillMissingDailyCallPlanReportRowCarryForward(
       payload.rowId,
       payload.rtplStatus,
       payload.segment,
+      payload.engineer,
+      payload.location,
+      payload.caseCreatedTime,
+      payload.statusAging,
+      payload.hpOwnerStatus,
+      payload.customerMail,
+      payload.rca,
+      payload.remarks,
+      payload.manualNotes,
+      JSON.stringify(payload.carriedForwardFields),
+      payload.manualFieldsCompleted,
+      payload.manualFieldsMissing,
+    ],
+  );
+}
+
+/**
+ * Overwrites the given inherited (carried-forward) manual fields on a report
+ * row, unconditionally, and rewrites the carry-forward metadata. Unlike
+ * {@link backfillMissingDailyCallPlanReportRowCarryForward} this replaces
+ * existing values, so a report that only inherited a field always tracks the
+ * latest value from its source rather than freezing the snapshot taken when it
+ * was generated. Segment is intentionally excluded (recomputed each run). Only
+ * called when a value actually changed, so it does not run on every poll.
+ */
+export async function overwriteCarriedForwardFieldValues(
+  client: PoolClient,
+  payload: ReportRowCarryForwardOverwritePayload,
+): Promise<void> {
+  await client.query(
+    `
+      UPDATE daily_call_plan_report_rows
+      SET
+        rtpl_status = $2,
+        engineer = $3,
+        location = $4,
+        case_created_time = $5::timestamptz,
+        status_aging = $6,
+        hp_owner_status = $7,
+        customer_mail = $8,
+        rca = $9,
+        remarks = $10,
+        manual_notes = $11,
+        carried_forward_fields = $12::jsonb,
+        manual_fields_completed = $13,
+        manual_fields_missing = $14::text[]
+      WHERE id = $1
+    `,
+    [
+      payload.rowId,
+      payload.rtplStatus,
       payload.engineer,
       payload.location,
       payload.caseCreatedTime,
