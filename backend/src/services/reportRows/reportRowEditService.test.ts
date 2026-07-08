@@ -49,6 +49,7 @@ function editedRow(overrides: Partial<EditedReportRow> = {}): EditedReportRow {
     hpOwnerStatus: "Open",
     engineer: "Priya",
     rtplStatus: "Actionable",
+    eveningRtplStatus: null,
     customerMail: "customer@example.com",
     rca: "Awaiting part",
     remarks: null,

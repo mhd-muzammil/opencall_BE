@@ -18,6 +18,7 @@ import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
 export const EDITABLE_REPORT_ROW_FIELDS = [
   "engineer",
   "rtplStatus",
+  "eveningRtplStatus",
   "customerMail",
   "rca",
   "remarks",
@@ -140,6 +141,10 @@ function mergeRowValues(
       input.rtplStatus === undefined
         ? current.rtplStatus
         : cleanEditableValue(input.rtplStatus),
+    eveningRtplStatus:
+      input.eveningRtplStatus === undefined
+        ? current.eveningRtplStatus
+        : cleanEditableValue(input.eveningRtplStatus),
     customerMail:
       input.customerMail === undefined
         ? current.customerMail
@@ -261,6 +266,7 @@ export async function updateReportRowManualFields(input: {
   return updateDailyCallPlanReportRowManualFields(input.rowId, {
     engineer: merged.engineer,
     rtplStatus: merged.rtplStatus,
+    eveningRtplStatus: merged.eveningRtplStatus,
     customerMail: merged.customerMail,
     rca: merged.rca,
     remarks: merged.remarks,

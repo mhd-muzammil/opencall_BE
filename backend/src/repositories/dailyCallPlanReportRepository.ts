@@ -31,6 +31,7 @@ export interface PersistedReportRowSnapshot extends PersistedReportRowMetadata {
   statusAging: string | null;
   hpOwnerStatus: string | null;
   rtplStatus: string | null;
+  eveningRtplStatus: string | null;
   segment: string | null;
   engineer: string | null;
   location: string | null;
@@ -53,6 +54,7 @@ interface PersistedReportRowSnapshotDbRow {
   status_aging: string | null;
   hp_owner_status: string | null;
   rtpl_status: string | null;
+  evening_rtpl_status: string | null;
   segment: string | null;
   engineer: string | null;
   location: string | null;
@@ -71,6 +73,7 @@ interface PersistedReportRowSnapshotDbRow {
 export interface ReportRowEditPayload {
   engineer?: string | null;
   rtplStatus?: string | null;
+  eveningRtplStatus?: string | null;
   customerMail?: string | null;
   rca?: string | null;
   remarks?: string | null;
@@ -141,6 +144,7 @@ export interface EditedReportRow {
   hpOwnerStatus: string | null;
   engineer: string | null;
   rtplStatus: string | null;
+  eveningRtplStatus: string | null;
   customerMail: string | null;
   rca: string | null;
   remarks: string | null;
@@ -186,6 +190,7 @@ interface EditedReportRowDbRow {
   hp_owner_status: string | null;
   engineer: string | null;
   rtpl_status: string | null;
+  evening_rtpl_status: string | null;
   customer_mail: string | null;
   rca: string | null;
   remarks: string | null;
@@ -209,6 +214,7 @@ export interface FinalReportManualCarryForwardRow {
   wipAging: string | null;
   statusAging: string | null;
   rtplStatus: string | null;
+  eveningRtplStatus: string | null;
   segment: string | null;
   engineer: string | null;
   product: string | null;
@@ -229,6 +235,7 @@ export interface FinalReportManualCarryForwardRow {
   remarks: string | null;
   manualNotes: string | null;
   flexStatusUnchangedDays: number | null;
+  sourceReportDate: string | null;
   manualValues: Partial<Record<ManualCarryForwardField, string | null>>;
 }
 
@@ -240,6 +247,7 @@ interface FinalReportManualCarryForwardDbRow {
   wip_aging: string | null;
   status_aging: string | null;
   rtpl_status: string | null;
+  evening_rtpl_status: string | null;
   segment: string | null;
   engineer: string | null;
   product: string | null;
@@ -260,6 +268,7 @@ interface FinalReportManualCarryForwardDbRow {
   remarks: string | null;
   manual_notes: string | null;
   flex_status_unchanged_days: number | null;
+  source_report_date: string | null;
 }
 
 function mapFinalReportManualCarryForwardRow(
@@ -273,6 +282,7 @@ function mapFinalReportManualCarryForwardRow(
     wipAging: row.wip_aging,
     statusAging: row.status_aging,
     rtplStatus: row.rtpl_status,
+    eveningRtplStatus: row.evening_rtpl_status,
     segment: row.segment,
     engineer: row.engineer,
     product: row.product,
@@ -293,6 +303,7 @@ function mapFinalReportManualCarryForwardRow(
     remarks: row.remarks,
     manualNotes: row.manual_notes,
     flexStatusUnchangedDays: row.flex_status_unchanged_days,
+    sourceReportDate: row.source_report_date,
     manualValues: {
       rtpl_status: row.rtpl_status,
       segment: row.segment,
@@ -322,6 +333,7 @@ function mapEditedReportRow(row: EditedReportRowDbRow): EditedReportRow {
     hpOwnerStatus: row.hp_owner_status,
     engineer: row.engineer,
     rtplStatus: row.rtpl_status,
+    eveningRtplStatus: row.evening_rtpl_status,
     customerMail: row.customer_mail,
     rca: row.rca,
     remarks: row.remarks,
@@ -352,6 +364,7 @@ function mapPersistedReportRowMetadata(
     statusAging: row.status_aging,
     hpOwnerStatus: row.hp_owner_status,
     rtplStatus: row.rtpl_status,
+    eveningRtplStatus: row.evening_rtpl_status,
     segment: row.segment,
     engineer: row.engineer,
     location: row.location,
@@ -431,6 +444,7 @@ export async function insertDailyCallPlanReportRows(
           wip_aging,
           status_aging,
           rtpl_status,
+          evening_rtpl_status,
           segment,
           engineer,
           product,
@@ -467,8 +481,8 @@ export async function insertDailyCallPlanReportRows(
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
           $17, $18, $19, $20, $21, $22, $23, $24,
-          $25, $26, $27, $28, $29, $30, $31, $32::jsonb, $33, $34::jsonb, $35, $36::text[],
-          $37, $38::jsonb, $39
+          $25, $26, $27, $28, $29, $30, $31, $32, $33::jsonb, $34, $35::jsonb, $36, $37::text[],
+          $38, $39::jsonb, $40
         )
         RETURNING id, updated_at::TEXT AS updated_at, updated_by::TEXT AS updated_by
       `,
@@ -481,6 +495,7 @@ export async function insertDailyCallPlanReportRows(
         row.enriched.wip_aging,
         row.enriched.status_aging,
         row.enriched.rtpl_status,
+        row.enriched.evening_rtpl_status ?? null,
         row.enriched.segment,
         row.enriched.engineer,
         row.enriched.product,
@@ -550,6 +565,7 @@ export async function findFinalReportRowsForManualCarryForwardBySessionId(
         rows.wip_aging,
         rows.status_aging,
         rows.rtpl_status,
+        rows.evening_rtpl_status,
         rows.segment,
         rows.engineer,
         rows.product,
@@ -569,7 +585,8 @@ export async function findFinalReportRowsForManualCarryForwardBySessionId(
         rows.rca,
         rows.remarks,
         rows.manual_notes,
-        rows.flex_status_unchanged_days
+        rows.flex_status_unchanged_days,
+        NULL::text AS source_report_date
       FROM report_history_sessions sessions
       JOIN daily_call_plan_report_rows rows
         ON rows.report_id = sessions.daily_call_plan_report_id
@@ -600,6 +617,7 @@ export async function findDailyCallPlanReportRowMetadataByReportId(
         status_aging,
         hp_owner_status,
         rtpl_status,
+        evening_rtpl_status,
         segment,
         engineer,
         location,
@@ -663,7 +681,7 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
           AND sessions.region_id IS NOT DISTINCT FROM $2
       ),
       previous_session AS (
-        SELECT id
+        SELECT id, effective_report_date
         FROM completed_sessions
         -- On or before today: multiple reports are uploaded per day, and each
         -- new report must inherit the accumulated manual work from the most
@@ -683,6 +701,7 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         rows.wip_aging,
         rows.status_aging,
         rows.rtpl_status,
+        rows.evening_rtpl_status,
         rows.segment,
         rows.engineer,
         rows.product,
@@ -702,7 +721,8 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         rows.rca,
         rows.remarks,
         rows.manual_notes,
-        rows.flex_status_unchanged_days
+        rows.flex_status_unchanged_days,
+        previous_session.effective_report_date::text AS source_report_date
       FROM previous_session
       JOIN report_history_sessions sessions
         ON sessions.id = previous_session.id
@@ -853,6 +873,7 @@ export async function updateDailyCallPlanReportRowManualFields(
         status_aging = $12,
         hp_owner_status = $13,
         part = $14,
+        evening_rtpl_status = $19,
         carried_forward_fields = COALESCE(
           (
             SELECT jsonb_agg(field)
@@ -882,6 +903,7 @@ export async function updateDailyCallPlanReportRowManualFields(
         rows.hp_owner_status,
         rows.engineer,
         rows.rtpl_status,
+        rows.evening_rtpl_status,
         rows.customer_mail,
         rows.rca,
         rows.remarks,
@@ -915,6 +937,7 @@ export async function updateDailyCallPlanReportRowManualFields(
       edit.manualFieldsCompleted,
       edit.manualFieldsMissing,
       edit.updatedBy,
+      edit.eveningRtplStatus,
     ],
   );
 
@@ -1080,6 +1103,7 @@ export async function findDailyCallPlanReportRowForEdit(
         rows.hp_owner_status,
         rows.engineer,
         rows.rtpl_status,
+        rows.evening_rtpl_status,
         rows.customer_mail,
         rows.rca,
         rows.remarks,

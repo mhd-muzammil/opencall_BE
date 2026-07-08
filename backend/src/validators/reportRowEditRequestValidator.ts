@@ -29,6 +29,7 @@ export const reportRowEditRequestSchema = z
   .object({
     engineer: editableTextSchema,
     rtpl_status: editableTextSchema,
+    evening_rtpl_status: editableTextSchema,
     customer_mail: editableTextSchema,
     rca: editableTextSchema,
     remarks: editableTextSchema,
@@ -48,6 +49,7 @@ export const reportRowEditRequestSchema = z
   .transform((body) => ({
     engineer: body.engineer,
     rtplStatus: body.rtpl_status,
+    eveningRtplStatus: body.evening_rtpl_status,
     customerMail: body.customer_mail,
     rca: body.rca,
     remarks: body.remarks,

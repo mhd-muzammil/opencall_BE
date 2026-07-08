@@ -135,13 +135,15 @@ describe("insertDailyCallPlanReportRows", () => {
     expect(sql).toContain("product_line_name");
     expect(sql).toContain("work_location");
     expect(sql).toContain("flex_status_unchanged_days");
-    expect(values[11]).toBe("Commercial");
-    expect(values[12]).toBe("ASPS01461");
-    expect(values[33]).toBe(JSON.stringify(["engineer", "customer_mail"]));
-    expect(values[34]).toBe(true);
-    expect(values[35]).toEqual([]);
+    // Positions shifted +1 by the new evening_rtpl_status column (inserted
+    // right after rtpl_status).
+    expect(values[12]).toBe("Commercial");
+    expect(values[13]).toBe("ASPS01461");
+    expect(values[34]).toBe(JSON.stringify(["engineer", "customer_mail"]));
+    expect(values[35]).toBe(true);
+    expect(values[36]).toEqual([]);
     // flex_status_unchanged_days is appended last; null when no comparison insight.
-    expect(values[38]).toBeNull();
+    expect(values[39]).toBeNull();
   });
 
   it("loads persisted manual fields for regenerated history reports", async () => {

@@ -95,6 +95,8 @@ function previousFinalRow(
     caseCreatedTime: "2026-03-27T17:41:55.000Z",
     wipAging: "9",
     rtplStatus: "Pending customer",
+    eveningRtplStatus: null,
+    sourceReportDate: null,
     segment: "Enterprise",
     engineer: "Priya",
     product: "Old product",
@@ -156,6 +158,7 @@ describe("ManualFieldCarryForwardService", () => {
 
   it("carries only missing manual fields from the previous final report", () => {
     const result = service.apply({
+      currentReportDate: "2026-03-28",
       currentRows: [
         generatedRow({
           rtpl_status: "Today status",
@@ -195,8 +198,66 @@ describe("ManualFieldCarryForwardService", () => {
     });
   });
 
+  it("promotes yesterday's Evening to today's Morning and clears Evening (new day)", () => {
+    const result = service.apply({
+      currentReportDate: "2026-03-28",
+      currentRows: [generatedRow({ rtpl_status: "", segment: "Print" })],
+      previousFinalRows: [
+        previousFinalRow({
+          rtplStatus: "Open",
+          eveningRtplStatus: "Closed",
+          sourceReportDate: "2026-03-27",
+        }),
+      ],
+    });
+
+    const [row] = result.rows;
+    // Morning = yesterday's Evening; Evening starts blank for the new day.
+    expect(row?.enriched.rtpl_status).toBe("Closed");
+    expect(row?.enriched.evening_rtpl_status).toBeNull();
+    expect(row?.carryForward.carriedForwardFields).toContain("rtpl_status");
+  });
+
+  it("falls back to yesterday's Morning when yesterday's Evening is blank (new day)", () => {
+    const result = service.apply({
+      currentReportDate: "2026-03-28",
+      currentRows: [generatedRow({ rtpl_status: "", segment: "Print" })],
+      previousFinalRows: [
+        previousFinalRow({
+          rtplStatus: "Open",
+          eveningRtplStatus: null,
+          sourceReportDate: "2026-03-27",
+        }),
+      ],
+    });
+
+    const [row] = result.rows;
+    expect(row?.enriched.rtpl_status).toBe("Open");
+    expect(row?.enriched.evening_rtpl_status).toBeNull();
+  });
+
+  it("keeps the Morning baseline and preserves Evening on a same-day re-upload", () => {
+    const result = service.apply({
+      currentReportDate: "2026-03-28",
+      currentRows: [generatedRow({ rtpl_status: "", segment: "Print" })],
+      previousFinalRows: [
+        previousFinalRow({
+          rtplStatus: "Open",
+          eveningRtplStatus: "Closed",
+          sourceReportDate: "2026-03-28",
+        }),
+      ],
+    });
+
+    const [row] = result.rows;
+    // Same day: Morning unchanged, Evening work preserved.
+    expect(row?.enriched.rtpl_status).toBe("Open");
+    expect(row?.enriched.evening_rtpl_status).toBe("Closed");
+  });
+
   it("never carries the segment forward, even when the current value is blank", () => {
     const result = service.apply({
+      currentReportDate: "2026-03-28",
       currentRows: [generatedRow({ segment: "" })],
       previousFinalRows: [previousFinalRow({ segment: "Print" })],
     });
@@ -210,6 +271,7 @@ describe("ManualFieldCarryForwardService", () => {
 
   it("uses the latest saved previous manual value during tomorrow generation", () => {
     const result = service.apply({
+      currentReportDate: "2026-03-28",
       currentRows: [generatedRow({ engineer: null })],
       previousFinalRows: [
         previousFinalRow({
@@ -225,6 +287,7 @@ describe("ManualFieldCarryForwardService", () => {
 
   it("carries a previously manual-entry-required field after it is saved", () => {
     const result = service.apply({
+      currentReportDate: "2026-03-28",
       currentRows: [generatedRow({ customer_mail: null })],
       previousFinalRows: [
         previousFinalRow({
@@ -240,6 +303,7 @@ describe("ManualFieldCarryForwardService", () => {
 
   it("does not carry placeholders and marks remaining manual fields", () => {
     const result = service.apply({
+      currentReportDate: "2026-03-28",
       // Segment is computed from the flex file (never carried), so give it a value.
       currentRows: [generatedRow({ ticket_id: "WO-999", segment: "Print" })],
       previousFinalRows: [
@@ -272,6 +336,7 @@ describe("ManualFieldCarryForwardService", () => {
 
   it("matches only by normalized ticket id and creates closed synthetic rows", () => {
     const result = service.apply({
+      currentReportDate: "2026-03-28",
       currentRows: [
         generatedRow({
           ticket_id: "WO-777",

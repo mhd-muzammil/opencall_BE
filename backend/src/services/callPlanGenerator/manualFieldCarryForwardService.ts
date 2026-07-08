@@ -35,6 +35,12 @@ const PLACEHOLDER_VALUES = new Set([
 export interface ApplyManualFieldCarryForwardInput {
   currentRows: readonly GeneratedDailyCallPlanRow[];
   previousFinalRows: readonly FinalReportManualCarryForwardRow[];
+  /**
+   * The report date being generated (YYYY-MM-DD). Used to decide whether the
+   * carry-forward source is from a PRIOR day (promote Evening→Morning, clear
+   * Evening) or the SAME day (keep Morning baseline, preserve Evening work).
+   */
+  currentReportDate: string;
 }
 
 export interface ApplyManualFieldCarryForwardResult {
@@ -236,6 +242,12 @@ export class ManualFieldCarryForwardService {
           if (field === "segment") {
             continue;
           }
+          // rtpl_status is the Morning (BOD) column; it and the Evening (EOD)
+          // status follow the day-boundary promotion rules below, not the
+          // generic fill.
+          if (field === "rtpl_status") {
+            continue;
+          }
           if (currentFieldValue(enriched, field)) {
             continue;
           }
@@ -247,6 +259,37 @@ export class ManualFieldCarryForwardService {
 
           assignManualField(enriched, field, previousValue);
           carriedForwardFields.push(field);
+        }
+
+        // Morning / Evening day-boundary promotion. Fresh generated rows always
+        // arrive with a blank Morning here; for existing reports the persisted
+        // Morning/Evening are restored later (applyPersistedRowMetadata), which
+        // overrides this.
+        if (!currentFieldValue(enriched, "rtpl_status")) {
+          const sourceMorning = cleanManualValue(previousRow.rtplStatus);
+          const sourceEvening = cleanManualValue(previousRow.eveningRtplStatus);
+          const sourceIsPriorDay =
+            !previousRow.sourceReportDate ||
+            previousRow.sourceReportDate < input.currentReportDate;
+
+          if (sourceIsPriorDay) {
+            // New day: yesterday's Evening becomes today's Morning (fall back to
+            // yesterday's Morning if Evening was left blank); Evening starts empty.
+            const promotedMorning = sourceEvening ?? sourceMorning;
+            if (promotedMorning) {
+              assignManualField(enriched, "rtpl_status", promotedMorning);
+              carriedForwardFields.push("rtpl_status");
+            }
+            enriched.evening_rtpl_status = null;
+          } else {
+            // Same-day re-upload: keep the Morning baseline and preserve the
+            // Evening work entered earlier today.
+            if (sourceMorning) {
+              assignManualField(enriched, "rtpl_status", sourceMorning);
+              carriedForwardFields.push("rtpl_status");
+            }
+            enriched.evening_rtpl_status = sourceEvening;
+          }
         }
       }
 

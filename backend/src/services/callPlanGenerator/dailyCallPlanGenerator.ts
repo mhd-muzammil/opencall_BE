@@ -578,6 +578,12 @@ async function applyPersistedRowMetadata(
       repairedFields.push("rtpl_status");
     }
 
+    // Restore this report's own persisted Evening (EOD) status. Evening is not
+    // a carry-forward manual field (Morning=rtpl_status carries; Evening is
+    // per-report and set to blank at each new day's upload), so it is restored
+    // directly from the persisted snapshot rather than through the field loop.
+    row.enriched.evening_rtpl_status = persisted.eveningRtplStatus;
+
     row.match.enrichedRow = row.enriched;
     row.carryForward.carriedForwardFields = [...carriedForwardFields];
     refreshCarryForwardMetadata(row);
@@ -785,6 +791,7 @@ export async function generateDailyCallPlanReport(
     const carryForwardResult = manualFieldCarryForwardService.apply({
       currentRows: generatedRows,
       previousFinalRows,
+      currentReportDate: input.reportDate,
     });
     let rows = carryForwardResult.rows;
     console.info("[dailyCallPlanGenerator] RTPL carry-forward input", {

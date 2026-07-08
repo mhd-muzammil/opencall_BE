@@ -83,6 +83,8 @@ function previousFinalRow(): FinalReportManualCarryForwardRow {
     caseCreatedTime: "2026-05-25T04:30:00.000Z",
     wipAging: "5",
     rtplStatus: "Part Pending",
+    eveningRtplStatus: null,
+    sourceReportDate: null,
     segment: "Enterprise",
     engineer: "Priya",
     product: "Notebook",
