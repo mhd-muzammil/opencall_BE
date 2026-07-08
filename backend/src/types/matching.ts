@@ -37,7 +37,13 @@ export interface EnrichedCallPlanRow {
   case_id: string;
   case_created_time: string | null;
   wip_aging: string | null;
+  /** Morning (BOD) RTPL status — the read-only start-of-day baseline. */
   rtpl_status: string;
+  /**
+   * Evening (EOD) RTPL status — editable, blank until worked and blank at the
+   * start of each new day. On the next day's upload it is promoted to Morning.
+   */
+  evening_rtpl_status?: string | null;
   segment: string;
   engineer: string | null;
   product: string | null;

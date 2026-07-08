@@ -93,6 +93,7 @@ function generatedRow(): GeneratedDailyCallPlanRow {
       "WIP aging": "2",
       Location: "Chennai",
       "RTPL status": "Pending customer",
+      "Evening status": "",
       "Current Remarks": "",
       Engineer: "Priya",
       "Flex Status": "Open",

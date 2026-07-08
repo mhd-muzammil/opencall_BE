@@ -8,6 +8,7 @@ export const DAILY_CALL_PLAN_COLUMNS = [
   "WIP aging",
   "Location",
   "RTPL status",
+  "Evening status",
   "Current Remarks",
   "Engineer",
   "Flex Status",
