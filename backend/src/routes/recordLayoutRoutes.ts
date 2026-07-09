@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   deleteRecordLayoutController,
+  getRecordColumnsCatalogController,
   getRecordLayoutController,
   putRecordLayoutController,
 } from "../controllers/recordLayoutController.js";
@@ -12,6 +13,7 @@ export const recordLayoutRouter = Router();
 
 recordLayoutRouter.use(requireAuthenticatedUser);
 
+recordLayoutRouter.get("/catalog", getRecordColumnsCatalogController);
 recordLayoutRouter.get("/", getRecordLayoutController);
 recordLayoutRouter.put("/", putRecordLayoutController);
 recordLayoutRouter.delete("/", deleteRecordLayoutController);

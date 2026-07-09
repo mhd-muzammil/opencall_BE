@@ -914,6 +914,29 @@ export async function generateDailyCallPlanReport(
       updateAging();
     }
 
+    // Surface raw Flex WIP Excel columns (those not already a mapped report
+    // column) into each row's output, so a user's chosen layout can display any
+    // raw field on the records grid and in the export. Closed synthetic rows
+    // have no source Flex row and are left as-is.
+    for (const row of rows) {
+      const raw = row.match?.flexWip?.rawRow;
+      if (!raw) {
+        continue;
+      }
+      const output = row.output as Record<string, string | number>;
+      for (const [key, rawValue] of Object.entries(raw)) {
+        if (key in output) {
+          continue;
+        }
+        output[key] =
+          rawValue === null || rawValue === undefined
+            ? ""
+            : typeof rawValue === "number"
+              ? rawValue
+              : String(rawValue);
+      }
+    }
+
     return {
       reportId: reportId as string,
       sessionId: historySession.id,

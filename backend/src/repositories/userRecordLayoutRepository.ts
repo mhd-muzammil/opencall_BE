@@ -59,3 +59,24 @@ export async function upsertUserRecordLayout(input: {
 export async function deleteUserRecordLayout(userId: string): Promise<void> {
   await query(`DELETE FROM user_record_layouts WHERE user_id = $1`, [userId]);
 }
+
+/**
+ * Raw column headers from the most recently uploaded Flex WIP file. These are
+ * the actual Excel column names, offered in the Record Format catalog on top of
+ * the standard report columns so users can surface any raw field. Empty if no
+ * Flex WIP has been uploaded yet.
+ */
+export async function findLatestFlexRawColumnHeaders(): Promise<string[]> {
+  const result = await query<{ raw_row: Record<string, unknown> }>(
+    `
+      SELECT raw_row
+      FROM flex_wip_records
+      WHERE raw_row IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+  );
+
+  const rawRow = result.rows[0]?.raw_row;
+  return rawRow ? Object.keys(rawRow) : [];
+}
