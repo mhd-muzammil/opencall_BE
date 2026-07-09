@@ -80,3 +80,20 @@ export async function findLatestFlexRawColumnHeaders(): Promise<string[]> {
   const rawRow = result.rows[0]?.raw_row;
   return rawRow ? Object.keys(rawRow) : [];
 }
+
+/**
+ * The distinct column keys present in any SUPER_ADMIN's saved layout. Region
+ * admins may only use raw Excel columns a super admin has enabled (i.e. included
+ * in their own layout), so this is the source of truth for "enabled extras".
+ */
+export async function findColumnsUsedBySuperAdmins(): Promise<string[]> {
+  const result = await query<{ col: string }>(
+    `
+      SELECT DISTINCT jsonb_array_elements_text(layouts.ordered_columns) AS col
+      FROM user_record_layouts layouts
+      JOIN users ON users.id = layouts.user_id
+      WHERE users.role = 'SUPER_ADMIN'
+    `,
+  );
+  return result.rows.map((r) => r.col);
+}
