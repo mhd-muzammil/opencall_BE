@@ -42,7 +42,7 @@ export async function createApp() {
   app.use(
     cors({
       origin: parseCorsOrigins(env.CORS_ORIGIN),
-      methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Authorization", "Content-Type", "x-region-id"],
       maxAge: 86400,
     }),
