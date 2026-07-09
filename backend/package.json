@@ -13,6 +13,8 @@
     "migrate:rtpl-statuses": "tsx src/scripts/applyRtplStatusesMigration.ts",
     "migrate:status-aging": "tsx src/scripts/applyStatusAgingMigration.ts",
     "migrate:flex-status-days": "tsx src/scripts/applyFlexStatusUnchangedDaysMigration.ts",
+    "migrate:evening-status": "tsx src/scripts/applyEveningStatusMigration.ts",
+    "migrate:record-layouts": "tsx src/scripts/applyRecordLayoutsMigration.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "user:upsert-admin": "node dist/scripts/upsertAdminUser.js",
