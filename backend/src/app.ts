@@ -1,3 +1,4 @@
+import compression from "compression";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
@@ -24,6 +25,11 @@ export async function createApp() {
   if (process.env.NODE_ENV === "production") {
     app.set("trust proxy", 1);
   }
+
+  // gzip/deflate all responses. The daily call-plan report JSON is large
+  // (hundreds of rows × ~30 columns, plus merged raw Excel columns) and
+  // compresses ~85%, cutting the post-login report download substantially.
+  app.use(compression());
 
   app.use(
     helmet({
