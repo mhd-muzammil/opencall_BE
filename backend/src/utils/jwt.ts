@@ -14,6 +14,18 @@ interface EncodedJwtPayload extends JwtPayload {
   iat: number;
 }
 
+export const SPECIAL_ACCESS_TOKEN_KIND = "SPECIAL_ACCESS" as const;
+
+export interface SpecialAccessJwtPayload {
+  kind: typeof SPECIAL_ACCESS_TOKEN_KIND;
+  specialAccessId: string;
+}
+
+interface EncodedSpecialAccessJwtPayload extends SpecialAccessJwtPayload {
+  exp: number;
+  iat: number;
+}
+
 const TOKEN_TTL_SECONDS = 60 * 60 * 8;
 
 function base64UrlEncode(value: Buffer | string): string {
@@ -85,7 +97,12 @@ export function generateToken(user: AuthenticatedUser): string {
   return `${unsignedToken}.${sign(unsignedToken)}`;
 }
 
-export function verifyToken(token: string): JwtPayload {
+/**
+ * Splits the token, verifies the HMAC signature in constant time, and returns the
+ * decoded (but not yet shape-validated) payload object. Shared by both the user and
+ * special-access verification paths so the crypto is written exactly once.
+ */
+function verifySignatureAndDecode(token: string): unknown {
   const [encodedHeader, encodedPayload, signature] = token.split(".");
 
   if (!encodedHeader || !encodedPayload || !signature) {
@@ -104,17 +121,80 @@ export function verifyToken(token: string): JwtPayload {
     throw unauthorized("Invalid bearer token signature");
   }
 
-  const payload = parsePayload(
-    JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")),
-  );
+  return JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+}
 
-  if (payload.exp <= Math.floor(Date.now() / 1000)) {
+function assertNotExpired(exp: number): void {
+  if (exp <= Math.floor(Date.now() / 1000)) {
     throw unauthorized("Bearer token has expired");
   }
+}
+
+export function verifyToken(token: string): JwtPayload {
+  const payload = parsePayload(verifySignatureAndDecode(token));
+  assertNotExpired(payload.exp);
 
   return {
     userId: payload.userId,
     role: payload.role,
     regionId: payload.regionId,
+  };
+}
+
+export function generateSpecialAccessToken(specialAccessId: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "HS256", typ: "JWT" };
+  const payload: EncodedSpecialAccessJwtPayload = {
+    kind: SPECIAL_ACCESS_TOKEN_KIND,
+    specialAccessId,
+    iat: now,
+    exp: now + TOKEN_TTL_SECONDS,
+  };
+  const unsignedToken = `${base64UrlJson(header)}.${base64UrlJson(payload)}`;
+
+  return `${unsignedToken}.${sign(unsignedToken)}`;
+}
+
+export type VerifiedToken =
+  | { kind: "USER"; payload: JwtPayload }
+  | { kind: typeof SPECIAL_ACCESS_TOKEN_KIND; specialAccessId: string };
+
+/**
+ * Verifies a bearer token that may belong to either a regular user or a special-access
+ * credential, returning a discriminated result. Regular-user tokens (no `kind`) are parsed
+ * exactly as `verifyToken` does, so existing behaviour is unchanged.
+ */
+export function verifyAnyToken(token: string): VerifiedToken {
+  const decoded = verifySignatureAndDecode(token);
+
+  if (
+    typeof decoded === "object" &&
+    decoded !== null &&
+    (decoded as { kind?: unknown }).kind === SPECIAL_ACCESS_TOKEN_KIND
+  ) {
+    const parsed = decoded as Partial<EncodedSpecialAccessJwtPayload>;
+    if (
+      typeof parsed.specialAccessId !== "string" ||
+      typeof parsed.exp !== "number" ||
+      typeof parsed.iat !== "number"
+    ) {
+      throw unauthorized("Invalid token payload");
+    }
+    assertNotExpired(parsed.exp);
+    return {
+      kind: SPECIAL_ACCESS_TOKEN_KIND,
+      specialAccessId: parsed.specialAccessId,
+    };
+  }
+
+  const payload = parsePayload(decoded);
+  assertNotExpired(payload.exp);
+  return {
+    kind: "USER",
+    payload: {
+      userId: payload.userId,
+      role: payload.role,
+      regionId: payload.regionId,
+    },
   };
 }

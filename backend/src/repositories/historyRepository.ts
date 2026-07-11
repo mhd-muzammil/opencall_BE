@@ -267,6 +267,28 @@ export async function findHistorySessionById(
   return result.rows[0] ?? null;
 }
 
+/**
+ * The newest COMPLETED report session that has a linked report + flex batch — i.e. the
+ * globally-shared "latest report" that any viewer (including special-access logins) sees.
+ * Additive read helper; does not affect existing history behaviour.
+ */
+export async function findLatestCompletedReportSession(): Promise<ReportHistorySessionRow | null> {
+  const sql = `
+    SELECT
+      sessions.*,
+      reports.report_date::TEXT AS report_date
+    FROM report_history_sessions sessions
+    JOIN daily_call_plan_reports reports
+      ON reports.id = sessions.daily_call_plan_report_id
+    WHERE sessions.status = 'COMPLETED'
+      AND sessions.flex_upload_batch_id IS NOT NULL
+    ORDER BY reports.report_date DESC NULLS LAST, sessions.created_at DESC
+    LIMIT 1;
+  `;
+  const result = await query<ReportHistorySessionRow>(sql);
+  return result.rows[0] ?? null;
+}
+
 export async function getHistorySessionById(
   id: string,
   userId: string,

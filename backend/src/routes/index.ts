@@ -9,6 +9,7 @@ import { recordLayoutRouter } from "./recordLayoutRoutes.js";
 import { reportRouter } from "./reportRoutes.js";
 import { reportRowRouter } from "./reportRowRoutes.js";
 import { uploadRouter } from "./uploadRoutes.js";
+import { specialAccessSessionRouter } from "./specialAccessSessionRoutes.js";
 
 export const apiRouter = Router();
 
@@ -22,3 +23,4 @@ apiRouter.use("/report-history", historyRouter);
 apiRouter.use("/admin", adminRouter);
 apiRouter.use("/me", meRouter);
 apiRouter.use("/record-layout", recordLayoutRouter);
+apiRouter.use("/special-access", specialAccessSessionRouter);

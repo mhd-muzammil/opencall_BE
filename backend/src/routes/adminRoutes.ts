@@ -39,10 +39,18 @@ import {
 } from "../controllers/adminRtplStatusController.js";
 import { requireAuthenticatedUser } from "../middlewares/authMiddleware.js";
 import { requireRole } from "../middlewares/roleMiddleware.js";
+import { specialAccessRouter } from "./specialAccessRoutes.js";
 
 export const adminRouter = Router();
 
 adminRouter.use(requireAuthenticatedUser);
+
+// Special-access management (custom roles + scoped logins) — SUPER_ADMIN only.
+adminRouter.use(
+  "/special-access",
+  requireRole(["SUPER_ADMIN"]),
+  specialAccessRouter,
+);
 
 adminRouter.get(
   "/regions",
