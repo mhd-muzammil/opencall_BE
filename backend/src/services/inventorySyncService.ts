@@ -94,6 +94,7 @@ async function syncViaInventoryApi(
   detailsString: string,
   detailsObj: any,
   latestMeta: any,
+  partNumbers: { goodPartNumber: string; partOrderNumber: string; soNumber: string },
 ): Promise<void> {
   const caseId = String(row.case_id);
   const mappedRegion = mapAspCodeToRegion(row.work_location);
@@ -141,6 +142,9 @@ async function syncViaInventoryApi(
       engineer_phone: "",
       part_description: row.part ?? "",
       customer_name: row.customer_name ?? "",
+      good_part_number: partNumbers.goodPartNumber,
+      part_order_number: partNumbers.partOrderNumber,
+      so_number: partNumbers.soNumber,
       inventory_details: detailsString,
       opencall_case_details: detailsObj,
       case_created_time: caseCreatedIso,
@@ -168,6 +172,12 @@ async function syncViaInventoryApi(
     if (!existing.engineer_name) patch.engineer_name = row.engineer ?? "";
     if (!existing.part_description) patch.part_description = row.part ?? "";
     if (!existing.customer_name) patch.customer_name = row.customer_name ?? "";
+    if (!existing.good_part_number && partNumbers.goodPartNumber)
+      patch.good_part_number = partNumbers.goodPartNumber;
+    if (!existing.part_order_number && partNumbers.partOrderNumber)
+      patch.part_order_number = partNumbers.partOrderNumber;
+    if (!existing.so_number && partNumbers.soNumber)
+      patch.so_number = partNumbers.soNumber;
 
     const res = await inventoryFetch(`/hp-stock/items/${existing.id}/`, {
       method: "PATCH",
@@ -330,11 +340,43 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
     console.error("[InventorySync] Failed to fetch case history/details from PG:", pgError);
   }
 
+  // Good Part No / Part Order No / SO Number live in the raw FieldEZ (Flex WIP)
+  // upload row (flex_wip_records.raw_row JSONB), not in the report row itself.
+  const partNumbers = { goodPartNumber: "", partOrderNumber: "", soNumber: "" };
+  try {
+    const pn = await pgQuery<{
+      good_part_number: string | null;
+      part_order_number: string | null;
+      so_number: string | null;
+    }>(
+      `
+        SELECT
+          fw.raw_row->>'Good Part No'  AS good_part_number,
+          fw.raw_row->>'Part Order No' AS part_order_number,
+          fw.raw_row->>'SO Number'     AS so_number
+        FROM flex_wip_records fw
+        JOIN source_upload_batches b ON b.id = fw.upload_batch_id
+        WHERE fw.case_id = $1 OR fw.normalized_case_id = $1
+        ORDER BY b.created_at DESC
+        LIMIT 1
+      `,
+      [row.case_id],
+    );
+    const p = pn.rows[0];
+    if (p) {
+      partNumbers.goodPartNumber = p.good_part_number ?? "";
+      partNumbers.partOrderNumber = p.part_order_number ?? "";
+      partNumbers.soNumber = p.so_number ?? "";
+    }
+  } catch (e) {
+    console.error("[InventorySync] part-number lookup failed:", e);
+  }
+
   // Prod-grade sync: push through the Inventory HTTP API when configured.
   // Local dev without INVENTORY_API_URL falls back to the direct SQLite write below.
   if (process.env.INVENTORY_API_URL) {
     try {
-      await syncViaInventoryApi(row, detailsString, detailsObj, latestMeta);
+      await syncViaInventoryApi(row, detailsString, detailsObj, latestMeta, partNumbers);
     } catch (error) {
       console.error("[InventorySync] Error syncing to inventory API:", error);
     }
@@ -362,13 +404,16 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
       // Insert new record
       const insert = db.prepare(`
         INSERT INTO hp_stock_hpstockitem (
-          case_id, work_order_id, delivery_no, service_event_no, 
-          material_order_no, hp_sales_order_no, gvrma_no, 
-          region, status, engineer_name, engineer_phone, 
-          part_description, customer_name, inventory_details,
+          case_id, work_order_id, delivery_no, service_event_no,
+          material_order_no, hp_sales_order_no, gvrma_no,
+          region, status, engineer_name, engineer_phone,
+          part_description, customer_name,
+          good_part_number, part_order_number, so_number, inventory_details,
           opencall_case_details, transition_history, created_at, updated_at,
+          warranty_trade, part_shipment_status, dc_cut_request_message,
+          dc_cut_approved, dc_cut_chat,
           case_created_time
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       insert.run(
@@ -385,11 +430,19 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
         "",                   // engineer_phone
         row.part ?? "",       // part_description
         row.customer_name ?? "", // customer_name
+        partNumbers.goodPartNumber,   // good_part_number
+        partNumbers.partOrderNumber,  // part_order_number
+        partNumbers.soNumber,         // so_number
         detailsString,        // inventory_details
         caseDetailsJson,      // opencall_case_details
         "[]",                 // transition_history
         now,                  // created_at
         now,                  // updated_at
+        "",                   // warranty_trade (NOT NULL, no DB default)
+        "",                   // part_shipment_status (NOT NULL, no DB default)
+        "",                   // dc_cut_request_message (NOT NULL, no DB default)
+        0,                    // dc_cut_approved (NOT NULL bool)
+        "[]",                 // dc_cut_chat (NOT NULL JSON list)
         latestMeta?.case_created_time ?? null // case_created_time
       );
       console.info(`[InventorySync] Created new HPStockItem for case ${row.case_id}`);
@@ -404,6 +457,9 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
           engineer_name = CASE WHEN engineer_name = '' OR engineer_name IS NULL THEN ? ELSE engineer_name END,
           part_description = CASE WHEN part_description = '' OR part_description IS NULL THEN ? ELSE part_description END,
           customer_name = CASE WHEN customer_name = '' OR customer_name IS NULL THEN ? ELSE customer_name END,
+          good_part_number = COALESCE(NULLIF(good_part_number, ''), ?),
+          part_order_number = COALESCE(NULLIF(part_order_number, ''), ?),
+          so_number = COALESCE(NULLIF(so_number, ''), ?),
           inventory_details = ?,
           opencall_case_details = ?,
           case_created_time = ?,
@@ -416,6 +472,9 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
         row.engineer ?? "",
         row.part ?? "",
         row.customer_name ?? "",
+        partNumbers.goodPartNumber,
+        partNumbers.partOrderNumber,
+        partNumbers.soNumber,
         detailsString,
         caseDetailsJson,
         latestMeta?.case_created_time ?? null,
