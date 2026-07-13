@@ -64,6 +64,10 @@ const FEATURE_TABLES = [
   "user_record_layouts",
   "access_roles",
   "special_access",
+  // migrate:warranty — the HP warranty lookup endpoints 500 without these.
+  "hp_warranty_cache",
+  "warranty_jobs",
+  "warranty_job_items",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [

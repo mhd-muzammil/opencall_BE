@@ -32,6 +32,9 @@ const FEATURE_TABLES = [
   "user_record_layouts",
   "access_roles",
   "special_access",
+  "hp_warranty_cache",
+  "warranty_jobs",
+  "warranty_job_items",
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
