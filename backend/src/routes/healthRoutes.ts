@@ -26,12 +26,21 @@ healthRouter.get("/db", async (_request, response) => {
   });
 });
 
+// A missing *feature* table reports as "degraded" with a 200: the API is still
+// serving, and answering 503 here would fail the container healthcheck and pull
+// a mostly-working API out of service. Only a broken core schema is "not_ready".
 healthRouter.get("/runtime", asyncHandler(async (_request, response) => {
   const runtime = await verifyRuntimeSchema();
 
+  const status = !runtime.ok
+    ? "not_ready"
+    : runtime.degraded
+      ? "degraded"
+      : "ready";
+
   response.status(runtime.ok ? 200 : 503).json({
     data: {
-      status: runtime.ok ? "ready" : "not_ready",
+      status,
       ...runtime,
     },
   });

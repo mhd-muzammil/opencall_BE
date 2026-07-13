@@ -19,10 +19,23 @@ const server = app.listen(env.PORT, () => {
         checkedAt: new Date().toISOString(),
         missingTables: [],
         missingColumns: [],
+        missingFeatureTables: [],
+        degraded: false,
         error: error instanceof Error ? error.message : "Unknown runtime verification error",
       }));
 
       if (runtime.ok) {
+        // A feature table is missing: the API serves, but the endpoints backed by
+        // that migration will 500 until it is applied. Loud on purpose — this is
+        // the signal that was missing when an unapplied migration took a page down.
+        if (runtime.degraded) {
+          console.error(
+            "Runtime verification degraded: unapplied migration(s). These tables are missing",
+            { missingFeatureTables: runtime.missingFeatureTables },
+          );
+          return;
+        }
+
         console.log("Runtime verification passed");
         return;
       }

@@ -15,8 +15,20 @@ export interface RuntimeVerificationResult {
   checkedAt: string;
   missingTables: string[];
   missingColumns: RequiredColumn[];
+  /**
+   * Feature tables that are absent. The API still serves (`ok` stays true), but
+   * the features backed by these tables will 500 until their migration is run.
+   */
+  missingFeatureTables: string[];
+  /** True when the core schema is intact but a feature migration is unapplied. */
+  degraded: boolean;
 }
 
+/**
+ * Core schema. Without these the API cannot serve its primary flows, so their
+ * absence flips `ok` to false — which makes `GET /health/runtime` answer 503 and,
+ * in turn, fails the container healthcheck in docker-compose.yml.
+ */
 const REQUIRED_TABLES = [
   "source_upload_batches",
   "flex_wip_records",
@@ -28,6 +40,30 @@ const REQUIRED_TABLES = [
   "daily_call_plan_report_rows",
   "report_comparisons",
   "report_row_diffs",
+] as const;
+
+/**
+ * Per-feature tables, each created by its own `migrate:*` script.
+ *
+ * These are reported but deliberately do NOT flip `ok`. The healthcheck in
+ * docker-compose.yml treats a 503 from `/health/runtime` as an unhealthy
+ * container, so gating readiness on them would mean that deploying code whose
+ * migration has not been applied yet takes the whole API out of service —
+ * turning one broken page into a full outage. Reporting without failing gives
+ * the visibility (`missingFeatureTables`) without that footgun.
+ *
+ * Keep this list in step with backend/src/scripts/apply*Migration.ts.
+ */
+const FEATURE_TABLES = [
+  "users",
+  "regions",
+  "report_history_sessions",
+  "user_activity_log",
+  "engineers",
+  "rtpl_statuses",
+  "user_record_layouts",
+  "access_roles",
+  "special_access",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [
@@ -81,7 +117,7 @@ export async function verifyRuntimeSchema(): Promise<RuntimeVerificationResult> 
       WHERE table_schema = 'public'
         AND table_name = ANY($1::text[])
     `,
-    [REQUIRED_TABLES],
+    [[...REQUIRED_TABLES, ...FEATURE_TABLES]],
   );
   const tableNames = new Set(result.rows.map((row) => row.table_name));
   const columnKeys = new Set(
@@ -93,11 +129,18 @@ export async function verifyRuntimeSchema(): Promise<RuntimeVerificationResult> 
   const missingColumns = REQUIRED_COLUMNS.filter((column) => {
     return !columnKeys.has(`${column.tableName}.${column.columnName}`);
   });
+  const missingFeatureTables = FEATURE_TABLES.filter(
+    (tableName) => !tableNames.has(tableName),
+  );
+
+  const ok = missingTables.length === 0 && missingColumns.length === 0;
 
   return {
-    ok: missingTables.length === 0 && missingColumns.length === 0,
+    ok,
     checkedAt: new Date().toISOString(),
     missingTables,
     missingColumns,
+    missingFeatureTables: [...missingFeatureTables],
+    degraded: ok && missingFeatureTables.length > 0,
   };
 }
