@@ -1,0 +1,65 @@
+# HP warranty lookup worker — run as an OVERLAY on the base stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.warranty.yml up -d warranty-worker
+#
+# It is deliberately not part of docker-compose.yml: the API must stay free of
+# Playwright, and this worker is the only container that ships a browser.
+#
+# The worker polls `warranty_job_items` for pending rows, so it needs Postgres —
+# but it never touches the uploaded workbooks (the API reads and writes those).
+
+name: opencall-backend
+
+services:
+  warranty-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.warranty-worker
+    container_name: opencall-warranty-worker
+    restart: unless-stopped
+    init: true
+    # Finish the item in flight before the process is killed.
+    stop_grace_period: 90s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      # Validated by backend/src/config/env.ts on import, so all of these must be set
+      # even though the worker only ever uses DATABASE_URL.
+      DATABASE_URL: postgres://${POSTGRES_USER:-opencall}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-opencall}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET}
+      ADMIN_COOKIE_SECRET: ${ADMIN_COOKIE_SECRET:?set ADMIN_COOKIE_SECRET}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:?set ADMIN_SESSION_SECRET}
+      CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN}
+      # Worker settings (all optional — these are the defaults).
+      WARRANTY_HP_URL: ${WARRANTY_HP_URL:-https://support.hp.com/in-en/check-warranty}
+      WARRANTY_MIN_DELAY_MS: ${WARRANTY_MIN_DELAY_MS:-6000}
+      WARRANTY_MAX_DELAY_MS: ${WARRANTY_MAX_DELAY_MS:-12000}
+      WARRANTY_POLL_INTERVAL_MS: ${WARRANTY_POLL_INTERVAL_MS:-5000}
+      WARRANTY_PROFILE_DIR: /data/warranty-profile
+    volumes:
+      # Warm browser profile: cookies and the invisible reCAPTCHA v3 reputation
+      # persist across restarts.
+      - warranty-profile:/data/warranty-profile:rw
+    networks:
+      # `app` gives egress to support.hp.com; `data` reaches Postgres.
+      - app
+      - data
+    # Chromium needs a large /dev/shm or it will crash on content-heavy pages.
+    shm_size: 1gb
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    pids_limit: 512
+    mem_reservation: 512m
+    mem_limit: ${WARRANTY_WORKER_MEM_LIMIT:-2g}
+    cpus: ${WARRANTY_WORKER_CPUS:-1.0}
+
+volumes:
+  warranty-profile:
+    name: opencall-warranty-profile

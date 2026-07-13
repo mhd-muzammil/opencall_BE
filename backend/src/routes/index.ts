@@ -10,6 +10,7 @@ import { reportRouter } from "./reportRoutes.js";
 import { reportRowRouter } from "./reportRowRoutes.js";
 import { uploadRouter } from "./uploadRoutes.js";
 import { specialAccessSessionRouter } from "./specialAccessSessionRoutes.js";
+import { warrantyRouter } from "./warrantyRoutes.js";
 
 export const apiRouter = Router();
 
@@ -24,3 +25,4 @@ apiRouter.use("/admin", adminRouter);
 apiRouter.use("/me", meRouter);
 apiRouter.use("/record-layout", recordLayoutRouter);
 apiRouter.use("/special-access", specialAccessSessionRouter);
+apiRouter.use("/warranty", warrantyRouter);

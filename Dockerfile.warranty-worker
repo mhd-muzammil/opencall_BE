@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1.7
+
+# Warranty lookup worker. Kept entirely separate from the API image: this is the
+# only process that runs Playwright.
+#
+# The base image tag MUST track the `playwright` version in backend/package.json
+# (1.49.1) — the browsers baked into the image are matched to that client.
+ARG PLAYWRIGHT_VERSION=v1.49.1-jammy
+ARG PNPM_VERSION=9.15.0
+
+FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}
+
+ARG PNPM_VERSION
+# NODE_ENV is deliberately NOT set to production here: pnpm would then skip
+# devDependencies (typescript/tsc) and the build below would fail. It is set to
+# production at runtime by docker-compose.warranty.yml instead.
+ENV PNPM_HOME="/pnpm" \
+    PATH="/pnpm:$PATH" \
+    # Browsers are already baked into the base image at this path.
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+WORKDIR /app
+
+# Install pnpm directly to avoid corepack signature verification failures.
+RUN npm install -g pnpm@${PNPM_VERSION}
+
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY backend/package.json backend/package.json
+COPY shared/package.json shared/package.json
+
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --prod=false
+
+COPY shared shared
+COPY backend backend
+
+RUN pnpm --filter @opencall/shared build \
+    && pnpm --filter @opencall/api build
+
+# The persistent browser profile lives on a mounted volume so the reCAPTCHA v3
+# reputation survives restarts.
+ENV WARRANTY_PROFILE_DIR=/data/warranty-profile
+RUN mkdir -p /data/warranty-profile \
+    && chown -R pwuser:pwuser /data /app
+
+USER pwuser
+
+CMD ["node", "backend/dist/worker/warrantyWorker.js"]
