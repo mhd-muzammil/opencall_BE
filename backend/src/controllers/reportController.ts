@@ -6,6 +6,7 @@ import {
   resolveEffectiveRegionId,
 } from "../services/rbac/regionAccessService.js";
 import { aspCodesForRegion } from "../services/rbac/regionRowAccess.js";
+import { syncPartsCallCountsFromReport } from "../services/partsCallCountSync.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
 import type { GeneratedDailyCallPlanReport } from "../types/reportGeneration.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -53,6 +54,11 @@ export const generateDailyCallPlanReportController: RequestHandler =
       regionId,
       allowCreate: !isRegionAdmin,
     });
+
+    // Keep the inventory HP Stock "Active Part Cases" count in step with this report.
+    // Fire-and-forget over the report we already have: it never re-generates, never
+    // blocks the response, and a failure here cannot affect report generation.
+    syncPartsCallCountsFromReport(report);
 
     if (!isRegionAdmin) {
       recordActivity({
