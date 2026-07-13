@@ -80,6 +80,7 @@ function generatedRow(): GeneratedDailyCallPlanRow {
       changeType: "CARRIED",
       previousTicketMatched: true,
       closedSyntheticRow: false,
+      sameDayClosedRow: false,
     },
     updatedAt: null,
     updatedBy: null,
@@ -135,15 +136,20 @@ describe("insertDailyCallPlanReportRows", () => {
     expect(sql).toContain("product_line_name");
     expect(sql).toContain("work_location");
     expect(sql).toContain("flex_status_unchanged_days");
-    // Positions shifted +1 by the new evening_rtpl_status column (inserted
-    // right after rtpl_status).
+    expect(sql).toContain("customer_type");
+    expect(sql).toContain("same_day_closed");
+    // Positions shifted +1 by the new evening_rtpl_status column (inserted right after
+    // rtpl_status), then +2 by customer_type / product_serial_no (after customer_name).
     expect(values[12]).toBe("Commercial");
     expect(values[13]).toBe("ASPS01461");
-    expect(values[34]).toBe(JSON.stringify(["engineer", "customer_mail"]));
-    expect(values[35]).toBe(true);
-    expect(values[36]).toEqual([]);
-    // flex_status_unchanged_days is appended last; null when no comparison insight.
-    expect(values[39]).toBeNull();
+    expect(values[19]).toBe("Consumer");
+    expect(values[36]).toBe(JSON.stringify(["engineer", "customer_mail"]));
+    expect(values[37]).toBe(true);
+    expect(values[38]).toEqual([]);
+    // flex_status_unchanged_days is null when there is no comparison insight.
+    expect(values[41]).toBeNull();
+    // same_day_closed is appended last.
+    expect(values[42]).toBe(false);
   });
 
   it("loads persisted manual fields for regenerated history reports", async () => {

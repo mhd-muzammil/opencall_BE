@@ -95,6 +95,8 @@ function previousFinalRow(): FinalReportManualCarryForwardRow {
     woOtcCode: "OTC",
     accountName: "Account",
     customerName: "Customer",
+    customerType: "Commercial",
+    productSerialNo: null,
     location: "Chennai",
     contact: null,
     part: null,
@@ -106,6 +108,8 @@ function previousFinalRow(): FinalReportManualCarryForwardRow {
     manualNotes: null,
     flexStatusUnchangedDays: null,
     statusAging: "2",
+    changeType: null,
+    sameDayClosed: false,
     manualValues: {
       rtpl_status: "Part Pending",
       segment: "Enterprise",

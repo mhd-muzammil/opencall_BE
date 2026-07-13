@@ -85,8 +85,51 @@ function defaultCarryForwardMetadata(
     changeType: null,
     previousTicketMatched: false,
     closedSyntheticRow: false,
+    sameDayClosedRow: false,
     ...overrides,
   };
+}
+
+/**
+ * Was the carry-forward source report uploaded on an earlier day than the one being
+ * generated? True for the day's FIRST upload (source = a previous day's report), false
+ * for every same-day re-upload (source = an earlier report from today).
+ */
+function sourceIsPriorDay(
+  previousRow: FinalReportManualCarryForwardRow,
+  currentReportDate: string,
+): boolean {
+  return (
+    !previousRow.sourceReportDate ||
+    previousRow.sourceReportDate < currentReportDate
+  );
+}
+
+/**
+ * A ticket absent from today's Flex WIP is always closed. This decides whether it also
+ * stays on the Records page for the rest of the day:
+ *
+ *  - first upload of the day  -> false: it drops off Records immediately (the original
+ *                                behaviour, and the day-boundary that finally removes
+ *                                yesterday's same-day closures).
+ *  - same-day re-upload, ticket was still active this morning
+ *                            -> true: it closed mid-day, so it stays listed on Records
+ *                               until tomorrow's first upload.
+ *  - same-day re-upload, ticket was already closed
+ *                            -> inherit, so a row closed by upload #1 stays off Records
+ *                               and one closed by upload #2 stays on it through #3, #4…
+ */
+function isSameDayClosure(
+  previousRow: FinalReportManualCarryForwardRow,
+  currentReportDate: string,
+): boolean {
+  if (sourceIsPriorDay(previousRow, currentReportDate)) {
+    return false;
+  }
+
+  return previousRow.changeType === "CLOSED"
+    ? previousRow.sameDayClosed
+    : true;
 }
 
 function previousRowsByTicket(
@@ -159,13 +202,15 @@ function closedRowToEnriched(
     wo_otc_code: row.woOtcCode,
     account_name: row.accountName,
     customer_name: row.customerName,
-    // Closed synthetic rows are excluded from the active dashboard, so customer
-    // type is not carried forward from the persisted final report.
-    customer_type: null,
+    // A same-day closed row is still shown on the Records page, so it has to keep the
+    // Renderways Customer Type or isConsumerCase falls back to its account-name guess
+    // and the consumer/commercial split shifts mid-day. Persisted since migration 024;
+    // rows written before it carry NULL, exactly as they did before.
+    customer_type: row.customerType,
     location: previousFieldValue(row, "location"),
     contact: row.contact,
     part: row.part,
-    product_serial_no: null,
+    product_serial_no: row.productSerialNo,
     wip_aging_category: row.wipAgingCategory,
     tat: row.tat,
     customer_mail: previousFieldValue(row, "customer_mail"),
@@ -268,11 +313,8 @@ export class ManualFieldCarryForwardService {
         if (!currentFieldValue(enriched, "rtpl_status")) {
           const sourceMorning = cleanManualValue(previousRow.rtplStatus);
           const sourceEvening = cleanManualValue(previousRow.eveningRtplStatus);
-          const sourceIsPriorDay =
-            !previousRow.sourceReportDate ||
-            previousRow.sourceReportDate < input.currentReportDate;
 
-          if (sourceIsPriorDay) {
+          if (sourceIsPriorDay(previousRow, input.currentReportDate)) {
             // New day: yesterday's Evening becomes today's Morning (fall back to
             // yesterday's Morning if Evening was left blank); Evening starts empty.
             const promotedMorning = sourceEvening ?? sourceMorning;
@@ -346,6 +388,7 @@ export class ManualFieldCarryForwardService {
           changeType: "CLOSED",
           previousTicketMatched: true,
           closedSyntheticRow: true,
+          sameDayClosedRow: isSameDayClosure(previousRow, input.currentReportDate),
         }),
         updatedAt: null,
         updatedBy: null,

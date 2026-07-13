@@ -40,6 +40,12 @@ export interface ManualCarryForwardRowMetadata {
   changeType: ReportChangeType | "NEW_WORK_ORDER" | null;
   previousTicketMatched: boolean;
   closedSyntheticRow: boolean;
+  /**
+   * A closed row that closed on a same-day re-upload, so it stays on the Records
+   * page until the next day's first upload. Always false for rows closed by a
+   * day's first upload — those leave the Records page immediately.
+   */
+  sameDayClosedRow: boolean;
 }
 
 export interface ManualCarryForwardSummary {

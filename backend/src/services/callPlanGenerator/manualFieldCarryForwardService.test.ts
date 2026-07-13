@@ -76,6 +76,7 @@ function generatedRow(
       changeType: null,
       previousTicketMatched: false,
       closedSyntheticRow: false,
+      sameDayClosedRow: false,
     },
     updatedAt: null,
     updatedBy: null,
@@ -107,6 +108,8 @@ function previousFinalRow(
     woOtcCode: "OLD",
     accountName: "Old account",
     customerName: "Old customer",
+    customerType: "Commercial",
+    productSerialNo: "SN-OLD",
     location: "Chennai",
     contact: null,
     part: null,
@@ -118,6 +121,8 @@ function previousFinalRow(
     manualNotes: "Escalated locally",
     flexStatusUnchangedDays: null,
     statusAging: "2",
+    changeType: null,
+    sameDayClosed: false,
     manualValues: {
       rtpl_status: "Pending customer",
       segment: "Enterprise",
@@ -357,5 +362,118 @@ describe("ManualFieldCarryForwardService", () => {
     expect(closedRow?.comparison?.changeType).toBe("CLOSED");
     expect(closedRow?.enriched.engineer).toBe("Priya");
     expect(closedRow?.enriched.work_location).toBe("ASPS01461");
+  });
+
+  it("carries Customer Type and Product Serial No onto a closed row", () => {
+    const result = service.apply({
+      currentReportDate: "2026-03-28",
+      currentRows: [],
+      previousFinalRows: [previousFinalRow({ sourceReportDate: "2026-03-27" })],
+    });
+
+    expect(result.rows[0]?.enriched.customer_type).toBe("Commercial");
+    expect(result.rows[0]?.enriched.product_serial_no).toBe("SN-OLD");
+  });
+
+  // A ticket absent from the Flex WIP is always CLOSED. sameDayClosedRow decides whether
+  // it ALSO stays on the Records page for the rest of the day. Only the day's first
+  // upload (source = a prior day) takes rows off the Records page.
+  describe("same-day closed rows", () => {
+    // Absent from the day's FIRST upload: closed and off the Records page immediately.
+    it("does not mark a row closed by the day's first upload as same-day closed", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [previousFinalRow({ sourceReportDate: "2026-03-27" })],
+      });
+
+      expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(true);
+      expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(false);
+    });
+
+    // Was active this morning, gone this afternoon: closed, but stays on Records.
+    it("marks a row that closes on a same-day re-upload as same-day closed", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({ sourceReportDate: "2026-03-28", changeType: "CARRIED" }),
+        ],
+      });
+
+      expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(true);
+      expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(true);
+    });
+
+    // Upload #3 must not resurrect a row that upload #1 already took off Records.
+    it("keeps a row closed by the day's first upload off Records on later re-uploads", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            changeType: "CLOSED",
+            sameDayClosed: false,
+          }),
+        ],
+      });
+
+      expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(false);
+    });
+
+    // …and must not drop a row that upload #2 closed mid-day.
+    it("keeps a mid-day closure on Records across further same-day re-uploads", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            changeType: "CLOSED",
+            sameDayClosed: true,
+          }),
+        ],
+      });
+
+      expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(true);
+    });
+
+    // The day boundary: the next day's first upload finally takes it off Records.
+    it("drops a same-day closure off Records at the next day's first upload", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-29",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            changeType: "CLOSED",
+            sameDayClosed: true,
+          }),
+        ],
+      });
+
+      expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(true);
+      expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(false);
+    });
+
+    // A ticket that reappears in a later Flex upload is a normal active row again.
+    it("reopens a ticket that comes back in a same-day re-upload", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [generatedRow({ ticket_id: "123" })],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            changeType: "CLOSED",
+            sameDayClosed: true,
+          }),
+        ],
+      });
+
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(false);
+      expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(false);
+    });
   });
 });

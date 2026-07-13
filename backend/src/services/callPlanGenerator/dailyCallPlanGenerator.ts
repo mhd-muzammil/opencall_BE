@@ -101,6 +101,7 @@ function initialCarryForwardMetadata(): ManualCarryForwardRowMetadata {
     changeType: null,
     previousTicketMatched: false,
     closedSyntheticRow: false,
+    sameDayClosedRow: false,
   };
 }
 

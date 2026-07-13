@@ -225,6 +225,8 @@ export interface FinalReportManualCarryForwardRow {
   woOtcCode: string | null;
   accountName: string | null;
   customerName: string | null;
+  customerType: string | null;
+  productSerialNo: string | null;
   location: string | null;
   contact: string | null;
   part: string | null;
@@ -236,6 +238,10 @@ export interface FinalReportManualCarryForwardRow {
   manualNotes: string | null;
   flexStatusUnchangedDays: number | null;
   sourceReportDate: string | null;
+  /** Was this row already a closed synthetic row in the source report? */
+  changeType: string | null;
+  /** Was this row closed by a same-day re-upload (i.e. still on the Records page)? */
+  sameDayClosed: boolean;
   manualValues: Partial<Record<ManualCarryForwardField, string | null>>;
 }
 
@@ -258,6 +264,8 @@ interface FinalReportManualCarryForwardDbRow {
   wo_otc_code: string | null;
   account_name: string | null;
   customer_name: string | null;
+  customer_type: string | null;
+  product_serial_no: string | null;
   location: string | null;
   contact: string | null;
   part: string | null;
@@ -269,6 +277,8 @@ interface FinalReportManualCarryForwardDbRow {
   manual_notes: string | null;
   flex_status_unchanged_days: number | null;
   source_report_date: string | null;
+  change_type: string | null;
+  same_day_closed: boolean | null;
 }
 
 function mapFinalReportManualCarryForwardRow(
@@ -293,6 +303,8 @@ function mapFinalReportManualCarryForwardRow(
     woOtcCode: row.wo_otc_code,
     accountName: row.account_name,
     customerName: row.customer_name,
+    customerType: row.customer_type,
+    productSerialNo: row.product_serial_no,
     location: row.location,
     contact: row.contact,
     part: row.part,
@@ -304,6 +316,8 @@ function mapFinalReportManualCarryForwardRow(
     manualNotes: row.manual_notes,
     flexStatusUnchangedDays: row.flex_status_unchanged_days,
     sourceReportDate: row.source_report_date,
+    changeType: row.change_type,
+    sameDayClosed: row.same_day_closed ?? false,
     manualValues: {
       rtpl_status: row.rtpl_status,
       segment: row.segment,
@@ -455,6 +469,8 @@ export async function insertDailyCallPlanReportRows(
           wo_otc_code,
           account_name,
           customer_name,
+          customer_type,
+          product_serial_no,
           location,
           contact,
           part,
@@ -475,14 +491,15 @@ export async function insertDailyCallPlanReportRows(
           manual_fields_missing,
           match_status,
           match_notes,
-          flex_status_unchanged_days
+          flex_status_unchanged_days,
+          same_day_closed
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
           $17, $18, $19, $20, $21, $22, $23, $24,
-          $25, $26, $27, $28, $29, $30, $31, $32, $33::jsonb, $34, $35::jsonb, $36, $37::text[],
-          $38, $39::jsonb, $40
+          $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35::jsonb, $36, $37::jsonb, $38, $39::text[],
+          $40, $41::jsonb, $42, $43
         )
         RETURNING id, updated_at::TEXT AS updated_at, updated_by::TEXT AS updated_by
       `,
@@ -506,6 +523,8 @@ export async function insertDailyCallPlanReportRows(
         row.enriched.wo_otc_code,
         row.enriched.account_name,
         row.enriched.customer_name,
+        row.enriched.customer_type,
+        row.enriched.product_serial_no,
         row.enriched.location,
         row.enriched.contact,
         row.enriched.part,
@@ -527,6 +546,7 @@ export async function insertDailyCallPlanReportRows(
         row.enriched.match_status,
         JSON.stringify(row.match.notes),
         row.comparison?.flexStatusUnchangedDays ?? null,
+        row.carryForward.sameDayClosedRow,
       ],
     );
     const inserted = result.rows[0] as InsertedDailyReportRow | undefined;
@@ -576,6 +596,8 @@ export async function findFinalReportRowsForManualCarryForwardBySessionId(
         rows.wo_otc_code,
         rows.account_name,
         rows.customer_name,
+        rows.customer_type,
+        rows.product_serial_no,
         rows.location,
         rows.contact,
         rows.part,
@@ -586,6 +608,8 @@ export async function findFinalReportRowsForManualCarryForwardBySessionId(
         rows.remarks,
         rows.manual_notes,
         rows.flex_status_unchanged_days,
+        rows.change_type::TEXT AS change_type,
+        rows.same_day_closed,
         NULL::text AS source_report_date
       FROM report_history_sessions sessions
       JOIN daily_call_plan_report_rows rows
@@ -712,6 +736,8 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         rows.wo_otc_code,
         rows.account_name,
         rows.customer_name,
+        rows.customer_type,
+        rows.product_serial_no,
         rows.location,
         rows.contact,
         rows.part,
@@ -722,6 +748,8 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         rows.remarks,
         rows.manual_notes,
         rows.flex_status_unchanged_days,
+        rows.change_type::TEXT AS change_type,
+        rows.same_day_closed,
         previous_session.effective_report_date::text AS source_report_date
       FROM previous_session
       JOIN report_history_sessions sessions
