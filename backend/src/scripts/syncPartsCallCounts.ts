@@ -2,13 +2,13 @@ import { closeDatabasePool } from "../config/database.js";
 import { generateDailyCallPlanReport } from "../services/callPlanGenerator/dailyCallPlanGenerator.js";
 import { findLatestCompletedReportSession } from "../repositories/historyRepository.js";
 import {
-  computePartsCallCounts,
-  pushPartsCallCounts,
+  computeActivePartData,
+  pushActivePartData,
 } from "../services/partsCallCountSync.js";
 
 // Manual/backfill run of the same sync that now fires automatically after every report
 // generation. Regenerates the latest completed report (read-only) and pushes its
-// region-wise "Active Part Cases" count to inventory.
+// region-wise "Active Part Cases" count + case-id list to inventory.
 
 async function run(): Promise<void> {
   const session = await findLatestCompletedReportSession();
@@ -28,7 +28,7 @@ async function run(): Promise<void> {
   });
 
   // force = true: a manual run should always write, even if unchanged.
-  await pushPartsCallCounts(computePartsCallCounts(report), true);
+  await pushActivePartData(computeActivePartData(report), true);
 }
 
 run()
