@@ -8,6 +8,7 @@ import {
   listAdminUsersController,
   reactivateAdminUserController,
   reassignAdminUserRegionController,
+  setAdminUserRegionsController,
   updateAdminUserProfileController,
 } from "../controllers/adminUserController.js";
 import { listAdminRegionsController } from "../controllers/adminRegionController.js";
@@ -202,6 +203,13 @@ adminRouter.patch(
   "/users/:id/region",
   requireRole(["SUPER_ADMIN"]),
   reassignAdminUserRegionController,
+);
+
+// Replaces the user's additional managed regions (beyond the primary region_id).
+adminRouter.put(
+  "/users/:id/regions",
+  requireRole(["SUPER_ADMIN"]),
+  setAdminUserRegionsController,
 );
 
 adminRouter.post(

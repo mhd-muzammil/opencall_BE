@@ -46,6 +46,13 @@ export interface ManualCarryForwardRowMetadata {
    * day's first upload — those leave the Records page immediately.
    */
   sameDayClosedRow: boolean;
+  /**
+   * An active row outside the uploader's region scope, reproduced verbatim from
+   * the previous report because a region-scoped upload must not touch other
+   * regions' calls. Transient (recomputed every generation, never persisted);
+   * the row has no Flex match today, so unmatched/missing-RTPL counters skip it.
+   */
+  regionScopeRetainedRow: boolean;
 }
 
 export interface ManualCarryForwardSummary {
@@ -62,6 +69,15 @@ export interface GenerateDailyCallPlanInput {
   renderwaysUploadBatchId?: string | null | undefined;
   callPlanUploadBatchId?: string | null | undefined;
   allowCreate?: boolean;
+  /**
+   * Region scope (work-location ASP codes) this generation may affect; null or
+   * undefined means unrestricted (SUPER_ADMIN). When set and a NEW report is being
+   * created: file rows outside the scope are ignored (no new cases added), and the
+   * previous report's out-of-scope rows are carried forward verbatim — an active
+   * call in another region is never closed by this upload. Reopening an existing
+   * report ignores the scope entirely.
+   */
+  allowedRegionAspCodes?: readonly string[] | null;
 }
 
 export interface GeneratedDailyCallPlanRow {

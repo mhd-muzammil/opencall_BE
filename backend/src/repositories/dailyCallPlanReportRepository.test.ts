@@ -81,6 +81,7 @@ function generatedRow(): GeneratedDailyCallPlanRow {
       previousTicketMatched: true,
       closedSyntheticRow: false,
       sameDayClosedRow: false,
+      regionScopeRetainedRow: false,
     },
     updatedAt: null,
     updatedBy: null,

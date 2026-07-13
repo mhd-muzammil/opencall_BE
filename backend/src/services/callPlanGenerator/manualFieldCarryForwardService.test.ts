@@ -77,6 +77,7 @@ function generatedRow(
       previousTicketMatched: false,
       closedSyntheticRow: false,
       sameDayClosedRow: false,
+      regionScopeRetainedRow: false,
     },
     updatedAt: null,
     updatedBy: null,
@@ -474,6 +475,141 @@ describe("ManualFieldCarryForwardService", () => {
       expect(result.rows).toHaveLength(1);
       expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(false);
       expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(false);
+    });
+  });
+
+  // A region-scoped upload (allowedWorkLocations set) may close only its own
+  // regions' calls. Absent tickets from other regions are carried forward
+  // verbatim as retained active rows, never closed.
+  describe("region-scoped uploads", () => {
+    const CHENNAI = "ASPS01461";
+    const VELLORE = "ASPS01463";
+
+    it("retains an out-of-scope active ticket instead of closing it", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-27",
+            workLocation: VELLORE,
+            changeType: "CARRIED",
+          }),
+        ],
+        allowedWorkLocations: new Set([CHENNAI]),
+      });
+
+      const row = result.rows[0];
+      expect(row?.carryForward.closedSyntheticRow).toBe(false);
+      expect(row?.carryForward.regionScopeRetainedRow).toBe(true);
+      expect(row?.carryForward.changeType).toBe("CARRIED");
+      expect(row?.comparison?.changeType).toBe("CARRIED");
+      // Values reproduced from the previous report, untouched by this upload.
+      expect(row?.enriched.engineer).toBe("Priya");
+      expect(row?.enriched.work_location).toBe(VELLORE);
+      expect(row?.enriched.customer_type).toBe("Commercial");
+    });
+
+    it("still closes an in-scope absent ticket when a scope is set", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-27",
+            workLocation: CHENNAI,
+          }),
+        ],
+        allowedWorkLocations: new Set([CHENNAI]),
+      });
+
+      expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(true);
+      expect(result.rows[0]?.carryForward.regionScopeRetainedRow).toBe(false);
+    });
+
+    it("keeps an out-of-scope already-closed ticket closed with same-day inheritance", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            workLocation: VELLORE,
+            changeType: "CLOSED",
+            sameDayClosed: true,
+          }),
+        ],
+        allowedWorkLocations: new Set([CHENNAI]),
+      });
+
+      expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(true);
+      expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(true);
+    });
+
+    it("treats a blank work location as out of scope when a scope is set", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({ sourceReportDate: "2026-03-27", workLocation: null }),
+        ],
+        allowedWorkLocations: new Set([CHENNAI]),
+      });
+
+      expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(false);
+      expect(result.rows[0]?.carryForward.regionScopeRetainedRow).toBe(true);
+    });
+
+    it("promotes Evening to Morning on retained rows across the day boundary", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-27",
+            workLocation: VELLORE,
+            rtplStatus: "Part Pending",
+            eveningRtplStatus: "WO-closed",
+          }),
+        ],
+        allowedWorkLocations: new Set([CHENNAI]),
+      });
+
+      expect(result.rows[0]?.enriched.rtpl_status).toBe("WO-closed");
+      expect(result.rows[0]?.enriched.evening_rtpl_status).toBeNull();
+    });
+
+    it("preserves Morning and Evening on retained rows within the same day", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            workLocation: VELLORE,
+            rtplStatus: "Part Pending",
+            eveningRtplStatus: "Customer not available",
+          }),
+        ],
+        allowedWorkLocations: new Set([CHENNAI]),
+      });
+
+      expect(result.rows[0]?.enriched.rtpl_status).toBe("Part Pending");
+      expect(result.rows[0]?.enriched.evening_rtpl_status).toBe("Customer not available");
+    });
+
+    it("closes everything as before when no scope is set", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({ sourceReportDate: "2026-03-27", workLocation: VELLORE }),
+        ],
+        allowedWorkLocations: null,
+      });
+
+      expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(true);
+      expect(result.rows[0]?.carryForward.regionScopeRetainedRow).toBe(false);
     });
   });
 });

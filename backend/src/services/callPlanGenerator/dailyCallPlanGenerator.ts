@@ -89,6 +89,7 @@ function countUnmatchedRows(
 
   return rows.filter((row) =>
     !row.carryForward.closedSyntheticRow &&
+    !row.carryForward.regionScopeRetainedRow &&
     unmatchedStatuses.has(row.enriched.match_status),
   ).length;
 }
@@ -102,6 +103,7 @@ function initialCarryForwardMetadata(): ManualCarryForwardRowMetadata {
     previousTicketMatched: false,
     closedSyntheticRow: false,
     sameDayClosedRow: false,
+    regionScopeRetainedRow: false,
   };
 }
 
@@ -330,6 +332,9 @@ function countMissingRtplRows(rows: readonly GeneratedDailyCallPlanRow[]): numbe
   return rows.filter(
     (row) =>
       !row.carryForward.closedSyntheticRow &&
+      // Out-of-scope retained rows belong to another region's uploader; their
+      // missing Morning status is not this upload's problem to chase.
+      !row.carryForward.regionScopeRetainedRow &&
       !cleanManualValue(row.enriched.rtpl_status),
   ).length;
 }
@@ -752,7 +757,28 @@ export async function generateDailyCallPlanReport(
       return valB - valA;
     });
 
-    const generatedRows = matchedMatches.map<GeneratedDailyCallPlanRow>((match, index) => {
+    // Region scope only applies when CREATING a report from a fresh upload. Reopening
+    // an existing report regenerates it unrestricted (as today) and relies on the
+    // response-level region filter, so a scoped regenerate can never rewrite another
+    // region's persisted rows.
+    const allowedWorkLocations =
+      !existingReportId && input.allowedRegionAspCodes
+        ? new Set(
+            input.allowedRegionAspCodes.map((code) => code.trim().toUpperCase()),
+          )
+        : null;
+    // Out-of-scope file rows are ignored entirely: a region-scoped upload adds no
+    // new cases outside its regions, and its (possibly stale) data for other
+    // regions' existing tickets is discarded — those tickets are carried forward
+    // verbatim by the carry-forward service instead.
+    const scopedMatches = allowedWorkLocations
+      ? matchedMatches.filter((match) => {
+          const aspCode = (match.enrichedRow.work_location ?? "").trim().toUpperCase();
+          return aspCode.length > 0 && allowedWorkLocations.has(aspCode);
+        })
+      : matchedMatches;
+
+    const generatedRows = scopedMatches.map<GeneratedDailyCallPlanRow>((match, index) => {
       const serialNo = index + 1;
 
       return {
@@ -793,6 +819,7 @@ export async function generateDailyCallPlanReport(
       currentRows: generatedRows,
       previousFinalRows,
       currentReportDate: input.reportDate,
+      allowedWorkLocations,
     });
     let rows = carryForwardResult.rows;
     console.info("[dailyCallPlanGenerator] RTPL carry-forward input", {

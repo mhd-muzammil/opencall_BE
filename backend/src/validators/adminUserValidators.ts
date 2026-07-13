@@ -90,6 +90,10 @@ export const reassignRegionSchema = z.object({
   regionId: z.string().uuid().nullable(),
 });
 
+export const setUserRegionsSchema = z.object({
+  regionIds: z.array(z.string().uuid("Each regionId must be a UUID")),
+});
+
 export const passwordResetSchema = z.object({
   password: passwordSchema,
   requireChange: z.boolean().default(true),

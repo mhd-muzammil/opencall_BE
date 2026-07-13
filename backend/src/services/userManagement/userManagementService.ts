@@ -16,6 +16,10 @@ import {
 } from "../../repositories/userRepository.js";
 import { findRegionById } from "../../repositories/regionRepository.js";
 import {
+  findAdditionalRegionIdsForUser,
+  setAdditionalUserRegions,
+} from "../../repositories/userRegionRepository.js";
+import {
   badRequest,
   conflict,
   forbidden,
@@ -75,8 +79,15 @@ export async function listUsers(filters: ListUsersFilters): Promise<ManagedUser[
   return listManagedUsers(filters);
 }
 
-export async function getUser(userId: string): Promise<ManagedUser> {
-  return loadUserOr404(userId);
+/** ManagedUser plus the extra regions from user_regions (primary excluded). */
+export interface ManagedUserDetail extends ManagedUser {
+  additionalRegionIds: string[];
+}
+
+export async function getUser(userId: string): Promise<ManagedUserDetail> {
+  const user = await loadUserOr404(userId);
+  const additionalRegionIds = await findAdditionalRegionIdsForUser(userId);
+  return { ...user, additionalRegionIds };
 }
 
 export interface CreateUserInput {
@@ -202,6 +213,30 @@ export async function reassignUserRegion(
     throw unprocessableEntity("User region could not be updated", { userId });
   }
   return updated;
+}
+
+/**
+ * Replaces the user's additional managed regions (user_regions rows). The
+ * primary users.region_id is excluded from the stored set — it is always
+ * implied. Returns the updated user detail including additionalRegionIds.
+ */
+export async function setUserAdditionalRegions(
+  userId: string,
+  regionIds: string[],
+): Promise<ManagedUserDetail> {
+  const target = await loadUserOr404(userId);
+
+  const uniqueRegionIds = [...new Set(regionIds)];
+  for (const regionId of uniqueRegionIds) {
+    await ensureRegionExists(regionId);
+  }
+
+  const additionalRegionIds = uniqueRegionIds.filter(
+    (regionId) => regionId !== target.regionId,
+  );
+  await setAdditionalUserRegions(userId, additionalRegionIds);
+
+  return { ...target, additionalRegionIds };
 }
 
 export interface AdminResetPasswordInput {

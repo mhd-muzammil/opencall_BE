@@ -12,6 +12,7 @@ import {
   listUsers,
   reactivateUser,
   reassignUserRegion,
+  setUserAdditionalRegions,
   updateUserProfile,
 } from "../services/userManagement/userManagementService.js";
 import type { ManagedUser } from "../repositories/userRepository.js";
@@ -23,6 +24,7 @@ import {
   listUsersQuerySchema,
   passwordResetSchema,
   reassignRegionSchema,
+  setUserRegionsSchema,
   updateProfileSchema,
   userIdParamSchema,
 } from "../validators/adminUserValidators.js";
@@ -146,6 +148,19 @@ export const reassignAdminUserRegionController: RequestHandler = asyncHandler(
     const user = await reassignUserRegion(userId, input.regionId, actor.id);
     recordUserMutation(request, actor, user, "USER_REGION_REASSIGNED", {
       newRegionId: user.regionId,
+    });
+    response.json({ data: user });
+  },
+);
+
+export const setAdminUserRegionsController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const actor = requireCurrentUser(request.currentUser);
+    const userId = parseUserId(request.params);
+    const input = setUserRegionsSchema.parse(request.body);
+    const user = await setUserAdditionalRegions(userId, input.regionIds);
+    recordUserMutation(request, actor, user, "USER_REGION_REASSIGNED", {
+      additionalRegionIds: user.additionalRegionIds,
     });
     response.json({ data: user });
   },

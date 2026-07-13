@@ -41,6 +41,14 @@ export interface ApplyManualFieldCarryForwardInput {
    * Evening) or the SAME day (keep Morning baseline, preserve Evening work).
    */
   currentReportDate: string;
+  /**
+   * Work-location ASP codes (upper-cased) this generation may affect; null =
+   * unrestricted. Previous-report tickets outside the scope are never closed by
+   * absence: active ones are carried forward verbatim as retained rows, closed
+   * ones stay closed under the usual same-day rules. The caller has already
+   * dropped out-of-scope rows from currentRows.
+   */
+  allowedWorkLocations?: ReadonlySet<string> | null;
 }
 
 export interface ApplyManualFieldCarryForwardResult {
@@ -86,8 +94,27 @@ function defaultCarryForwardMetadata(
     previousTicketMatched: false,
     closedSyntheticRow: false,
     sameDayClosedRow: false,
+    regionScopeRetainedRow: false,
     ...overrides,
   };
+}
+
+/**
+ * Is this work location inside the generation's region scope? A null scope means
+ * unrestricted. A blank work location is out of scope when a scope is set — a
+ * region-scoped upload must not create or close calls it cannot attribute to one
+ * of its regions.
+ */
+function isWorkLocationInScope(
+  workLocation: string | null | undefined,
+  allowedWorkLocations: ReadonlySet<string> | null | undefined,
+): boolean {
+  if (!allowedWorkLocations) {
+    return true;
+  }
+
+  const aspCode = (workLocation ?? "").trim().toUpperCase();
+  return aspCode.length > 0 && allowedWorkLocations.has(aspCode);
 }
 
 /**
@@ -248,6 +275,61 @@ function closedComparisonInsight(
   };
 }
 
+/**
+ * An out-of-scope ACTIVE row carried into the new report untouched by a
+ * region-scoped upload. Same reconstruction as a closed row, but it stays an open
+ * call, so the Morning/Evening day-boundary promotion applies exactly as it does
+ * for matched rows: on a new day yesterday's Evening becomes today's Morning and
+ * Evening resets; on a same-day re-upload both are preserved.
+ */
+function retainedRowToEnriched(
+  row: FinalReportManualCarryForwardRow,
+  currentReportDate: string,
+): EnrichedCallPlanRow {
+  const enriched = closedRowToEnriched(row);
+  const sourceMorning = cleanManualValue(row.rtplStatus);
+  const sourceEvening = cleanManualValue(row.eveningRtplStatus);
+
+  if (sourceIsPriorDay(row, currentReportDate)) {
+    enriched.rtpl_status = sourceEvening ?? sourceMorning ?? "";
+    enriched.evening_rtpl_status = null;
+  } else {
+    enriched.rtpl_status = sourceMorning ?? "";
+    enriched.evening_rtpl_status = sourceEvening;
+  }
+
+  return enriched;
+}
+
+function retainedSyntheticMatch(enriched: EnrichedCallPlanRow): MatchedCallPlanRecord {
+  return {
+    renderways: null,
+    flexWip: null,
+    callPlan: null,
+    flexMatchConfidence: "UNMATCHED",
+    callPlanMatchConfidence: "UNMATCHED",
+    matchStatus: "BOTH_MISSING",
+    enrichedRow: enriched,
+    notes: [
+      "Outside the uploader's region scope: carried forward unchanged from the previous final report",
+    ],
+  };
+}
+
+function retainedComparisonInsight(
+  previous: FinalReportManualCarryForwardRow,
+): ReportRowComparisonInsight {
+  return {
+    changeType: "CARRIED",
+    previousFlexStatus: previous.flexStatus,
+    previousRtplStatus: previous.rtplStatus,
+    previousWipAging: previous.wipAging,
+    changedFields: {},
+    changeSummary: "Outside the uploader's region scope: carried forward unchanged",
+    flexStatusUnchangedDays: previous.flexStatusUnchangedDays,
+  };
+}
+
 function reformatRow(row: GeneratedDailyCallPlanRow, serialNo: number): GeneratedDailyCallPlanRow {
   return {
     ...row,
@@ -369,6 +451,44 @@ export class ManualFieldCarryForwardService {
 
     for (const [ticketKey, previousRow] of previousByTicket.entries()) {
       if (currentTicketKeys.has(ticketKey)) {
+        continue;
+      }
+
+      const inScope = isWorkLocationInScope(
+        previousRow.workLocation,
+        input.allowedWorkLocations,
+      );
+
+      // A region-scoped upload must not close another region's calls: an active
+      // out-of-scope ticket absent from (the scope-filtered) current rows is
+      // carried forward untouched instead of being closed. Out-of-scope tickets
+      // that were ALREADY closed still flow through the closed path below so the
+      // ledger keeps them and the same-day rules keep applying.
+      if (!inScope && previousRow.changeType !== "CLOSED") {
+        const enriched = retainedRowToEnriched(previousRow, input.currentReportDate);
+
+        mergedRows.push({
+          id: null,
+          serialNo: mergedRows.length + 1,
+          enriched,
+          match: retainedSyntheticMatch(enriched),
+          comparison: retainedComparisonInsight(previousRow),
+          carryForward: defaultCarryForwardMetadata({
+            carriedForwardFields: [],
+            manualFieldsCompleted: missingManualFields(enriched).length === 0,
+            manualFieldsMissing: missingManualFields(enriched),
+            changeType: "CARRIED",
+            previousTicketMatched: true,
+            regionScopeRetainedRow: true,
+          }),
+          updatedAt: null,
+          updatedBy: null,
+          rowEditable: true,
+          carryForwardSource: "PREVIOUS_FINAL_REPORT",
+          output: orderedDailyCallPlanRow(
+            formatDailyCallPlanRow(mergedRows.length + 1, enriched),
+          ),
+        });
         continue;
       }
 

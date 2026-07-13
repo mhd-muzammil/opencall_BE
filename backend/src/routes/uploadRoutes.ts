@@ -9,7 +9,9 @@ export const uploadRouter = Router();
 uploadRouter.post(
   "/",
   requireAuthenticatedUser,
-  requireRole(["SUPER_ADMIN"]),
+  // Region admins upload too; report generation bounds what their upload can
+  // affect to their managed regions (allowedRegionAspCodes).
+  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
   uploadReportsMiddleware,
   uploadReportsController,
 );

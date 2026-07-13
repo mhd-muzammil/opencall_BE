@@ -18,6 +18,7 @@
     "migrate:special-access": "tsx src/scripts/applySpecialAccessMigration.ts",
     "migrate:warranty": "tsx src/scripts/applyWarrantyMigration.ts",
     "migrate:same-day-closed": "tsx src/scripts/applySameDayClosedMigration.ts",
+    "migrate:user-regions": "tsx src/scripts/applyUserRegionsMigration.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",

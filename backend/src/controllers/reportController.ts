@@ -1,7 +1,8 @@
 import type { RequestHandler } from "express";
-import { findRegionById, type Region } from "../repositories/regionRepository.js";
+import { type Region } from "../repositories/regionRepository.js";
 import { generateDailyCallPlanReport } from "../services/callPlanGenerator/dailyCallPlanGenerator.js";
 import {
+  findAllowedRegionsForUser,
   requireCurrentUser,
   resolveEffectiveRegionId,
 } from "../services/rbac/regionAccessService.js";
@@ -12,11 +13,21 @@ import type { GeneratedDailyCallPlanReport } from "../types/reportGeneration.js"
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { reportGenerationRequestSchema } from "../validators/reportGenerationRequestValidator.js";
 
-function filterReportForRegion(
+function aspCodesForRegions(regions: readonly Region[]): Set<string> {
+  const codes = new Set<string>();
+  for (const region of regions) {
+    for (const code of aspCodesForRegion(region)) {
+      codes.add(code);
+    }
+  }
+  return codes;
+}
+
+function filterReportForRegions(
   report: GeneratedDailyCallPlanReport,
-  region: Region,
+  regions: readonly Region[],
 ): GeneratedDailyCallPlanReport {
-  const wantedCodes = aspCodesForRegion(region);
+  const wantedCodes = aspCodesForRegions(regions);
   const filteredRows = report.rows.filter((row) => {
     const aspCode = String(row.enriched.work_location ?? "")
       .trim()
@@ -43,16 +54,27 @@ export const generateDailyCallPlanReportController: RequestHandler =
       generatedBy: currentUser.id,
       regionId: request.header("x-region-id") ?? request.body.regionId ?? null,
     });
-    const regionId = resolveEffectiveRegionId(
+    // Still validated for everyone: a REGION_ADMIN naming another region is
+    // rejected here, exactly as before.
+    const requestedRegionId = resolveEffectiveRegionId(
       currentUser,
       body.regionId ?? null,
     );
     const isRegionAdmin = currentUser.role === "REGION_ADMIN";
+    // null for SUPER_ADMIN (unrestricted); the managed-region list otherwise.
+    const allowedRegions = await findAllowedRegionsForUser(currentUser);
     const report = await generateDailyCallPlanReport({
       ...body,
       generatedBy: currentUser.id,
-      regionId,
-      allowCreate: !isRegionAdmin,
+      // A REGION_ADMIN generates into the shared all-region stream (regionId
+      // null) so carry-forward chains stay unified across uploaders; what they
+      // may AFFECT is bounded by allowedRegionAspCodes instead. A SUPER_ADMIN
+      // keeps explicit region tagging as before.
+      regionId: isRegionAdmin ? null : requestedRegionId,
+      allowCreate: true,
+      allowedRegionAspCodes: allowedRegions
+        ? [...aspCodesForRegions(allowedRegions)]
+        : null,
     });
 
     // Keep the inventory HP Stock "Active Part Cases" count in step with this report.
@@ -60,35 +82,31 @@ export const generateDailyCallPlanReportController: RequestHandler =
     // blocks the response, and a failure here cannot affect report generation.
     syncPartsCallCountsFromReport(report);
 
-    if (!isRegionAdmin) {
-      recordActivity({
-        eventType: "REPORT_GENERATED",
-        actor: {
-          id: currentUser.id,
-          email: currentUser.email,
-          role: currentUser.role,
-        },
-        regionId,
-        targetType: "report",
-        targetId: report.reportId,
-        metadata: {
-          reportDate: report.reportDate,
-          totalRows: report.totalRows,
-          duplicateTicketCount: report.duplicateTicketCount,
-          unmatchedTicketCount: report.unmatchedTicketCount,
-        },
-        request,
-      });
-    }
+    // Region admins can create reports now, so their generations are audited too.
+    recordActivity({
+      eventType: "REPORT_GENERATED",
+      actor: {
+        id: currentUser.id,
+        email: currentUser.email,
+        role: currentUser.role,
+      },
+      regionId: requestedRegionId,
+      targetType: "report",
+      targetId: report.reportId,
+      metadata: {
+        reportDate: report.reportDate,
+        totalRows: report.totalRows,
+        duplicateTicketCount: report.duplicateTicketCount,
+        unmatchedTicketCount: report.unmatchedTicketCount,
+      },
+      request,
+    });
 
-    if (isRegionAdmin && currentUser.regionId) {
-      const region = await findRegionById(currentUser.regionId);
-      if (region) {
-        response.status(201).json({
-          data: filterReportForRegion(report, region),
-        });
-        return;
-      }
+    if (isRegionAdmin && allowedRegions && allowedRegions.length > 0) {
+      response.status(201).json({
+        data: filterReportForRegions(report, allowedRegions),
+      });
+      return;
     }
 
     response.status(201).json({
