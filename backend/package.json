@@ -20,6 +20,7 @@
     "start": "node dist/server.js",
     "user:upsert-admin": "node dist/scripts/upsertAdminUser.js",
     "hp-stock:backfill": "node dist/scripts/backfillHpStockSync.js",
+    "hp-stock:sync-counts": "tsx src/scripts/syncPartsCallCounts.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --ext .ts",
     "test": "vitest run"

@@ -65,7 +65,11 @@ async function getInventoryToken(forceRefresh = false): Promise<string> {
   return data.access;
 }
 
-async function inventoryFetch(
+export function inventoryApiConfigured(): boolean {
+  return Boolean(process.env.INVENTORY_API_URL);
+}
+
+export async function inventoryFetch(
   path: string,
   init: { method: string; body?: string },
   retryOn401 = true,
