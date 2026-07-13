@@ -51,8 +51,9 @@ test.xls
 # unused admin template app
 /admin/
 
-# uploads
-backend/storage/uploads/
+# runtime storage — customer-uploaded reports, generated warranty workbooks, and
+# the warranty worker's persistent browser profile. None of it belongs in git.
+backend/storage/
 
 # Python virtual environment & compiled files
 .venv/
