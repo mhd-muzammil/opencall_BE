@@ -10,6 +10,7 @@ import {
   countJobItems,
   insertWarrantyJobItems,
   listJobItems,
+  reclaimStaleProcessingItems,
   resetFailedItems,
   type InsertWarrantyJobItemInput,
 } from "../../repositories/warrantyJobItemRepository.js";
@@ -167,9 +168,16 @@ export async function getWarrantyJob(id: string): Promise<WarrantyJobDetail> {
   return loadJobDetail(await requireJob(id));
 }
 
+/** How long an item may sit in `processing` before Retry treats it as abandoned. */
+const STALE_LOCK_SECONDS = 300;
+const MAX_ATTEMPTS = 5;
+
 export async function retryWarrantyJob(id: string): Promise<WarrantyJobDetail> {
   const job = await requireJob(id);
   await resetFailedItems(job.id);
+  // Also rescue items abandoned in `processing` by a crashed worker — otherwise
+  // Retry cannot unstick a job that a crash left permanently incomplete.
+  await reclaimStaleProcessingItems(STALE_LOCK_SECONDS, MAX_ATTEMPTS, job.id);
   return loadJobDetail(job);
 }
 

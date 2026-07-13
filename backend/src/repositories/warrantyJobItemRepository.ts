@@ -269,6 +269,78 @@ export async function listJobItems(jobId: string): Promise<WarrantyJobItem[]> {
   return result.rows.map(mapWarrantyJobItem);
 }
 
+export interface ReclaimStaleItemsResult {
+  requeued: number;
+  exhausted: number;
+}
+
+/**
+ * Recovers items abandoned in `processing` by a worker that died mid-item (crash,
+ * OOM, SIGKILL, container eviction).
+ *
+ * Without this they are stranded forever: `claimNextPendingItem` only takes
+ * `pending`, and `resetFailedItems` only takes `failed` — so the item is never
+ * retried and, because a job is only complete once nothing is pending *or*
+ * processing, the whole job never completes and its file never becomes
+ * downloadable.
+ *
+ * An item that has already burned `maxAttempts` claims is failed rather than
+ * requeued, so one poison serial that reliably kills the browser cannot spin the
+ * worker forever.
+ *
+ * @param jobId  Limit to one job (used by the Retry action); null = all jobs.
+ */
+export async function reclaimStaleProcessingItems(
+  staleAfterSeconds: number,
+  maxAttempts: number,
+  jobId: string | null = null,
+): Promise<ReclaimStaleItemsResult> {
+  const jobFilter = jobId ? `AND job_id = $3` : "";
+  const params: unknown[] = [staleAfterSeconds, maxAttempts];
+  if (jobId) {
+    params.push(jobId);
+  }
+
+  const exhausted = await query(
+    `
+      UPDATE warranty_job_items
+         SET state = 'failed',
+             lookup_status = 'FAILED',
+             locked_at = NULL,
+             last_error = 'Worker died while processing this serial (stale lock); attempt limit reached',
+             updated_at = NOW()
+       WHERE state = 'processing'
+         AND locked_at IS NOT NULL
+         AND locked_at < NOW() - ($1 * INTERVAL '1 second')
+         AND attempts >= $2
+         ${jobFilter}
+    `,
+    params,
+  );
+
+  const requeued = await query(
+    `
+      UPDATE warranty_job_items
+         SET state = 'pending',
+             lookup_status = NULL,
+             locked_at = NULL,
+             last_error = 'Worker died while processing this serial (stale lock); requeued',
+             updated_at = NOW()
+       WHERE state = 'processing'
+         AND locked_at IS NOT NULL
+         AND locked_at < NOW() - ($1 * INTERVAL '1 second')
+         AND attempts < $2
+         ${jobFilter}
+    `,
+    params,
+  );
+
+  return {
+    requeued: requeued.rowCount ?? 0,
+    exhausted: exhausted.rowCount ?? 0,
+  };
+}
+
 /** Requeue this job's failed items so the worker picks them up again. */
 export async function resetFailedItems(jobId: string): Promise<number> {
   const result = await query(

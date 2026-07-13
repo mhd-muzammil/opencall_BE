@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   countJobItems: vi.fn(),
   listJobItems: vi.fn(),
   resetFailedItems: vi.fn(),
+  reclaimStaleProcessingItems: vi.fn(),
   writeWarrantyWorkbook: vi.fn(),
 }));
 
@@ -47,6 +48,7 @@ vi.mock("../../repositories/warrantyJobItemRepository.js", () => ({
   countJobItems: mocks.countJobItems,
   listJobItems: mocks.listJobItems,
   resetFailedItems: mocks.resetFailedItems,
+  reclaimStaleProcessingItems: mocks.reclaimStaleProcessingItems,
 }));
 
 const JOB_ID = "6f1b7f0e-6d1a-4a3f-9f28-2a0f1c3b4d5e";
@@ -92,6 +94,7 @@ beforeEach(() => {
   );
   mocks.insertWarrantyJobItems.mockResolvedValue(0);
   mocks.resetFailedItems.mockResolvedValue(0);
+  mocks.reclaimStaleProcessingItems.mockResolvedValue({ requeued: 0, exhausted: 0 });
 });
 
 describe("deriveJobStatus", () => {
@@ -289,6 +292,27 @@ describe("retryWarrantyJob", () => {
     expect(mocks.resetFailedItems).toHaveBeenCalledWith(JOB_ID);
     expect(detail.status).toBe("processing");
     expect(detail.counts.failed).toBe(0);
+  });
+
+  /**
+   * A worker that dies mid-item leaves it in `processing`. Nothing else picks
+   * those up, and a job with a processing item never reaches `completed` — so its
+   * file is never downloadable. Retry must be able to unstick that.
+   */
+  it("also rescues items a crashed worker abandoned in processing", async () => {
+    mocks.findWarrantyJobById.mockResolvedValue(jobRecord({ status: "processing" }));
+    mocks.reclaimStaleProcessingItems.mockResolvedValue({ requeued: 1, exhausted: 0 });
+    mocks.countJobItems.mockResolvedValue(
+      counts({ total: 4, pending: 1, done: 3, ok: 3 }),
+    );
+
+    await retryWarrantyJob(JOB_ID);
+
+    expect(mocks.reclaimStaleProcessingItems).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.any(Number),
+      JOB_ID,
+    );
   });
 });
 

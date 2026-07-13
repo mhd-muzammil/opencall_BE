@@ -8,6 +8,7 @@ import {
   claimNextPendingItem,
   markItemDone,
   markItemFailed,
+  reclaimStaleProcessingItems,
   type WarrantyJobItem,
 } from "../repositories/warrantyJobItemRepository.js";
 import {
@@ -43,6 +44,14 @@ const config = {
   maxDelayMs: readNumberEnv("WARRANTY_MAX_DELAY_MS", 12_000),
   pollIntervalMs: readNumberEnv("WARRANTY_POLL_INTERVAL_MS", 5_000),
   profileDir: process.env.WARRANTY_PROFILE_DIR || "/data/warranty-profile",
+  /**
+   * How long an item may sit in `processing` before we assume the worker that
+   * claimed it died. Generously above the 45s lookup timeout plus the pacing
+   * delay, so a slow-but-alive worker is never robbed of its item.
+   */
+  staleLockSeconds: readNumberEnv("WARRANTY_STALE_LOCK_SECONDS", 300),
+  /** Claims a single serial may burn before it is failed instead of requeued. */
+  maxAttempts: readNumberEnv("WARRANTY_MAX_ATTEMPTS", 5),
 };
 
 let isShuttingDown = false;
@@ -152,6 +161,18 @@ async function run(): Promise<void> {
 
   try {
     while (!isShuttingDown) {
+      // Recover anything a previously-crashed worker abandoned mid-item. Without
+      // this the item stays 'processing' forever, and its job never completes.
+      const reclaimed = await reclaimStaleProcessingItems(
+        config.staleLockSeconds,
+        config.maxAttempts,
+      );
+      if (reclaimed.requeued > 0 || reclaimed.exhausted > 0) {
+        console.warn(
+          `[warranty] reclaimed stale locks: ${reclaimed.requeued} requeued, ${reclaimed.exhausted} failed (attempt limit)`,
+        );
+      }
+
       const item = await claimNextPendingItem();
 
       if (!item) {
