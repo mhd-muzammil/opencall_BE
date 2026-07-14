@@ -8,6 +8,7 @@ import {
   insertRtplStatus,
   listRtplStatuses,
   listRtplStatusesForDropdown,
+  renameRtplStatusValueInReportRows,
   setRtplStatusActive,
   updateRtplStatus,
   type DropdownRtplStatus,
@@ -118,11 +119,20 @@ export interface UpdateRtplStatusServiceInput {
   sortOrder?: number;
 }
 
+export interface UpdateRtplStatusServiceResult {
+  status: RtplStatus;
+  /**
+   * How many report-row status values were rewritten from the old name to the
+   * new one when this update renamed the status. Zero when nothing was renamed.
+   */
+  renamedRowValues: number;
+}
+
 export async function updateRtplStatusService(
   currentUser: AuthenticatedUser,
   id: string,
   input: UpdateRtplStatusServiceInput,
-): Promise<RtplStatus> {
+): Promise<UpdateRtplStatusServiceResult> {
   const existing = await findRtplStatusById(id);
   if (!existing) {
     throw notFound("RTPL status not found");
@@ -156,6 +166,16 @@ export async function updateRtplStatusService(
     throw notFound("RTPL status not found");
   }
 
+  // A rename cascades to existing report rows so dashboards never split one
+  // status across two spellings. Runs after the master rename: the cascade is
+  // a case-insensitive old-name -> new-name rewrite, so if it ever failed the
+  // admin can re-trigger it by renaming back and forth.
+  const isRename =
+    updateData.name !== undefined && updateData.name !== existing.name;
+  const renamedRowValues = isRename
+    ? await renameRtplStatusValueInReportRows(existing.name, updateData.name!)
+    : 0;
+
   await insertActivity({
     actorUserId: currentUser.id,
     actorEmail: currentUser.email,
@@ -166,11 +186,18 @@ export async function updateRtplStatusService(
     targetId: id,
     ipAddress: null,
     userAgent: null,
-    metadata: { changes: Object.keys(input) },
+    metadata: isRename
+      ? {
+          changes: Object.keys(input),
+          renamedFrom: existing.name,
+          renamedTo: updateData.name,
+          renamedRowValues,
+        }
+      : { changes: Object.keys(input) },
     status: "SUCCESS",
   });
 
-  return updated;
+  return { status: updated, renamedRowValues };
 }
 
 export async function setRtplStatusActiveService(

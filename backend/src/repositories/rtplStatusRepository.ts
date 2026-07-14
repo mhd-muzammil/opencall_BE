@@ -1,4 +1,4 @@
-import { query } from "../config/database.js";
+import { query, withTransaction } from "../config/database.js";
 
 export interface RtplStatusRow {
   id: string;
@@ -210,6 +210,39 @@ export async function updateRtplStatus(
   );
   const row = result.rows[0];
   return row ? mapRtplStatus(row) : null;
+}
+
+/**
+ * Renaming a status in the admin console cascades to the report rows that
+ * carry the old value, so dashboards never show two cards for the same status
+ * ("To be Scheduled" vs "To Be Scheduled"). Matching is case-insensitive, so
+ * casing variants of the old name are normalised onto the new spelling too.
+ * Returns how many column values were rewritten. The audit trail
+ * (user_activity_log) is deliberately left untouched.
+ */
+export async function renameRtplStatusValueInReportRows(
+  oldName: string,
+  newName: string,
+): Promise<number> {
+  // Fixed identifiers, not user input — only the VALUES are parameterised.
+  const columns = ["rtpl_status", "evening_rtpl_status", "previous_rtpl_status"];
+
+  return withTransaction(async (client) => {
+    let updatedValues = 0;
+    for (const column of columns) {
+      const result = await client.query(
+        `
+          UPDATE daily_call_plan_report_rows
+          SET ${column} = $2
+          WHERE lower(${column}) = lower($1)
+            AND ${column} IS DISTINCT FROM $2
+        `,
+        [oldName, newName],
+      );
+      updatedValues += result.rowCount ?? 0;
+    }
+    return updatedValues;
+  });
 }
 
 export async function setRtplStatusActive(

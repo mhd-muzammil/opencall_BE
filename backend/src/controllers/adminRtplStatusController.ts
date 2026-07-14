@@ -59,8 +59,12 @@ export const updateAdminRtplStatusController: RequestHandler = asyncHandler(
       throw badRequest("id is required");
     }
 
-    const status = await updateRtplStatusService(request.currentUser!, id, request.body);
-    response.json({ data: { status } });
+    const { status, renamedRowValues } = await updateRtplStatusService(
+      request.currentUser!,
+      id,
+      request.body,
+    );
+    response.json({ data: { status, renamedRowValues } });
   },
 );
 
