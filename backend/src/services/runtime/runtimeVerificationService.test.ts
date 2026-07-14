@@ -35,6 +35,7 @@ const FEATURE_TABLES = [
   "hp_warranty_cache",
   "warranty_jobs",
   "warranty_job_items",
+  "user_regions",
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {

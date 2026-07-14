@@ -68,6 +68,8 @@ const FEATURE_TABLES = [
   "hp_warranty_cache",
   "warranty_jobs",
   "warranty_job_items",
+  // migrate:user-regions — multi-region admin assignment 500s without it.
+  "user_regions",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [
