@@ -89,6 +89,12 @@ export interface ReportRowEditPayload {
   manualFieldsCompleted: boolean;
   manualFieldsMissing: readonly ManualCarryForwardField[];
   updatedBy: string | null;
+  /**
+   * Set instead of `updatedBy` when the editor is a special-access credential —
+   * `updated_by` is a FK to users(id), which a credential can never satisfy.
+   * Regular-user edits leave this undefined and behave exactly as before.
+   */
+  updatedBySpecialAccess?: string | null;
 }
 
 export interface ReportRowCarryForwardBackfillPayload {
@@ -913,7 +919,8 @@ export async function updateDailyCallPlanReportRowManualFields(
         manual_fields_completed = $16,
         manual_fields_missing = $17::text[],
         updated_at = NOW(),
-        updated_by = $18
+        updated_by = $18,
+        updated_by_special_access = $20
       FROM daily_call_plan_reports reports
       WHERE rows.id = $1
         AND reports.id = rows.report_id
@@ -966,6 +973,7 @@ export async function updateDailyCallPlanReportRowManualFields(
       edit.manualFieldsMissing,
       edit.updatedBy,
       edit.eveningRtplStatus,
+      edit.updatedBySpecialAccess ?? null,
     ],
   );
 
@@ -1156,6 +1164,46 @@ export async function findDailyCallPlanReportRowForEdit(
 
   const row = result.rows[0];
   return row ? mapEditedReportRow(row) : null;
+}
+
+/**
+ * The three fields needed to decide whether a special-access credential is allowed to
+ * touch a row: its work location (region grant) and its WO OTC code + segment (data
+ * scope: overall / warranty / trade). Read-only helper — nothing else uses it.
+ */
+export interface ReportRowScopeFields {
+  workLocation: string | null;
+  woOtcCode: string | null;
+  segment: string | null;
+}
+
+export async function findReportRowScopeFields(
+  rowId: string,
+): Promise<ReportRowScopeFields | null> {
+  const result = await query<{
+    work_location: string | null;
+    wo_otc_code: string | null;
+    segment: string | null;
+  }>(
+    `
+      SELECT work_location, wo_otc_code, segment
+      FROM daily_call_plan_report_rows
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [rowId],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    workLocation: row.work_location,
+    woOtcCode: row.wo_otc_code,
+    segment: row.segment,
+  };
 }
 
 export async function deleteDailyCallPlanReportRow(

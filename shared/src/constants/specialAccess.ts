@@ -26,6 +26,7 @@ export const SPECIAL_ACCESS_SECTIONS: readonly SpecialAccessSectionOption[] = [
   { key: "flex", label: "Flex Dashboard", group: "Dashboards" },
   { key: "flex-eod-bod", label: "Flex EOD & BOD", group: "Dashboards" },
   { key: "records", label: "Records Table", group: "Data & Operations" },
+  { key: "record-format", label: "Record Format", group: "Data & Operations" },
   { key: "productivity", label: "Engineer Productivity", group: "Dashboards" },
 ];
 

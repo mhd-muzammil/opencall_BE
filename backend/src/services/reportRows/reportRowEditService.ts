@@ -226,6 +226,60 @@ export function assertOnlyEditableFields(body: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Merges the edit into the row and persists it. Authorisation must already have been
+ * done by the caller — this is the shared write step behind both the regular-user path
+ * (`updateReportRowManualFields`) and the special-access path.
+ *
+ * `editor` is exactly one of the two: a `users.id` (regular login) or a
+ * `special_access.id` (scoped login), because `updated_by` is a FK to users(id).
+ */
+export async function applyReportRowManualFieldEdit(input: {
+  rowId: string;
+  current: EditedReportRow;
+  values: ReportRowEditInput;
+  editor: { kind: "USER"; id: string } | { kind: "SPECIAL_ACCESS"; id: string };
+}): Promise<EditedReportRow> {
+  const { rowId, current, values, editor } = input;
+
+  const merged = mergeRowValues(current, values);
+  const missing = manualFieldsMissing(merged);
+  const clearedCarryForwardFields = Object.keys(values)
+    .map((field) => MANUAL_FIELD_BY_EDITABLE_FIELD[field as EditableReportRowField])
+    .filter((field): field is ManualCarryForwardField => Boolean(field));
+
+  const updated = await updateDailyCallPlanReportRowManualFields(rowId, {
+    engineer: merged.engineer,
+    rtplStatus: merged.rtplStatus,
+    eveningRtplStatus: merged.eveningRtplStatus,
+    customerMail: merged.customerMail,
+    rca: merged.rca,
+    remarks: merged.remarks,
+    manualNotes: merged.manualNotes,
+    location: merged.location,
+    segment: merged.segment,
+    caseCreatedTime: merged.caseCreatedTime,
+    wipAging: merged.wipAging,
+    statusAging: merged.statusAging,
+    hpOwnerStatus: merged.hpOwnerStatus,
+    part: merged.part,
+    clearedCarryForwardFields,
+    manualFieldsCompleted: missing.length === 0,
+    manualFieldsMissing: missing,
+    updatedBy: editor.kind === "USER" ? editor.id : null,
+    updatedBySpecialAccess: editor.kind === "SPECIAL_ACCESS" ? editor.id : null,
+  });
+
+  if (!updated) {
+    throw unprocessableEntity("Report row could not be updated", { rowId });
+  }
+
+  return {
+    ...updated,
+    rtplStatusChange: buildRtplStatusChange(current, updated, values),
+  };
+}
+
 export async function updateReportRowManualFields(input: {
   rowId: string;
   user: AuthenticatedUser;
@@ -257,42 +311,11 @@ export async function updateReportRowManualFields(input: {
     }
   }
 
-  const merged = mergeRowValues(current, input.values);
-  const missing = manualFieldsMissing(merged);
-  const clearedCarryForwardFields = Object.keys(input.values)
-    .map((field) => MANUAL_FIELD_BY_EDITABLE_FIELD[field as EditableReportRowField])
-    .filter((field): field is ManualCarryForwardField => Boolean(field));
-
-  return updateDailyCallPlanReportRowManualFields(input.rowId, {
-    engineer: merged.engineer,
-    rtplStatus: merged.rtplStatus,
-    eveningRtplStatus: merged.eveningRtplStatus,
-    customerMail: merged.customerMail,
-    rca: merged.rca,
-    remarks: merged.remarks,
-    manualNotes: merged.manualNotes,
-    location: merged.location,
-    segment: merged.segment,
-    caseCreatedTime: merged.caseCreatedTime,
-    wipAging: merged.wipAging,
-    statusAging: merged.statusAging,
-    hpOwnerStatus: merged.hpOwnerStatus,
-    part: merged.part,
-    clearedCarryForwardFields,
-    manualFieldsCompleted: missing.length === 0,
-    manualFieldsMissing: missing,
-    updatedBy: input.user.id,
-  }).then((updated) => {
-    if (!updated) {
-      throw unprocessableEntity("Report row could not be updated", {
-        rowId: input.rowId,
-      });
-    }
-
-    return {
-      ...updated,
-      rtplStatusChange: buildRtplStatusChange(current, updated, input.values),
-    };
+  return applyReportRowManualFieldEdit({
+    rowId: input.rowId,
+    current,
+    values: input.values,
+    editor: { kind: "USER", id: input.user.id },
   });
 }
 
