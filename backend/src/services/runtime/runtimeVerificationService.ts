@@ -70,6 +70,11 @@ const FEATURE_TABLES = [
   "warranty_job_items",
   // migrate:user-regions — multi-region admin assignment 500s without it.
   "user_regions",
+  // migrate:special-access-edit — 026 table; 027's updated_by_special_access
+  // column ships in the same script, and without it EVERY row-edit save 500s
+  // (the shared UPDATE references the column), so this entry is the early
+  // warning for both.
+  "special_access_record_layouts",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [

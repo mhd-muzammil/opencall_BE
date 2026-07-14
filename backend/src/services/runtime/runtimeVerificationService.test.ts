@@ -36,6 +36,7 @@ const FEATURE_TABLES = [
   "warranty_jobs",
   "warranty_job_items",
   "user_regions",
+  "special_access_record_layouts",
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
