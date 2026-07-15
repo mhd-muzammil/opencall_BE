@@ -895,13 +895,16 @@ export async function updateDailyCallPlanReportRowManualFields(
       UPDATE daily_call_plan_report_rows rows
       SET
         engineer = $2,
-        rtpl_status = $3,
+        -- rtpl_status and segment are NOT NULL columns whose blank
+        -- representation is '' (that is what the generator writes and what
+        -- the UI renders as "Entry"), so a cleared value lands as '' here.
+        rtpl_status = COALESCE($3, ''),
         customer_mail = $4,
         rca = $5,
         remarks = $6,
         manual_notes = $7,
         location = $8,
-        segment = $9,
+        segment = COALESCE($9, ''),
         case_created_time = $10,
         wip_aging = $11,
         status_aging = $12,
