@@ -12,6 +12,11 @@ export interface AuthenticatedUser {
   regionId: string | null;
   region_id: string | null;
   mustChangePassword: boolean;
+  /**
+   * Operational sections this REGION_ADMIN may see. `null` = all sections (the default /
+   * previous behaviour); a list restricts them. Ignored for SUPER_ADMIN (sees all).
+   */
+  accessibleSections: string[] | null;
 }
 
 /**

@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import type { UserRole } from "@opencall/shared";
+import { USER_SECTION_KEYS, type UserRole } from "@opencall/shared";
 import {
   countActiveSuperAdmins,
   findManagedUserById,
@@ -11,6 +11,7 @@ import {
   updateManagedUserProfile,
   updateManagedUserRegion,
   updateManagedUserRole,
+  updateManagedUserSections,
   type ListUsersFilters,
   type ManagedUser,
 } from "../../repositories/userRepository.js";
@@ -90,6 +91,33 @@ export async function getUser(userId: string): Promise<ManagedUserDetail> {
   return { ...user, additionalRegionIds };
 }
 
+/**
+ * Validates and normalises a section-access list. `null`/`undefined` means "all
+ * sections" (the default). Unknown keys are rejected. A REGION_ADMIN must keep at least
+ * one section — an empty list would leave them a blank app. SUPER_ADMIN is always
+ * unrestricted, so any list supplied for one is ignored.
+ */
+function normalizeSectionsInput(
+  role: UserRole,
+  sections: string[] | null | undefined,
+): string[] | null {
+  if (role === "SUPER_ADMIN") {
+    return null;
+  }
+  if (sections === null || sections === undefined) {
+    return null;
+  }
+  const unique = [...new Set(sections)];
+  const unknown = unique.filter((key) => !USER_SECTION_KEYS.includes(key));
+  if (unknown.length > 0) {
+    throw badRequest("Unknown section key", { unknown });
+  }
+  if (unique.length === 0) {
+    throw badRequest("A REGION_ADMIN must keep at least one section");
+  }
+  return unique;
+}
+
 export interface CreateUserInput {
   email: string;
   username: string | null;
@@ -97,6 +125,7 @@ export interface CreateUserInput {
   role: UserRole;
   regionId: string | null;
   mustChangePassword?: boolean;
+  accessibleSections?: string[] | null;
   actorId: string;
 }
 
@@ -106,6 +135,11 @@ export async function createUser(input: CreateUserInput): Promise<ManagedUser> {
   if (input.regionId) {
     await ensureRegionExists(input.regionId);
   }
+
+  const accessibleSections = normalizeSectionsInput(
+    input.role,
+    input.accessibleSections,
+  );
 
   const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
 
@@ -117,6 +151,7 @@ export async function createUser(input: CreateUserInput): Promise<ManagedUser> {
       role: input.role,
       regionId: input.regionId,
       mustChangePassword: input.mustChangePassword ?? true,
+      accessibleSections,
       createdBy: input.actorId,
     });
   } catch (error: unknown) {
@@ -194,6 +229,27 @@ export async function changeUserRole(
   });
   if (!updated) {
     throw unprocessableEntity("User role could not be updated", { userId });
+  }
+  return updated;
+}
+
+/**
+ * Sets which operational sections a REGION_ADMIN may see. `null` = all sections. A
+ * SUPER_ADMIN is always unrestricted, so this is rejected for them (the UI hides it too).
+ */
+export async function setUserSections(
+  userId: string,
+  accessibleSections: string[] | null,
+  actorId: string,
+): Promise<ManagedUser> {
+  const target = await loadUserOr404(userId);
+  if (target.role === "SUPER_ADMIN") {
+    throw badRequest("SUPER_ADMIN always has access to every section");
+  }
+  const normalized = normalizeSectionsInput(target.role, accessibleSections);
+  const updated = await updateManagedUserSections(userId, normalized, actorId);
+  if (!updated) {
+    throw unprocessableEntity("User sections could not be updated", { userId });
   }
   return updated;
 }

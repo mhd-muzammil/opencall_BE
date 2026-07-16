@@ -13,6 +13,7 @@ import {
   reactivateUser,
   reassignUserRegion,
   setUserAdditionalRegions,
+  setUserSections,
   updateUserProfile,
 } from "../services/userManagement/userManagementService.js";
 import type { ManagedUser } from "../repositories/userRepository.js";
@@ -25,6 +26,7 @@ import {
   passwordResetSchema,
   reassignRegionSchema,
   setUserRegionsSchema,
+  setUserSectionsSchema,
   updateProfileSchema,
   userIdParamSchema,
 } from "../validators/adminUserValidators.js";
@@ -98,6 +100,9 @@ export const createAdminUserController: RequestHandler = asyncHandler(
       role: input.role,
       regionId: input.regionId ?? null,
       mustChangePassword: input.mustChangePassword ?? true,
+      ...(input.accessibleSections !== undefined
+        ? { accessibleSections: input.accessibleSections }
+        : {}),
       actorId: actor.id,
     });
     recordUserMutation(request, actor, user, "USER_CREATED");
@@ -161,6 +166,21 @@ export const setAdminUserRegionsController: RequestHandler = asyncHandler(
     const user = await setUserAdditionalRegions(userId, input.regionIds);
     recordUserMutation(request, actor, user, "USER_REGION_REASSIGNED", {
       additionalRegionIds: user.additionalRegionIds,
+    });
+    response.json({ data: user });
+  },
+);
+
+export const setAdminUserSectionsController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const actor = requireCurrentUser(request.currentUser);
+    const userId = parseUserId(request.params);
+    const input = setUserSectionsSchema.parse(request.body);
+    const user = await setUserSections(userId, input.accessibleSections, actor.id);
+    // Reuses the existing profile-updated event so no new enum value is needed.
+    recordUserMutation(request, actor, user, "USER_PROFILE_UPDATED", {
+      changedFields: ["accessibleSections"],
+      accessibleSections: user.accessibleSections,
     });
     response.json({ data: user });
   },

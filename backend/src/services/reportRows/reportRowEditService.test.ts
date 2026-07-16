@@ -32,6 +32,7 @@ const superAdmin: AuthenticatedUser = {
   regionId: null,
   region_id: null,
   mustChangePassword: false,
+  accessibleSections: null,
 };
 
 function editedRow(overrides: Partial<EditedReportRow> = {}): EditedReportRow {

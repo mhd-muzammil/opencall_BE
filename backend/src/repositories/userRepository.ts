@@ -10,6 +10,7 @@ interface UserRow {
   role: AuthenticatedUser["role"];
   region_id: string | null;
   must_change_password: boolean;
+  accessible_sections: string[] | null;
 }
 
 interface UserWithPasswordRow extends UserRow {
@@ -24,6 +25,7 @@ export interface ManagedUserRow {
   region_id: string | null;
   is_active: boolean;
   must_change_password: boolean;
+  accessible_sections: string[] | null;
   last_login_at: string | null;
   created_at: string;
   created_by: string | null;
@@ -41,6 +43,7 @@ export interface ManagedUser {
   regionId: string | null;
   isActive: boolean;
   mustChangePassword: boolean;
+  accessibleSections: string[] | null;
   lastLoginAt: string | null;
   createdAt: string;
   createdBy: string | null;
@@ -70,6 +73,7 @@ const MANAGED_USER_COLUMNS = `
   region_id,
   is_active,
   must_change_password,
+  accessible_sections,
   last_login_at::TEXT AS last_login_at,
   created_at::TEXT AS created_at,
   created_by,
@@ -78,6 +82,21 @@ const MANAGED_USER_COLUMNS = `
   deactivated_at::TEXT AS deactivated_at,
   deactivated_by
 `;
+
+/**
+ * Section access as the app should treat it: SUPER_ADMIN always sees everything
+ * (`null`), regardless of what is stored; REGION_ADMIN uses its stored value (`null` =
+ * all sections). Keeps a super admin from ever being locked out of the console.
+ */
+function normalizeAccessibleSections(
+  role: UserRole,
+  sections: string[] | null,
+): string[] | null {
+  if (role === "SUPER_ADMIN") {
+    return null;
+  }
+  return sections ?? null;
+}
 
 function mapUser(row: UserRow): AuthenticatedUser {
   return {
@@ -88,6 +107,10 @@ function mapUser(row: UserRow): AuthenticatedUser {
     regionId: row.region_id,
     region_id: row.region_id,
     mustChangePassword: Boolean(row.must_change_password),
+    accessibleSections: normalizeAccessibleSections(
+      row.role,
+      row.accessible_sections,
+    ),
   };
 }
 
@@ -100,6 +123,10 @@ function mapManagedUser(row: ManagedUserRow): ManagedUser {
     regionId: row.region_id,
     isActive: Boolean(row.is_active),
     mustChangePassword: Boolean(row.must_change_password),
+    accessibleSections: normalizeAccessibleSections(
+      row.role,
+      row.accessible_sections,
+    ),
     lastLoginAt: row.last_login_at,
     createdAt: row.created_at,
     createdBy: row.created_by,
@@ -115,7 +142,7 @@ export async function findActiveUserById(
 ): Promise<AuthenticatedUser | null> {
   const result = await query<UserRow>(
     `
-      SELECT id, email, username, role, region_id, must_change_password
+      SELECT id, email, username, role, region_id, must_change_password, accessible_sections
       FROM users
       WHERE id = $1
         AND is_active = TRUE
@@ -133,7 +160,7 @@ export async function findActiveUserByEmail(
 ): Promise<AuthenticatedUser | null> {
   const result = await query<UserRow>(
     `
-      SELECT id, email, username, role, region_id, must_change_password
+      SELECT id, email, username, role, region_id, must_change_password, accessible_sections
       FROM users
       WHERE lower(email) = lower($1)
         AND is_active = TRUE
@@ -151,7 +178,7 @@ export async function findActiveUserWithPasswordByLogin(
 ): Promise<AuthenticatedUserWithPassword | null> {
   const result = await query<UserWithPasswordRow>(
     `
-      SELECT id, email, username, password_hash, role, region_id, must_change_password
+      SELECT id, email, username, password_hash, role, region_id, must_change_password, accessible_sections
       FROM users
       WHERE (
           lower(email) = lower($1)
@@ -178,7 +205,7 @@ export async function findActiveUserByIdForShare(
 ): Promise<AuthenticatedUser | null> {
   const result = await client.query<UserRow>(
     `
-      SELECT id, email, username, role, region_id, must_change_password
+      SELECT id, email, username, role, region_id, must_change_password, accessible_sections
       FROM users
       WHERE id = $1
         AND is_active = TRUE
@@ -273,18 +300,23 @@ export interface InsertManagedUserInput {
   regionId: string | null;
   mustChangePassword: boolean;
   createdBy: string;
+  // null = all sections (default); a list restricts a REGION_ADMIN. Ignored for SUPER_ADMIN.
+  accessibleSections?: string[] | null;
 }
 
 export async function insertManagedUser(
   input: InsertManagedUserInput,
 ): Promise<ManagedUser> {
+  // A super admin always sees everything, so never persist a restriction for them.
+  const sections =
+    input.role === "SUPER_ADMIN" ? null : input.accessibleSections ?? null;
   const result = await query<ManagedUserRow>(
     `
       INSERT INTO users (
         email, username, password_hash, role, region_id,
-        is_active, must_change_password, created_by, updated_by
+        is_active, must_change_password, accessible_sections, created_by, updated_by
       )
-      VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $7)
+      VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $8, $8)
       RETURNING ${MANAGED_USER_COLUMNS}
     `,
     [
@@ -294,10 +326,32 @@ export async function insertManagedUser(
       input.role,
       input.regionId,
       input.mustChangePassword,
+      sections,
       input.createdBy,
     ],
   );
   return mapManagedUser(result.rows[0]!);
+}
+
+export async function updateManagedUserSections(
+  userId: string,
+  accessibleSections: string[] | null,
+  updatedBy: string,
+): Promise<ManagedUser | null> {
+  const result = await query<ManagedUserRow>(
+    `
+      UPDATE users
+      SET
+        accessible_sections = $2,
+        updated_at          = NOW(),
+        updated_by          = $3
+      WHERE id = $1
+      RETURNING ${MANAGED_USER_COLUMNS}
+    `,
+    [userId, accessibleSections, updatedBy],
+  );
+  const row = result.rows[0];
+  return row ? mapManagedUser(row) : null;
 }
 
 export interface UpdateManagedUserProfileInput {
@@ -349,6 +403,9 @@ export async function updateManagedUserRole(
       SET
         role       = $2,
         region_id  = $3,
+        -- Promoting to SUPER_ADMIN clears any section restriction (they see all).
+        accessible_sections =
+          CASE WHEN $2 = 'SUPER_ADMIN' THEN NULL ELSE accessible_sections END,
         updated_at = NOW(),
         updated_by = $4
       WHERE id = $1

@@ -3,6 +3,8 @@ export * from "./constants/sourceColumns.js";
 export * from "./constants/rtplStatusOptions.js";
 export * from "./constants/regions.js";
 export * from "./constants/specialAccess.js";
+export * from "./constants/userSections.js";
+export * from "./constants/customerFeedback.js";
 export * from "./types/rbac.js";
 export * from "./types/reportComparison.js";
 export * from "./types/report.js";

@@ -9,6 +9,8 @@ import { recordLayoutRouter } from "./recordLayoutRoutes.js";
 import { reportRouter } from "./reportRoutes.js";
 import { reportRowRouter } from "./reportRowRoutes.js";
 import { uploadRouter } from "./uploadRoutes.js";
+import { closureDateRouter } from "./closureDateRoutes.js";
+import { customerFeedbackRouter } from "./customerFeedbackRoutes.js";
 import { specialAccessSessionRouter } from "./specialAccessSessionRoutes.js";
 import { warrantyRouter } from "./warrantyRoutes.js";
 
@@ -20,6 +22,8 @@ apiRouter.use("/matches", matchRouter);
 apiRouter.use("/reports", reportRouter);
 apiRouter.use("/report-rows", reportRowRouter);
 apiRouter.use("/uploads", uploadRouter);
+apiRouter.use("/closure-dates", closureDateRouter);
+apiRouter.use("/customer-feedback", customerFeedbackRouter);
 apiRouter.use("/report-history", historyRouter);
 apiRouter.use("/admin", adminRouter);
 apiRouter.use("/me", meRouter);

@@ -9,6 +9,7 @@ import {
   reactivateAdminUserController,
   reassignAdminUserRegionController,
   setAdminUserRegionsController,
+  setAdminUserSectionsController,
   updateAdminUserProfileController,
 } from "../controllers/adminUserController.js";
 import { listAdminRegionsController } from "../controllers/adminRegionController.js";
@@ -210,6 +211,13 @@ adminRouter.put(
   "/users/:id/regions",
   requireRole(["SUPER_ADMIN"]),
   setAdminUserRegionsController,
+);
+
+// Sets which operational sections a REGION_ADMIN may see (null = all sections).
+adminRouter.put(
+  "/users/:id/sections",
+  requireRole(["SUPER_ADMIN"]),
+  setAdminUserSectionsController,
 );
 
 adminRouter.post(

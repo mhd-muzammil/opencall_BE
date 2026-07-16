@@ -28,6 +28,13 @@ export const listUsersQuerySchema = z.object({
   q: trimmedString(100).optional(),
 });
 
+// A section-access grant: null = all sections (the default), or a list of section keys
+// that restricts a REGION_ADMIN. Keys are validated against USER_SECTION_KEYS server-side.
+const accessibleSectionsSchema = z
+  .array(z.string().trim().min(1))
+  .nullable()
+  .optional();
+
 export const createUserSchema = z
   .object({
     email: emailSchema,
@@ -36,6 +43,7 @@ export const createUserSchema = z
     role: userRoleSchema,
     regionId: z.string().uuid().nullable().optional(),
     mustChangePassword: z.boolean().optional(),
+    accessibleSections: accessibleSectionsSchema,
   })
   .superRefine((value, ctx) => {
     if (value.role === "REGION_ADMIN" && !value.regionId) {
@@ -92,6 +100,11 @@ export const reassignRegionSchema = z.object({
 
 export const setUserRegionsSchema = z.object({
   regionIds: z.array(z.string().uuid("Each regionId must be a UUID")),
+});
+
+export const setUserSectionsSchema = z.object({
+  // null = all sections; a list restricts a REGION_ADMIN to those keys.
+  accessibleSections: z.array(z.string().trim().min(1)).nullable(),
 });
 
 export const passwordResetSchema = z.object({

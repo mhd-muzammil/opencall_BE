@@ -25,6 +25,7 @@ function makeUser(overrides: Partial<AuthenticatedUser> = {}): AuthenticatedUser
     regionId: "region-primary",
     region_id: "region-primary",
     mustChangePassword: false,
+    accessibleSections: null,
     ...overrides,
   };
 }

@@ -8,6 +8,7 @@ import {
 } from "../services/rbac/regionAccessService.js";
 import { aspCodesForRegion } from "../services/rbac/regionRowAccess.js";
 import { syncPartsCallCountsFromReport } from "../services/partsCallCountSync.js";
+import { enrichReportWithClosureDates } from "../services/closureDates/closureDateEnricher.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
 import type { GeneratedDailyCallPlanReport } from "../types/reportGeneration.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -104,12 +105,14 @@ export const generateDailyCallPlanReportController: RequestHandler =
 
     if (isRegionAdmin && allowedRegions && allowedRegions.length > 0) {
       response.status(201).json({
-        data: filterReportForRegions(report, allowedRegions),
+        data: await enrichReportWithClosureDates(
+          filterReportForRegions(report, allowedRegions),
+        ),
       });
       return;
     }
 
     response.status(201).json({
-      data: report,
+      data: await enrichReportWithClosureDates(report),
     });
   });
