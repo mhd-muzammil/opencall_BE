@@ -37,9 +37,12 @@ const FEATURE_TABLES = [
   "warranty_job_items",
   "user_regions",
   "special_access_record_layouts",
+  "case_closure_dates",
+  "case_customer_feedback",
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
+  users: ["accessible_sections"],
   source_upload_batches: ["source_type", "status", "row_count", "region_id"],
   flex_wip_records: [
     "normalized_ticket_id",

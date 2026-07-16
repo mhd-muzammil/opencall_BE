@@ -75,9 +75,18 @@ const FEATURE_TABLES = [
   // (the shared UPDATE references the column), so this entry is the early
   // warning for both.
   "special_access_record_layouts",
+  // migrate:closure-dates / migrate:customer-feedback — closure-date import
+  // and per-case customer feedback 500 without these.
+  "case_closure_dates",
+  "case_customer_feedback",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [
+  // migrate:user-sections. CORE on purpose: findActiveUserById selects it, so
+  // without this column EVERY authenticated request 500s (the 2026-07-16
+  // production outage) — the API genuinely cannot serve, and readiness should
+  // say so instead of the app dying silently endpoint by endpoint.
+  { tableName: "users", columnName: "accessible_sections" },
   { tableName: "source_upload_batches", columnName: "source_type" },
   { tableName: "source_upload_batches", columnName: "status" },
   { tableName: "source_upload_batches", columnName: "row_count" },
