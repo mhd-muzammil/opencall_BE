@@ -79,6 +79,8 @@ const FEATURE_TABLES = [
   // and per-case customer feedback 500 without these.
   "case_closure_dates",
   "case_customer_feedback",
+  // migrate:parts-catalog — the Parts Catalog endpoints 500 without it.
+  "parts_catalog",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [
