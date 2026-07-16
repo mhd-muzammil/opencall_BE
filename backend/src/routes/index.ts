@@ -12,6 +12,7 @@ import { uploadRouter } from "./uploadRoutes.js";
 import { closureDateRouter } from "./closureDateRoutes.js";
 import { customerFeedbackRouter } from "./customerFeedbackRoutes.js";
 import { partsCatalogRouter } from "./partsCatalogRoutes.js";
+import { quotationRouter } from "./quotationRoutes.js";
 import { specialAccessSessionRouter } from "./specialAccessSessionRoutes.js";
 import { warrantyRouter } from "./warrantyRoutes.js";
 
@@ -26,6 +27,7 @@ apiRouter.use("/uploads", uploadRouter);
 apiRouter.use("/closure-dates", closureDateRouter);
 apiRouter.use("/customer-feedback", customerFeedbackRouter);
 apiRouter.use("/parts-catalog", partsCatalogRouter);
+apiRouter.use("/quotations", quotationRouter);
 apiRouter.use("/report-history", historyRouter);
 apiRouter.use("/admin", adminRouter);
 apiRouter.use("/me", meRouter);

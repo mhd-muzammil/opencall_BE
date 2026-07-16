@@ -81,6 +81,9 @@ const FEATURE_TABLES = [
   "case_customer_feedback",
   // migrate:parts-catalog — the Parts Catalog endpoints 500 without it.
   "parts_catalog",
+  // migrate:quotations — the Quotations endpoints 500 without these.
+  "quotations",
+  "quotation_sequences",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [

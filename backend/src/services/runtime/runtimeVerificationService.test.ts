@@ -40,6 +40,8 @@ const FEATURE_TABLES = [
   "case_closure_dates",
   "case_customer_feedback",
   "parts_catalog",
+  "quotations",
+  "quotation_sequences",
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
