@@ -509,53 +509,52 @@ export function filterInTransitParts(
 }
 
 export interface OpenCallPartDisplay {
-  /** `" / "`-joined descriptions of the received parts (empty when none). */
+  /**
+   * `" / "`-joined descriptions of EVERY part on the work order — all installed
+   * statuses (RCV_SPARE and YTR_INTRANSIT alike), in source/row order. Empty
+   * when the work order carries no part descriptions.
+   */
   text: string;
-  /** Number of parts still in transit (drives the muted "⏳ N in transit"). */
-  inTransitCount: number;
-  /** True when the work order has parts but none are received yet. */
+  /** True when the work order has no part lines at all (`parts.length === 0`). */
   awaitingParts: boolean;
 }
 
 /**
- * OpenCall "Part" column model for a work order. Received part descriptions are
- * joined with `" / "`; in-transit parts are surfaced only as a muted count and
- * never mixed into the joined string. A work order is never hidden: with parts
- * ordered but none received it is flagged `awaitingParts`.
+ * OpenCall "Part" column model for a work order. Unlike the Inventory view (which
+ * is received-only via {@link filterReceivedParts}), the OpenCall cell lists
+ * EVERY part on the work order regardless of `Good Part Installed Status`, joined
+ * with `" / "` in source order. Part lines are already de-duplicated upstream on
+ * the composite key `(ticket + goodPartNo + partOrderNo)` by
+ * {@link groupRowsByTicket}, so any two identical descriptions here are genuinely
+ * distinct part lines (e.g. the same good part re-ordered under a new Part Order
+ * No) and are both kept. `awaitingParts` means the work order has no parts at all.
+ *
+ * This is intentionally independent of the received filter so the display can
+ * never leak into what Inventory stocks — the sync path stays received-only.
  */
 export function buildOpenCallPartDisplay(
   parts: readonly PartLine[],
 ): OpenCallPartDisplay {
-  const received = filterReceivedParts(parts);
-  const inTransitCount = filterInTransitParts(parts).length;
-  const text = received
+  const text = parts
     .map((part) => part.partDescription)
     .filter((description): description is string => Boolean(description))
     .join(" / ");
 
   return {
     text,
-    inTransitCount,
-    awaitingParts: received.length === 0 && parts.length > 0,
+    awaitingParts: parts.length === 0,
   };
 }
 
 /** Formats {@link buildOpenCallPartDisplay} into a single "Part" cell string. */
 export function formatOpenCallPartCell(parts: readonly PartLine[]): string {
   const display = buildOpenCallPartDisplay(parts);
-  const segments: string[] = [];
 
   if (display.text) {
-    segments.push(display.text);
-  } else if (display.awaitingParts) {
-    segments.push("Awaiting parts");
+    return display.text;
   }
 
-  if (display.inTransitCount > 0) {
-    segments.push(`⏳ ${display.inTransitCount} in transit`);
-  }
-
-  return segments.join("  ");
+  return display.awaitingParts ? "Awaiting parts" : "";
 }
 
 /**

@@ -201,7 +201,7 @@ describe("groupRowsByTicket", () => {
     expect(duplicatePartLineCount).toBe(0);
   });
 
-  it("handles a mixed work order: OpenCall joins received + counts in transit; inventory shows received only", () => {
+  it("mixed work order: OpenCall lists ALL parts; inventory (received filter) still returns only the 2 RCV_SPARE", () => {
     const { workOrders } = groupRowsByTicket<PartRow>([
       {
         ticketId: "WO-300",
@@ -235,16 +235,20 @@ describe("groupRowsByTicket", () => {
     const parts = workOrders[0]!.parts;
     const display = buildOpenCallPartDisplay(parts);
 
-    expect(display.text).toBe("RECEIVED ONE / RECEIVED TWO");
-    expect(display.inTransitCount).toBe(1);
+    // OpenCall now shows EVERY part (received + in-transit), source order, no hint.
+    expect(display.text).toBe("RECEIVED ONE / RECEIVED TWO / IN TRANSIT ONE");
     expect(display.awaitingParts).toBe(false);
     expect(formatOpenCallPartCell(parts)).toBe(
-      "RECEIVED ONE / RECEIVED TWO  ⏳ 1 in transit",
+      "RECEIVED ONE / RECEIVED TWO / IN TRANSIT ONE",
     );
 
-    // Inventory: received-only stock.
+    // Inventory: received-only stock — UNCHANGED by the display change.
     const inventoryParts = filterReceivedParts(parts);
     expect(inventoryParts).toHaveLength(2);
+    expect(inventoryParts.map((p) => p.partDescription)).toEqual([
+      "RECEIVED ONE",
+      "RECEIVED TWO",
+    ]);
 
     // Price / in-stock value = sum over the received parts only (in-transit
     // part's 999 is excluded). Prices are carried as an extra part-level field.
@@ -260,7 +264,37 @@ describe("groupRowsByTicket", () => {
     expect(price).toBe(350);
   });
 
-  it("keeps an all-in-transit work order in OpenCall as 'Awaiting parts' but out of inventory", () => {
+  it("OpenCall keeps both identical descriptions (same good part, two Part Order Nos); received filter stays independent", () => {
+    const { workOrders } = groupRowsByTicket<PartRow>([
+      {
+        ticketId: "WO-800",
+        rowNumber: 1,
+        goodPartNo: "P-1",
+        partOrderNo: "PO-1",
+        partDescription: "SAME DESC",
+        goodPartInstalledStatus: "RCV_SPARE",
+      },
+      {
+        ticketId: "WO-800",
+        rowNumber: 2,
+        goodPartNo: "P-1",
+        partOrderNo: "PO-2",
+        partDescription: "SAME DESC",
+        goodPartInstalledStatus: "YTR_INTRANSIT",
+      },
+    ]);
+    const parts = workOrders[0]!.parts;
+
+    // Both distinct part lines are shown — not de-duped by description string.
+    expect(formatOpenCallPartCell(parts)).toBe("SAME DESC / SAME DESC");
+
+    // Received filter unaffected: only the RCV_SPARE line (PO-1) is stock.
+    const received = filterReceivedParts(parts);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.partOrderNo).toBe("PO-1");
+  });
+
+  it("all-in-transit work order: OpenCall lists the in-transit descriptions (not 'Awaiting parts'); still absent from inventory", () => {
     const { workOrders } = groupRowsByTicket<PartRow>([
       {
         ticketId: "WO-400",
@@ -282,12 +316,13 @@ describe("groupRowsByTicket", () => {
 
     const parts = workOrders[0]!.parts;
 
-    // OpenCall: still listed, flagged awaiting.
+    // OpenCall: lists the in-transit part descriptions (the WO HAS parts, so it
+    // is not "Awaiting parts").
     expect(workOrders).toHaveLength(1);
-    expect(buildOpenCallPartDisplay(parts).awaitingParts).toBe(true);
-    expect(formatOpenCallPartCell(parts)).toBe("Awaiting parts  ⏳ 2 in transit");
+    expect(buildOpenCallPartDisplay(parts).awaitingParts).toBe(false);
+    expect(formatOpenCallPartCell(parts)).toBe("IN TRANSIT ONE / IN TRANSIT TWO");
 
-    // Inventory: omitted entirely (no received stock).
+    // Inventory: omitted entirely (no received stock) — UNCHANGED.
     expect(filterReceivedParts(parts)).toHaveLength(0);
   });
 
@@ -305,7 +340,9 @@ describe("groupRowsByTicket", () => {
     expect(workOrders).toHaveLength(1);
     expect(workOrders[0]?.parts).toHaveLength(0);
     expect(filterReceivedParts(workOrders[0]!.parts)).toHaveLength(0);
-    expect(buildOpenCallPartDisplay(workOrders[0]!.parts).awaitingParts).toBe(false);
+    // Zero parts on the WO → "Awaiting parts" now means literally no parts.
+    expect(buildOpenCallPartDisplay(workOrders[0]!.parts).awaitingParts).toBe(true);
+    expect(formatOpenCallPartCell(workOrders[0]!.parts)).toBe("Awaiting parts");
   });
 
   it("chooses the header from the same row the dedupe ranking would win", () => {
