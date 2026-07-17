@@ -46,6 +46,7 @@ import {
   dedupeRowsByTicket,
   findDuplicateTicketKeys,
   getNormalizedTicketKey,
+  groupRowsByTicket,
 } from "../normalization/dedupeRowsByTicket.js";
 import {
   buildReportComparison,
@@ -706,20 +707,29 @@ export async function generateDailyCallPlanReport(
       });
     }
 
-    const dedupedFlexWip = dedupeRowsByTicket(flexWip);
+    // Group Flex WIP into header/detail work orders (one header per ticket, all
+    // distinct part lines attached) instead of collapsing to a single row and
+    // dropping the other parts. The header is chosen with the same ranking the
+    // old ticket dedupe used, so downstream matching is unchanged; `parts` now
+    // rides along so the OpenCall Part column can show every received part.
+    const groupedFlexWip = groupRowsByTicket(flexWip);
+    const flexWipHeaders = groupedFlexWip.workOrders.map((workOrder) => ({
+      ...workOrder.header,
+      parts: workOrder.parts,
+    }));
     const dedupedRenderways = dedupeRowsByTicket(renderways);
     const dedupedCallPlan = dedupeRowsByTicket(callPlan);
 
-    assertNoResidualDuplicates("Flex WIP", dedupedFlexWip.dedupedRows);
+    assertNoResidualDuplicates("Flex WIP", flexWipHeaders);
     assertNoResidualDuplicates("Renderways", dedupedRenderways.dedupedRows);
     assertNoResidualDuplicates("Call Plan", dedupedCallPlan.dedupedRows);
 
     const duplicateTracking: DuplicateTrackingSummary = {
-      flexWip: dedupedFlexWip.duplicateCount,
+      flexWip: groupedFlexWip.duplicatePartLineCount,
       renderways: dedupedRenderways.duplicateCount,
       callPlan: dedupedCallPlan.duplicateCount,
       total:
-        dedupedFlexWip.duplicateCount +
+        groupedFlexWip.duplicatePartLineCount +
         dedupedRenderways.duplicateCount +
         dedupedCallPlan.duplicateCount,
     };
@@ -734,7 +744,7 @@ export async function generateDailyCallPlanReport(
       input.regionId,
     );
     const matches = matchSourceRecords({
-      flexWip: dedupedFlexWip.dedupedRows,
+      flexWip: flexWipHeaders,
       renderways: dedupedRenderways.dedupedRows,
       callPlan: dedupedCallPlan.dedupedRows,
       slaHoursByWipAgingCategory,

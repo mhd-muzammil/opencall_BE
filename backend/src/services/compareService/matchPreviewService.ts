@@ -22,6 +22,7 @@ import { matchSourceRecords } from "./matchingEngine.js";
 import {
   dedupeRowsByTicket,
   findDuplicateTicketKeys,
+  groupRowsByTicket,
 } from "../normalization/dedupeRowsByTicket.js";
 
 export interface MatchPreviewInput {
@@ -97,20 +98,24 @@ export async function previewMatches(
         )
       : [];
 
-    const dedupedFlexWip = dedupeRowsByTicket(flexWip);
+    const groupedFlexWip = groupRowsByTicket(flexWip);
+    const flexWipHeaders = groupedFlexWip.workOrders.map((workOrder) => ({
+      ...workOrder.header,
+      parts: workOrder.parts,
+    }));
     const dedupedRenderways = dedupeRowsByTicket(renderways);
     const dedupedCallPlan = dedupeRowsByTicket(callPlan);
 
-    assertNoResidualDuplicates("Flex WIP", dedupedFlexWip.dedupedRows);
+    assertNoResidualDuplicates("Flex WIP", flexWipHeaders);
     assertNoResidualDuplicates("Renderways", dedupedRenderways.dedupedRows);
     assertNoResidualDuplicates("Call Plan", dedupedCallPlan.dedupedRows);
 
     const duplicateTracking: DuplicateTrackingSummary = {
-      flexWip: dedupedFlexWip.duplicateCount,
+      flexWip: groupedFlexWip.duplicatePartLineCount,
       renderways: dedupedRenderways.duplicateCount,
       callPlan: dedupedCallPlan.duplicateCount,
       total:
-        dedupedFlexWip.duplicateCount +
+        groupedFlexWip.duplicatePartLineCount +
         dedupedRenderways.duplicateCount +
         dedupedCallPlan.duplicateCount,
     };
@@ -126,7 +131,7 @@ export async function previewMatches(
     );
 
     const matches = matchSourceRecords({
-      flexWip: dedupedFlexWip.dedupedRows,
+      flexWip: flexWipHeaders,
       renderways: dedupedRenderways.dedupedRows,
       callPlan: dedupedCallPlan.dedupedRows,
       slaHoursByWipAgingCategory,
@@ -158,11 +163,11 @@ export async function previewMatches(
 
     return {
       totalRenderwaysRows: dedupedRenderways.dedupedRows.length,
-      totalFlexRows: dedupedFlexWip.dedupedRows.length,
+      totalFlexRows: flexWipHeaders.length,
       flexMatchedRows,
       callPlanMatchedRows,
       unmatchedFlexRows: matches.filter((match) => !match.flexWip).length,
-      unmatchedCallPlanRows: dedupedFlexWip.dedupedRows.length - callPlanMatchedRows,
+      unmatchedCallPlanRows: flexWipHeaders.length - callPlanMatchedRows,
       duplicateTracking,
       matchStatusCounts,
       enrichedRows,

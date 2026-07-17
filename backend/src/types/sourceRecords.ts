@@ -1,3 +1,5 @@
+import type { PartLine } from "../services/normalization/dedupeRowsByTicket.js";
+
 export interface ParsedRowIssue {
   rowNumber: number;
   field: string;
@@ -33,6 +35,23 @@ export interface FlexWipParsedRecord {
   productSerialNo: string | null;
   /** FieldEZ "Business Segment" (Computing / Printing). Drives segment classification. */
   businessSegment: string | null;
+  // --- Part-level fields (vary row-to-row within a multi-part work order).
+  // Derived from the raw Flex WIP row, so optional on ungrouped/legacy shapes. ---
+  goodPartNo?: string | null;
+  partOrderNo?: string | null;
+  soNumber?: string | null;
+  /** "RCV_SPARE" (received) | "YTR_INTRANSIT" (ordered) | null (no spare). */
+  goodPartInstalledStatus?: string | null;
+  partShipmentStatus?: string | null;
+  goodPartAwb?: string | null;
+  goodPartExpectedDeliveryDate?: string | null;
+  goodPartSerialNumber?: string | null;
+  /**
+   * All distinct part lines for this work order, attached when the flat rows are
+   * grouped into a header/detail work order (see `groupRowsByTicket`). Absent on
+   * ungrouped rows.
+   */
+  parts?: PartLine[];
   rawRow: Record<string, unknown>;
   rowNumber: number;
 }

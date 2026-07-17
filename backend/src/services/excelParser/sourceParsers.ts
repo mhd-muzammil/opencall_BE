@@ -5,8 +5,8 @@ import type {
   RenderwaysParsedRecord,
 } from "../../types/sourceRecords.js";
 import {
-  dedupeRowsByTicket,
-  findDuplicateTicketKeys,
+  dedupePartLineRows,
+  findDuplicatePartLineKeys,
   type TicketDedupeRow,
 } from "../normalization/dedupeRowsByTicket.js";
 import {
@@ -32,17 +32,21 @@ function buildParsedSourceFile<TRecord extends {
   const duplicateNormalizedTicketIds = findDuplicates(
     records.map((record) => record.normalizedTicketId ?? null),
   );
-  const { dedupedRows, duplicateCount } = dedupeRowsByTicket(records);
-  const residualDuplicateTicketIds = findDuplicateTicketKeys(dedupedRows);
+  // Dedup on the composite PART key, not the ticket. A work order legitimately
+  // spans multiple part rows (the Flex WIP export is one-row-per-part), so a
+  // repeated ticket is now legal — only a repeated *part line* is a true dup.
+  const { rows: dedupedRows, duplicatePartLineCount: duplicateCount } =
+    dedupePartLineRows(records);
+  const residualDuplicatePartLineKeys = findDuplicatePartLineKeys(dedupedRows);
 
-  if (residualDuplicateTicketIds.length > 0) {
+  if (residualDuplicatePartLineKeys.length > 0) {
     throw new Error(
-      `Duplicate ticket IDs remain after parse dedupe: ${residualDuplicateTicketIds.join(", ")}`,
+      `Duplicate part lines remain after parse dedupe: ${residualDuplicatePartLineKeys.join(", ")}`,
     );
   }
 
   if (duplicateCount > 0) {
-    console.info("[sourceParsers] Removed duplicate parsed rows", {
+    console.info("[sourceParsers] Removed duplicate parsed part lines", {
       duplicateCount,
       duplicateNormalizedTicketIds,
     });
@@ -100,6 +104,14 @@ export function parseFlexWipReport(
       workLocation: cleanString(getCell(row.values, ["Work Location", "WorkLocation", "ASP Code", "ASP"])),
       businessSegment: cleanString(getCell(row.values, ["Business Segment", "BusinessSegment", "Business segment"])),
       productSerialNo: cleanString(getCell(row.values, ["Product Serial No", "Product S.No", "Product SN", "Serial No", "Serial Number"])),
+      goodPartNo: cleanString(getCell(row.values, ["Good Part No", "Good Part Number"])),
+      partOrderNo: cleanString(getCell(row.values, ["Part Order No", "Part Order Number"])),
+      soNumber: cleanString(getCell(row.values, ["SO Number", "So Number"])),
+      goodPartInstalledStatus: cleanString(getCell(row.values, ["Good Part Installed Status"])),
+      partShipmentStatus: cleanString(getCell(row.values, ["Part Shipment Status(EEG)", "Part Shipment Status"])),
+      goodPartAwb: cleanString(getCell(row.values, ["Good Part AWB", "Good Part Awb"])),
+      goodPartExpectedDeliveryDate: cleanString(getCell(row.values, ["Good Part Expected Delivery Date"])),
+      goodPartSerialNumber: cleanString(getCell(row.values, ["Good Part Serial Number", "Good Part Serial No"])),
       rawRow: row.rawRow,
       rowNumber: row.rowNumber,
     });

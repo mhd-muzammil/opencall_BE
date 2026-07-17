@@ -14,6 +14,7 @@ import {
   normalizeCaseId,
   normalizeTicketId,
 } from "../normalization/valueNormalizer.js";
+import { formatOpenCallPartCell } from "../normalization/dedupeRowsByTicket.js";
 import {
   calculateTAT,
   getLookupNumber,
@@ -221,6 +222,26 @@ function toIsoString(value: Date | string | null | undefined): string | null {
   return parsed ? parsed.toISOString() : null;
 }
 
+/**
+ * OpenCall "Part" cell for a work order: the `" / "`-joined RCV_SPARE part
+ * descriptions plus a muted in-transit count. Uses the grouped `parts[]`
+ * attached to the Flex header when present; falls back to the single
+ * `partDescription` for ungrouped/Renderways-only rows.
+ */
+function buildPartCell(flexWip: FlexWipParsedRecord | null): string | null {
+  if (!flexWip) {
+    return null;
+  }
+
+  const parts = flexWip.parts;
+  if (parts && parts.length > 0) {
+    const cell = formatOpenCallPartCell(parts);
+    return cell.length > 0 ? cell : flexWip.partDescription ?? null;
+  }
+
+  return flexWip.partDescription ?? null;
+}
+
 function buildEnrichedRow(
   renderways: RenderwaysParsedRecord | null,
   flexWip: FlexWipParsedRecord | null,
@@ -256,7 +277,7 @@ function buildEnrichedRow(
     customer_type: renderways?.customerType ?? null,
     location: callPlan?.location ?? mapLocation(flexWip?.customerPincode, input.areaNameByPincode),
     contact: flexWip?.contact ?? null,
-    part: flexWip?.partDescription ?? null,
+    part: buildPartCell(flexWip),
     product_serial_no: flexWip?.productSerialNo ?? null,
     wip_aging_category: renderways?.wipAgingCategory ?? null,
     tat: calculateTAT(renderways?.partnerAccept, slaHours),
