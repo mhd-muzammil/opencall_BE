@@ -173,7 +173,14 @@ async function syncViaInventoryApi(
     };
     if (!existing.work_order_id) patch.work_order_id = row.ticket_id;
     if (!existing.region) patch.region = mappedRegion;
-    if (!existing.engineer_name) patch.engineer_name = row.engineer ?? "";
+    // Engineer name: keep inventory in sync with the latest OpenCall assignment.
+    // Always push a non-blank name (so re-assignments propagate), but never blank
+    // out an existing name if OpenCall has none. Phone is not sourced here, so it
+    // is deliberately left untouched (the inventory OTP flow owns engineer_phone).
+    const nextEngineer = (row.engineer ?? "").trim();
+    if (nextEngineer && nextEngineer !== (existing.engineer_name ?? "")) {
+      patch.engineer_name = nextEngineer;
+    }
     if (!existing.part_description) patch.part_description = row.part ?? "";
     if (!existing.customer_name) patch.customer_name = row.customer_name ?? "";
     if (!existing.good_part_number && partNumbers.goodPartNumber)
@@ -458,7 +465,10 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
         SET 
           work_order_id = COALESCE(NULLIF(work_order_id, ''), ?),
           region = COALESCE(NULLIF(region, ''), ?),
-          engineer_name = CASE WHEN engineer_name = '' OR engineer_name IS NULL THEN ? ELSE engineer_name END,
+          -- Engineer name: push the latest OpenCall assignment (so re-assignments
+          -- propagate), but only when OpenCall actually has a name — never blank out
+          -- an existing value. Phone is not sourced here, so it is left untouched.
+          engineer_name = CASE WHEN NULLIF(TRIM(?), '') IS NOT NULL THEN TRIM(?) ELSE engineer_name END,
           part_description = CASE WHEN part_description = '' OR part_description IS NULL THEN ? ELSE part_description END,
           customer_name = CASE WHEN customer_name = '' OR customer_name IS NULL THEN ? ELSE customer_name END,
           good_part_number = COALESCE(NULLIF(good_part_number, ''), ?),
@@ -473,7 +483,8 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
       update.run(
         row.ticket_id,
         mappedRegion,
-        row.engineer ?? "",
+        row.engineer ?? "", // engineer_name — CASE WHEN NULLIF(TRIM(?), '')...
+        row.engineer ?? "", // engineer_name — ...THEN TRIM(?) (same value, bound twice)
         row.part ?? "",
         row.customer_name ?? "",
         partNumbers.goodPartNumber,
