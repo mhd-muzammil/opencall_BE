@@ -63,6 +63,8 @@ export interface CreateEngineerInput {
   regionId: string;
   email?: string | null;
   phone?: string | null;
+  hpId?: string;
+  vendorId?: string;
 }
 
 export async function createEngineerService(
@@ -77,6 +79,8 @@ export async function createEngineerService(
     regionId: input.regionId,
     email: input.email ?? null,
     phone: input.phone ?? null,
+    hpId: input.hpId?.trim() ?? "",
+    vendorId: input.vendorId?.trim() ?? "",
     createdBy: currentUser.id,
   });
 
@@ -103,6 +107,8 @@ export interface UpdateEngineerServiceInput {
   regionId?: string;
   email?: string | null;
   phone?: string | null;
+  hpId?: string;
+  vendorId?: string;
 }
 
 export async function updateEngineerService(
@@ -128,6 +134,8 @@ export async function updateEngineerService(
   if (input.regionId !== undefined) updateData.regionId = input.regionId;
   if (input.email !== undefined) updateData.email = input.email;
   if (input.phone !== undefined) updateData.phone = input.phone;
+  if (input.hpId !== undefined) updateData.hpId = input.hpId.trim();
+  if (input.vendorId !== undefined) updateData.vendorId = input.vendorId.trim();
 
   const updated = await updateEngineer(id, updateData);
 

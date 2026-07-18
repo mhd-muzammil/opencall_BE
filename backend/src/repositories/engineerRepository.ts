@@ -7,6 +7,8 @@ export interface EngineerRow {
   region_id: string;
   email: string | null;
   phone: string | null;
+  hp_id: string;
+  vendor_id: string;
   is_active: boolean;
   created_by: string | null;
   updated_by: string | null;
@@ -21,6 +23,8 @@ export interface Engineer {
   regionId: string;
   email: string | null;
   phone: string | null;
+  hpId: string;
+  vendorId: string;
   isActive: boolean;
   createdBy: string | null;
   updatedBy: string | null;
@@ -35,6 +39,8 @@ const ENGINEER_COLUMNS = `
   region_id,
   email,
   phone,
+  hp_id,
+  vendor_id,
   is_active,
   created_by,
   updated_by,
@@ -50,6 +56,8 @@ function mapEngineer(row: EngineerRow): Engineer {
     regionId: row.region_id,
     email: row.email,
     phone: row.phone,
+    hpId: row.hp_id ?? "",
+    vendorId: row.vendor_id ?? "",
     isActive: Boolean(row.is_active),
     createdBy: row.created_by,
     updatedBy: row.updated_by,
@@ -180,6 +188,8 @@ export interface InsertEngineerInput {
   regionId: string;
   email: string | null;
   phone: string | null;
+  hpId?: string;
+  vendorId?: string;
   createdBy: string;
 }
 
@@ -190,9 +200,9 @@ export async function insertEngineer(
     `
       INSERT INTO engineers (
         engineer_code, engineer_name, region_id, email, phone,
-        is_active, created_by, updated_by
+        hp_id, vendor_id, is_active, created_by, updated_by
       )
-      VALUES ($1, $2, $3, $4, $5, TRUE, $6, $6)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $8)
       RETURNING ${ENGINEER_COLUMNS}
     `,
     [
@@ -201,6 +211,8 @@ export async function insertEngineer(
       input.regionId,
       input.email,
       input.phone,
+      input.hpId ?? "",
+      input.vendorId ?? "",
       input.createdBy,
     ],
   );
@@ -213,6 +225,8 @@ export interface UpdateEngineerInput {
   regionId?: string;
   email?: string | null;
   phone?: string | null;
+  hpId?: string;
+  vendorId?: string;
   updatedBy: string;
 }
 
@@ -229,6 +243,8 @@ export async function updateEngineer(
         region_id = COALESCE($5, region_id),
         email = CASE WHEN $6::BOOLEAN THEN $7 ELSE email END,
         phone = CASE WHEN $8::BOOLEAN THEN $9 ELSE phone END,
+        hp_id = CASE WHEN $11::BOOLEAN THEN $12 ELSE hp_id END,
+        vendor_id = CASE WHEN $13::BOOLEAN THEN $14 ELSE vendor_id END,
         updated_at = NOW(),
         updated_by = $10
       WHERE id = $1
@@ -245,6 +261,10 @@ export async function updateEngineer(
       input.phone !== undefined,
       input.phone ?? null,
       input.updatedBy,
+      input.hpId !== undefined,
+      input.hpId ?? "",
+      input.vendorId !== undefined,
+      input.vendorId ?? "",
     ],
   );
   const row = result.rows[0];

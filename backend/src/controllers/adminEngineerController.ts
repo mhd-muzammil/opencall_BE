@@ -38,7 +38,8 @@ export const listAdminEngineersController: RequestHandler = asyncHandler(
 
 export const createAdminEngineerController: RequestHandler = asyncHandler(
   async (request, response) => {
-    const { engineerName, engineerCode, regionId, email, phone } = request.body;
+    const { engineerName, engineerCode, regionId, email, phone, hpId, vendorId } =
+      request.body;
 
     if (!engineerName || typeof engineerName !== "string") {
       throw badRequest("engineerName is required");
@@ -53,6 +54,8 @@ export const createAdminEngineerController: RequestHandler = asyncHandler(
       regionId,
       email,
       phone,
+      ...(typeof hpId === "string" ? { hpId } : {}),
+      ...(typeof vendorId === "string" ? { vendorId } : {}),
     });
 
     response.status(201).json({ data: { engineer } });
