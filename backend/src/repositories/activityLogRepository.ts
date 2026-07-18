@@ -27,7 +27,9 @@ export type ActivityEventType =
   | "SPECIAL_ACCESS_DELETED"
   | "ACCESS_ROLE_CREATED"
   | "ACCESS_ROLE_UPDATED"
-  | "ACCESS_ROLE_DELETED";
+  | "ACCESS_ROLE_DELETED"
+  | "REGION_EOD_CLOSED"
+  | "REGION_EOD_REOPENED";
 
 export type ActivityStatus = "SUCCESS" | "FAILURE";
 

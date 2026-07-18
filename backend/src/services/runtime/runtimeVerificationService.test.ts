@@ -42,6 +42,8 @@ const FEATURE_TABLES = [
   "parts_catalog",
   "quotations",
   "quotation_sequences",
+  "region_eod_state",
+  "region_productivity_snapshot",
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {

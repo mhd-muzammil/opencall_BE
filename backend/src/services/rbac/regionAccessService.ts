@@ -1,5 +1,4 @@
 import type { AuthenticatedUser } from "../../types/auth.js";
-import type { UploadBatchValidationRecord } from "../../repositories/uploadBatchRepository.js";
 import {
   findRegionById,
   type Region,
@@ -39,33 +38,6 @@ export function resolveEffectiveRegionId(
   }
 
   return user.regionId;
-}
-
-export function assertCanAccessBatchRegions(
-  user: AuthenticatedUser,
-  batches: readonly UploadBatchValidationRecord[],
-): void {
-  if (user.role === "SUPER_ADMIN") {
-    return;
-  }
-
-  if (!user.regionId) {
-    throw forbidden("REGION_ADMIN user is not assigned to a region");
-  }
-
-  const blockedBatches = batches.filter((batch) => {
-    if (batch.uploaderRole === "SUPER_ADMIN") {
-      return false;
-    }
-    return batch.regionId !== null && batch.regionId !== user.regionId;
-  });
-
-  if (blockedBatches.length > 0) {
-    throw forbidden("REGION_ADMIN cannot access upload batches from another region", {
-      blockedBatchIds: blockedBatches.map((batch) => batch.id),
-      userRegionId: user.regionId,
-    });
-  }
 }
 
 /**

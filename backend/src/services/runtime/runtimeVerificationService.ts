@@ -84,6 +84,9 @@ const FEATURE_TABLES = [
   // migrate:quotations — the Quotations endpoints 500 without these.
   "quotations",
   "quotation_sequences",
+  // migrate:region-eod — the Final-EOD endpoints 500 without these.
+  "region_eod_state",
+  "region_productivity_snapshot",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [

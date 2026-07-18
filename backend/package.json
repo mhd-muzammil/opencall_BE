@@ -27,6 +27,7 @@
     "migrate:customer-feedback-v2": "tsx src/scripts/applyCustomerFeedbackStructuredMigration.ts",
     "migrate:parts-catalog": "tsx src/scripts/applyPartsCatalogMigration.ts",
     "migrate:quotations": "tsx src/scripts/applyQuotationsMigration.ts",
+    "migrate:region-eod": "tsx src/scripts/applyRegionEodMigration.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",

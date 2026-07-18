@@ -9,7 +9,8 @@ import {
   findActiveSlaHoursByCategory,
   findAreaNameByPincode,
 } from "../../repositories/businessRuleRepository.js";
-import { assertCanAccessBatchRegions } from "../rbac/regionAccessService.js";
+import { findAllowedRegionsForUser } from "../rbac/regionAccessService.js";
+import { aspCodesForRegion } from "../rbac/regionRowAccess.js";
 import type { AuthenticatedUser } from "../../types/auth.js";
 import type {
   DuplicateTrackingSummary,
@@ -79,7 +80,13 @@ export async function previewMatches(
       });
     }
 
-    assertCanAccessBatchRegions(input.currentUser, batches);
+    // Completed reports are shared, all-region artifacts: every admin restores
+    // the same latest session regardless of which region uploaded its batches.
+    // So a REGION_ADMIN may PREVIEW any batches, but only ever SEES their own
+    // regions' rows — the same scoping filterReportForRegions applies to the
+    // generated report. (The old assertCanAccessBatchRegions hard-block here
+    // 403'd login restore for every admin whose region wasn't the uploader.)
+    const allowedRegions = await findAllowedRegionsForUser(input.currentUser);
 
     const flexWip = await findFlexWipRecordsByBatchId(
       client,
@@ -137,6 +144,23 @@ export async function previewMatches(
       slaHoursByWipAgingCategory,
       areaNameByPincode,
     });
+    // Region scoping: a REGION_ADMIN sees only their regions' rows; a
+    // SUPER_ADMIN (allowedRegions === null) sees everything, counts unchanged.
+    let scopedMatches = matches;
+    if (allowedRegions) {
+      const wantedCodes = new Set<string>();
+      for (const region of allowedRegions) {
+        for (const code of aspCodesForRegion(region)) {
+          wantedCodes.add(code);
+        }
+      }
+      scopedMatches = matches.filter((match) =>
+        wantedCodes.has(
+          String(match.enrichedRow.work_location ?? "").trim().toUpperCase(),
+        ),
+      );
+    }
+
     let flexMatchedRows = 0;
     let callPlanMatchedRows = 0;
     const enrichedRows: EnrichedCallPlanRow[] = [];
@@ -148,7 +172,7 @@ export async function previewMatches(
       BOTH_MISSING: 0,
     };
 
-    for (const match of matches) {
+    for (const match of scopedMatches) {
       if (match.flexWip && match.renderways) {
         flexMatchedRows += 1;
       }
@@ -161,17 +185,27 @@ export async function previewMatches(
       enrichedRows.push(match.enrichedRow);
     }
 
+    // Totals reflect what the viewer can see: full-file counts for a
+    // SUPER_ADMIN, the region-scoped counts for a REGION_ADMIN (matching what
+    // a region-scoped generation would actually affect).
+    const totalFlexRows = allowedRegions
+      ? scopedMatches.filter((match) => match.flexWip).length
+      : flexWipHeaders.length;
+    const totalRenderwaysRows = allowedRegions
+      ? scopedMatches.filter((match) => match.renderways).length
+      : dedupedRenderways.dedupedRows.length;
+
     return {
-      totalRenderwaysRows: dedupedRenderways.dedupedRows.length,
-      totalFlexRows: flexWipHeaders.length,
+      totalRenderwaysRows,
+      totalFlexRows,
       flexMatchedRows,
       callPlanMatchedRows,
-      unmatchedFlexRows: matches.filter((match) => !match.flexWip).length,
-      unmatchedCallPlanRows: flexWipHeaders.length - callPlanMatchedRows,
+      unmatchedFlexRows: scopedMatches.filter((match) => !match.flexWip).length,
+      unmatchedCallPlanRows: totalFlexRows - callPlanMatchedRows,
       duplicateTracking,
       matchStatusCounts,
       enrichedRows,
-      matches,
+      matches: scopedMatches,
     };
   } finally {
     client.release();

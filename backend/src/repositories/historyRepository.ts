@@ -289,6 +289,32 @@ export async function findLatestCompletedReportSession(): Promise<ReportHistoryS
   return result.rows[0] ?? null;
 }
 
+/**
+ * The newest COMPLETED session whose linked report is dated `reportDate`
+ * (YYYY-MM-DD) — the same session the frontend "Specific Date" productivity
+ * view restores. Used by the Final-EOD freeze to regenerate that day's report
+ * server-side. Additive read helper.
+ */
+export async function findLatestCompletedSessionByReportDate(
+  reportDate: string,
+): Promise<ReportHistorySessionRow | null> {
+  const sql = `
+    SELECT
+      sessions.*,
+      reports.report_date::TEXT AS report_date
+    FROM report_history_sessions sessions
+    JOIN daily_call_plan_reports reports
+      ON reports.id = sessions.daily_call_plan_report_id
+    WHERE sessions.status = 'COMPLETED'
+      AND sessions.flex_upload_batch_id IS NOT NULL
+      AND reports.report_date = $1
+    ORDER BY sessions.updated_at DESC, sessions.created_at DESC
+    LIMIT 1;
+  `;
+  const result = await query<ReportHistorySessionRow>(sql, [reportDate]);
+  return result.rows[0] ?? null;
+}
+
 export async function getHistorySessionById(
   id: string,
   userId: string,

@@ -6,6 +6,8 @@ export * from "./constants/specialAccess.js";
 export * from "./constants/userSections.js";
 export * from "./constants/customerFeedback.js";
 export * from "./types/rbac.js";
+export * from "./types/eod.js";
+export * from "./analytics/engineerProductivity.js";
 export * from "./types/reportComparison.js";
 export * from "./types/report.js";
 export * from "./types/warranty.js";
