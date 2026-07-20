@@ -638,6 +638,10 @@ describe("ManualFieldCarryForwardService", () => {
       expect(result.rows[0]?.output["RCA"]).toBe(
         "Case Received on 25th March - active case",
       );
+      // The auto-RCA must be marked carried so it PERSISTS (fresh insert) and
+      // BACKFILLS into existing reports on restore — otherwise it shows but
+      // isn't saved and "disappears" the moment the row is edited/scheduled.
+      expect(result.rows[0]?.carryForward.carriedForwardFields).toContain("rca");
     });
 
     it("adds the engineer-scheduled suffix when a fresh call has an engineer", () => {

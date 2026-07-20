@@ -433,6 +433,13 @@ export class ManualFieldCarryForwardService {
         });
         if (autoRca) {
           enriched.rca = autoRca;
+          // Mark rca as auto-populated. This makes it (a) persist on a fresh
+          // insert, (b) get BACKFILLED into the persisted row when an existing
+          // (pre-feature) report is re-opened — via applyPersistedRowMetadata's
+          // repair path — so the shown RCA is real and never "disappears" when
+          // the row is later edited/scheduled, and (c) carry forward day-to-day
+          // as inherited (the write-once/freeze behaviour).
+          carriedForwardFields.push("rca");
         }
       }
 
