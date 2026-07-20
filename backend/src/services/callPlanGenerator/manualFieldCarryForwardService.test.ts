@@ -612,4 +612,99 @@ describe("ManualFieldCarryForwardService", () => {
       expect(result.rows[0]?.carryForward.regionScopeRetainedRow).toBe(false);
     });
   });
+
+  // Feature B — auto-RCA for fresh NEW calls (write-once, then frozen/carried).
+  describe("auto-RCA for fresh NEW calls", () => {
+    const service = new ManualFieldCarryForwardService();
+
+    it("fills a fresh active call with the active-case line", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [
+          generatedRow({
+            ticket_id: "WO-NEW-1",
+            case_created_time: "2026-03-25T10:00:00.000Z",
+            rca: null,
+            part: null,
+            engineer: null,
+          }),
+        ],
+        previousFinalRows: [],
+      });
+      expect(result.rows[0]?.carryForward.changeType).toBe("NEW_WORK_ORDER");
+      expect(result.rows[0]?.enriched.rca).toBe(
+        "Case Received on 25th March - active case",
+      );
+      expect(result.rows[0]?.output["RCA"]).toBe(
+        "Case Received on 25th March - active case",
+      );
+    });
+
+    it("adds the engineer-scheduled suffix when a fresh call has an engineer", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [
+          generatedRow({
+            ticket_id: "WO-NEW-2",
+            case_created_time: "2026-03-25T10:00:00.000Z",
+            rca: null,
+            part: null,
+            engineer: "Praveen",
+          }),
+        ],
+        previousFinalRows: [],
+      });
+      expect(result.rows[0]?.enriched.rca).toBe(
+        "Case Received on 25th March - active case - engineer scheduled 28th March",
+      );
+    });
+
+    it("fills a fresh part call with the shipment-status ETA line", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [
+          generatedRow({
+            ticket_id: "WO-NEW-3",
+            case_created_time: "2026-03-25T10:00:00.000Z",
+            rca: null,
+            part: "Motherboard",
+            part_shipment_status: "Shipped",
+            engineer: "Praveen",
+          }),
+        ],
+        previousFinalRows: [],
+      });
+      expect(result.rows[0]?.enriched.rca).toBe(
+        "Case Received on 25th March - with part - (Motherboard) ETA: 26th March",
+      );
+    });
+
+    it("never overwrites an existing (Renderways/human) RCA on a fresh call", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [
+          generatedRow({
+            ticket_id: "WO-NEW-4",
+            case_created_time: "2026-03-25T10:00:00.000Z",
+            rca: "Existing RCA from Renderways",
+            part: null,
+            engineer: null,
+          }),
+        ],
+        previousFinalRows: [],
+      });
+      expect(result.rows[0]?.enriched.rca).toBe("Existing RCA from Renderways");
+    });
+
+    it("does not auto-RCA a CARRIED row (only fresh NEW calls)", () => {
+      // Default ticket keys match (WO-000123 <-> 123), so this row is CARRIED.
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [generatedRow({ rca: null, part: null, engineer: null })],
+        previousFinalRows: [previousFinalRow({ rca: null })],
+      });
+      expect(result.rows[0]?.carryForward.changeType).toBe("CARRIED");
+      expect(result.rows[0]?.enriched.rca ?? "").not.toMatch(/Case Received on/);
+    });
+  });
 });

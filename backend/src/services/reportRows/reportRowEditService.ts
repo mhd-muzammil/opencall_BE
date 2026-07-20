@@ -14,6 +14,11 @@ import {
 import { findRegionById } from "../../repositories/regionRepository.js";
 import { workLocationMatchesRegion } from "../rbac/regionRowAccess.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
+import {
+  buildScheduledRemark,
+  isScheduledStatus,
+  istTodayIso,
+} from "@opencall/shared";
 
 export const EDITABLE_REPORT_ROW_FIELDS = [
   "engineer",
@@ -243,10 +248,37 @@ export async function applyReportRowManualFieldEdit(input: {
   const { rowId, current, values, editor } = input;
 
   const merged = mergeRowValues(current, values);
-  const missing = manualFieldsMissing(merged);
+
+  // Feature A — scheduling requires an engineer + auto "Scheduled on" remark.
+  // Fires only when THIS edit sets a status column (Morning or Evening) to the
+  // Scheduled value, so unrelated edits on an already-scheduled row are never
+  // blocked. Server-side (not just the React guard) because special-access and
+  // direct-API saves bypass the client.
+  const settingScheduled =
+    (hasEditedField(values, "rtplStatus") && isScheduledStatus(merged.rtplStatus)) ||
+    (hasEditedField(values, "eveningRtplStatus") &&
+      isScheduledStatus(merged.eveningRtplStatus));
+
   const clearedCarryForwardFields = Object.keys(values)
     .map((field) => MANUAL_FIELD_BY_EDITABLE_FIELD[field as EditableReportRowField])
     .filter((field): field is ManualCarryForwardField => Boolean(field));
+
+  if (settingScheduled) {
+    if (!isCarryForwardValue(merged.engineer)) {
+      throw unprocessableEntity(
+        "You must assign an engineer before scheduling.",
+        { rowId },
+      );
+    }
+    // Overwrite Current Remarks with the generated line while scheduling; a
+    // later non-scheduling edit leaves the user's remarks untouched.
+    merged.remarks = buildScheduledRemark(istTodayIso());
+    if (!clearedCarryForwardFields.includes("remarks")) {
+      clearedCarryForwardFields.push("remarks");
+    }
+  }
+
+  const missing = manualFieldsMissing(merged);
 
   const updated = await updateDailyCallPlanReportRowManualFields(rowId, {
     engineer: merged.engineer,

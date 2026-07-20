@@ -130,3 +130,103 @@ describe("updateReportRowManualFields", () => {
     expect(engineerOnlyResult.rtplStatusChange).toBeNull();
   });
 });
+
+describe("Feature A — scheduling requires an engineer + auto remark", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function lastPayload(): ReportRowEditPayload {
+    const [, payload] = mocks.updateDailyCallPlanReportRowManualFields.mock
+      .calls[0] as [string, ReportRowEditPayload];
+    return payload;
+  }
+
+  it("rejects setting Morning status to Scheduled with no engineer (422)", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({ engineer: null }),
+    );
+
+    await expect(
+      updateReportRowManualFields({
+        rowId: "row-1",
+        user: superAdmin,
+        values: { rtplStatus: "Scheduled" },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      message: "You must assign an engineer before scheduling.",
+    });
+    // Never reached the DB write.
+    expect(mocks.updateDailyCallPlanReportRowManualFields).not.toHaveBeenCalled();
+  });
+
+  it("rejects a placeholder engineer too (Manual Entry Required)", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({ engineer: "Manual Entry Required" }),
+    );
+    await expect(
+      updateReportRowManualFields({
+        rowId: "row-1",
+        user: superAdmin,
+        values: { eveningRtplStatus: "Scheduled" },
+      }),
+    ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("sets Current Remarks to 'Scheduled on <today>' when engineer is present", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({ engineer: "Praveen", remarks: null }),
+    );
+    mocks.updateDailyCallPlanReportRowManualFields.mockImplementation(
+      async (_id, payload) => editedRow({ remarks: payload.remarks ?? null }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { rtplStatus: "Scheduled" },
+    });
+
+    const payload = lastPayload();
+    expect(payload.remarks).toMatch(/^Scheduled on \d{1,2}(st|nd|rd|th) [A-Z][a-z]+$/);
+    // remarks is marked set so it is not treated as carried-forward.
+    expect(payload.clearedCarryForwardFields).toContain("remarks");
+  });
+
+  it("assigning engineer + Scheduled together passes and sets the remark", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({ engineer: null }),
+    );
+    mocks.updateDailyCallPlanReportRowManualFields.mockImplementation(
+      async (_id, payload) => editedRow({ remarks: payload.remarks ?? null }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { rtplStatus: "Scheduled", engineer: "Kumar" },
+    });
+
+    expect(lastPayload().remarks).toMatch(/^Scheduled on /);
+  });
+
+  it("does not fire on an unrelated edit of an already-scheduled row", async () => {
+    // Row is already Scheduled with no engineer (legacy data); editing only RCA
+    // must NOT 422 and must NOT overwrite remarks.
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({ rtplStatus: "Scheduled", engineer: null, remarks: "keep me" }),
+    );
+    mocks.updateDailyCallPlanReportRowManualFields.mockImplementation(
+      async (_id, payload) => editedRow({ remarks: payload.remarks ?? null }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { rca: "some note" },
+    });
+
+    expect(lastPayload().remarks).toBe("keep me");
+  });
+});
