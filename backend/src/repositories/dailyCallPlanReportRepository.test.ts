@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { EnrichedCallPlanRow, MatchedCallPlanRecord } from "../types/matching.js";
 import type { GeneratedDailyCallPlanRow } from "../types/reportGeneration.js";
 import {
+  MANUAL_CARRY_FORWARD_FIELDS,
+  OPTIONAL_MANUAL_CARRY_FORWARD_FIELDS,
+} from "../types/reportGeneration.js";
+import {
   findDailyCallPlanReportRowMetadataByReportId,
   findPreviousFinalReportRowsForManualCarryForward,
   insertDailyCallPlanReportRows,
@@ -185,6 +189,52 @@ describe("insertDailyCallPlanReportRows", () => {
     expect(rows[0]?.rtplStatus).toBe("Pending customer");
     expect(rows[0]?.manualFieldsCompleted).toBe(true);
     expect(rows[0]?.manualFieldsMissing).toEqual([]);
+  });
+
+  it("exposes every declared carry-forward field in manualValues", async () => {
+    // Regression (prod 2026-07-21): case_created_time and hp_owner_status were
+    // absent from manualValues, so carry-forward silently skipped them. Nobody
+    // noticed until a Flex upload arrived with no Create Time and 177 rows lost
+    // their WIP aging — the previous day's date was there to inherit, but the
+    // carry-forward could not see it.
+    const query = vi.fn().mockResolvedValue({
+      rows: [
+        {
+          serial_no: 1,
+          ticket_id: "WO-034696026",
+          case_id: "CASE-1",
+          case_created_time: "2026-06-06T10:08:12.522Z",
+          wip_aging: "36",
+          status_aging: "2",
+          rtpl_status: "SSC Pending",
+          evening_rtpl_status: null,
+          segment: "PC",
+          engineer: "sriram",
+          hp_owner_status: "Actionable",
+          location: "Ayapakkam",
+          customer_mail: null,
+          rca: null,
+          remarks: null,
+          manual_notes: null,
+          same_day_closed: false,
+        },
+      ],
+    });
+    const client = { query } as unknown as PoolClient;
+
+    const rows = await findPreviousFinalReportRowsForManualCarryForward(client, {
+      reportDate: "2026-07-21",
+      regionId: "region-1",
+    });
+
+    expect(rows[0]?.manualValues.case_created_time).toBe("2026-06-06T10:08:12.522Z");
+    expect(rows[0]?.manualValues.hp_owner_status).toBe("Actionable");
+    for (const field of [
+      ...MANUAL_CARRY_FORWARD_FIELDS,
+      ...OPTIONAL_MANUAL_CARRY_FORWARD_FIELDS,
+    ]) {
+      expect(rows[0]?.manualValues).toHaveProperty(field);
+    }
   });
 
   it("sources carry-forward from the latest report on or before today, excluding the current one", async () => {
