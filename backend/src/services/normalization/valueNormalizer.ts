@@ -64,7 +64,58 @@ function dateFromIstWallClock(
   );
 }
 
+/**
+ * Excel serial date (1900 system). Excel counts days from 1899-12-30 — that
+ * offset absorbs its 1900-leap-year bug for every date after 1900-03-01.
+ *
+ * A date cell that carries no number format reaches us as a bare float
+ * (46191.559415868054) instead of a Date or a formatted string. The FieldEZ
+ * export shipped its whole "Create Time" column this way on 2026-07-21, which
+ * blanked every WIP aging that day, so serials are now first-class input.
+ */
+const EXCEL_EPOCH_UTC = Date.UTC(1899, 11, 30);
+const MS_PER_DAY = 86_400_000;
+/** ~1954-10-03 to ~2064-04-08: wide enough for any real case date, narrow
+ *  enough that a stray count or id is never mistaken for a timestamp. */
+const MIN_EXCEL_SERIAL = 20_000;
+const MAX_EXCEL_SERIAL = 60_000;
+
+function excelSerialToDate(serial: number): Date | null {
+  if (
+    !Number.isFinite(serial) ||
+    serial < MIN_EXCEL_SERIAL ||
+    serial > MAX_EXCEL_SERIAL
+  ) {
+    return null;
+  }
+
+  // The fractional day is a float, so an exact wall-clock second arrives a few
+  // microseconds off. Round to the second before splitting into components.
+  const utcMs =
+    EXCEL_EPOCH_UTC + Math.round((serial * MS_PER_DAY) / 1000) * 1000;
+  const asUtc = new Date(utcMs);
+
+  if (Number.isNaN(asUtc.getTime())) {
+    return null;
+  }
+
+  // The serial encodes a wall-clock moment with no timezone; FieldEZ exports in
+  // IST, matching how Date and string inputs are already interpreted above.
+  return dateFromIstWallClock(
+    asUtc.getUTCFullYear(),
+    asUtc.getUTCMonth() + 1,
+    asUtc.getUTCDate(),
+    asUtc.getUTCHours(),
+    asUtc.getUTCMinutes(),
+    asUtc.getUTCSeconds(),
+  );
+}
+
 export function parseExcelDate(value: unknown): Date | null {
+  if (typeof value === "number") {
+    return excelSerialToDate(value);
+  }
+
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return dateFromIstWallClock(
       value.getFullYear(),
@@ -80,6 +131,12 @@ export function parseExcelDate(value: unknown): Date | null {
   const cleaned = cleanString(value)?.replace(/^Cre:\s*/i, "");
   if (!cleaned) {
     return null;
+  }
+
+  // The same unformatted cell can arrive pre-stringified depending on the
+  // reader ("46191.559415868054"). new Date() rejects it, so catch it here.
+  if (/^\d+(?:\.\d+)?$/.test(cleaned)) {
+    return excelSerialToDate(Number(cleaned));
   }
 
   const dayFirstDateTime = /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i.exec(cleaned);
