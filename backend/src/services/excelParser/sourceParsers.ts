@@ -117,7 +117,42 @@ export function parseFlexWipReport(
     });
   }
 
+  logMissingCreateTime(records);
+
   return buildParsedSourceFile(records, issues);
+}
+
+/**
+ * Diagnostic: WIP aging falls back to `Create Time` whenever Renderways has no
+ * "WIP Aging", so a renamed/unparseable create-time column silently blanks the
+ * whole WIP aging column while every other field still fills. Log it loudly,
+ * with the headers actually present, so the alias list can be corrected.
+ */
+function logMissingCreateTime(records: readonly FlexWipParsedRecord[]): void {
+  const missing = records.filter((record) => record.createTime === null);
+
+  if (missing.length === 0) {
+    return;
+  }
+
+  const sample = missing[0];
+
+  if (!sample) {
+    return;
+  }
+
+  const dateLikeCells = Object.entries(sample.rawRow)
+    .filter(([header]) => /creat|time|date/i.test(header))
+    .map(([header, value]) => `${header}=${String(value ?? "").slice(0, 40)}`);
+
+  console.warn("[sourceParsers] Flex WIP rows missing Create Time", {
+    missingCreateTime: missing.length,
+    totalRows: records.length,
+    sampleTicketId: sample.ticketId,
+    sampleRowNumber: sample.rowNumber,
+    dateLikeCells,
+    headers: Object.keys(sample.rawRow),
+  });
 }
 
 export function parseRenderwaysReport(

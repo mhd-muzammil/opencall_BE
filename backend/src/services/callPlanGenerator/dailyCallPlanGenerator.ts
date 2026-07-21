@@ -918,26 +918,63 @@ export async function generateDailyCallPlanReport(
 
     // Prefer Renderways WIP Aging when uploaded; otherwise calculate from case_created_time.
     const reportNow = new Date();
-    const updateAging = () => {
+    const updateAging = (stage: string) => {
+      // Tally how each row's aging was resolved. A blank WIP aging column can
+      // only come from "no Renderways value AND no parseable case_created_time",
+      // so the counters below say immediately which side failed.
+      let fromRenderways = 0;
+      let computed = 0;
+      let missingCreatedTime = 0;
+      let unresolved = 0;
+      const unresolvedSamples: string[] = [];
+
       for (const row of rows) {
         const renderwaysWipAging = getRenderwaysWipAging(row);
 
         if (renderwaysWipAging !== null) {
           row.enriched.wip_aging = renderwaysWipAging;
           row.output["WIP aging"] = renderwaysWipAging;
+          fromRenderways += 1;
           continue;
         }
 
-        const computed = calculateWipAging(row.enriched.case_created_time, reportNow);
-        if (computed !== null) {
-          row.enriched.wip_aging = computed;
-          row.output["WIP aging"] = computed;
+        if (!row.enriched.case_created_time) {
+          missingCreatedTime += 1;
+        }
+
+        const computedAging = calculateWipAging(row.enriched.case_created_time, reportNow);
+        if (computedAging !== null) {
+          row.enriched.wip_aging = computedAging;
+          row.output["WIP aging"] = computedAging;
+          computed += 1;
+          continue;
+        }
+
+        if (!cleanManualValue(row.enriched.wip_aging)) {
+          unresolved += 1;
+          if (unresolvedSamples.length < 5) {
+            unresolvedSamples.push(
+              `${row.enriched.ticket_id}:created=${String(row.enriched.case_created_time)}:rw=${String(row.match.renderways?.wipAging)}:closed=${row.carryForward.closedSyntheticRow}:retained=${row.carryForward.regionScopeRetainedRow}`,
+            );
+          }
         }
       }
+
+      console.info("[dailyCallPlanGenerator] WIP aging resolution", {
+        stage,
+        reportDate: input.reportDate,
+        regionId: input.regionId,
+        totalRows: rows.length,
+        fromRenderways,
+        computed,
+        missingCreatedTime,
+        unresolved,
+        unresolvedSamples,
+      });
     };
 
     if (!existingReportId) {
-      updateAging();
+      updateAging("fresh-report");
       await insertDailyCallPlanReportRows(client, reportId, rows);
     } else {
       rows = await applyPersistedRowMetadata(client, reportId, rows);
@@ -949,7 +986,7 @@ export async function generateDailyCallPlanReport(
       });
       // Recalculate again after applying metadata to ensure aging is up-to-date
       // and accounts for any manually updated case_created_time.
-      updateAging();
+      updateAging("existing-report");
     }
 
     // Surface raw Flex WIP Excel columns (those not already a mapped report
