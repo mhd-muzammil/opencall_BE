@@ -1,117 +1,4 @@
 import { query as pgQuery } from "../config/database.js";
-import {
-  extractPartLine,
-  filterReceivedParts,
-  type PartLine,
-} from "./normalization/dedupeRowsByTicket.js";
-
-/** One physical spare part to push into Inventory as its own HP Stock item. */
-interface SyncPart {
-  goodPartNumber: string;
-  partOrderNumber: string;
-  soNumber: string;
-  partDescription: string;
-  partShipmentStatus: string;
-}
-
-/**
- * Resolves the distinct spare parts of a case that should appear as Inventory
- * stock. A work order legitimately spans multiple part rows in the Flex WIP
- * upload, so this reads every flex row for the case (most recent batch first),
- * builds the distinct part lines, and returns:
- *
- * - the **received** (`RCV_SPARE`) parts, when any are marked received;
- * - none, when parts exist and carry status but none are received (all
- *   in-transit → the work order holds no stock yet);
- * - all distinct parts, when no row carries any installed-status info at all
- *   (legacy / unpopulated data — better to surface stock than hide it);
- * - a single fallback part from the joined display string only when the case
- *   has no structured flex part rows at all.
- */
-async function resolveCasePartsToSync(
-  caseId: string,
-  fallbackPart: string | null,
-): Promise<SyncPart[]> {
-  let distinct: PartLine[] = [];
-
-  try {
-    const res = await pgQuery<{ raw_row: Record<string, unknown> }>(
-      `
-        SELECT fw.raw_row AS raw_row
-        FROM flex_wip_records fw
-        JOIN source_upload_batches b ON b.id = fw.upload_batch_id
-        WHERE fw.case_id = $1 OR fw.normalized_case_id = $1
-        ORDER BY b.created_at DESC, fw.row_number ASC
-      `,
-      [caseId],
-    );
-
-    const seen = new Set<string>();
-    for (const r of res.rows) {
-      const part = extractPartLine({ rawRow: r.raw_row });
-      if (
-        part.goodPartNo === null &&
-        part.partOrderNo === null &&
-        part.partDescription === null
-      ) {
-        continue;
-      }
-      const key = `${(part.goodPartNo ?? "").toUpperCase()}|${(part.partOrderNo ?? "").toUpperCase()}`;
-      if (seen.has(key)) {
-        continue; // keep the most recent batch's copy of this part line
-      }
-      seen.add(key);
-      distinct.push(part);
-    }
-  } catch (e) {
-    console.error("[InventorySync] Failed to resolve case parts:", e);
-    distinct = [];
-  }
-
-  const received = filterReceivedParts(distinct);
-  const hasStatusInfo = distinct.some(
-    (part) => part.goodPartInstalledStatus !== null,
-  );
-
-  let chosen: PartLine[];
-  if (received.length > 0) {
-    chosen = received;
-  } else if (hasStatusInfo) {
-    chosen = []; // all in transit / not received → no stock in hand
-  } else {
-    chosen = distinct; // no status info anywhere → don't hide stock
-  }
-
-  if (chosen.length > 0) {
-    return chosen.map((part) => ({
-      goodPartNumber: part.goodPartNo ?? "",
-      partOrderNumber: part.partOrderNo ?? "",
-      soNumber: part.soNumber ?? "",
-      partDescription: part.partDescription ?? "",
-      partShipmentStatus: part.partShipmentStatus ?? "",
-    }));
-  }
-
-  // No structured flex parts for the case at all: fall back to the single
-  // display string (strip the muted "⏳ … in transit" hint) so legacy/backfill
-  // cases still sync one item. An "Awaiting parts" case holds no stock.
-  if (distinct.length === 0 && fallbackPart) {
-    const description = fallbackPart.split("  ⏳ ")[0]?.trim() ?? "";
-    if (description && description !== "Awaiting parts") {
-      return [
-        {
-          goodPartNumber: "",
-          partOrderNumber: "",
-          soNumber: "",
-          partDescription: description,
-          partShipmentStatus: "",
-        },
-      ];
-    }
-  }
-
-  return [];
-}
 
 export function mapAspCodeToRegion(workLocation: string | null | undefined): string {
   if (!workLocation) return "";
@@ -206,25 +93,12 @@ export async function inventoryFetch(
   return res;
 }
 
-/** True when an existing HP Stock item is the same physical part line as `part`. */
-function isSameStockPart(existing: Record<string, any>, part: SyncPart): boolean {
-  // Identity is (case_id + good part no + part order no). When the part carries
-  // no good-part number, fall back to case-only identity (legacy single-row).
-  if (!part.goodPartNumber) {
-    return true;
-  }
-  return (
-    String(existing.good_part_number ?? "") === part.goodPartNumber &&
-    String(existing.part_order_number ?? "") === part.partOrderNumber
-  );
-}
-
 async function syncViaInventoryApi(
   row: SyncRowInput,
   detailsString: string,
   detailsObj: any,
   latestMeta: any,
-  part: SyncPart,
+  partNumbers: { goodPartNumber: string; partOrderNumber: string; soNumber: string },
 ): Promise<void> {
   const caseId = String(row.case_id);
   const mappedRegion = mapAspCodeToRegion(row.work_location);
@@ -237,9 +111,9 @@ async function syncViaInventoryApi(
     }
   }
 
-  // 1. Look up an existing HP Stock item for THIS part line. The service user
-  //    must be an admin/super_admin/manager so this lookup is NOT region-scoped
-  //    — otherwise dedup would miss items in other regions and create duplicates.
+  // 1. Look up an existing HP Stock item by case_id. The service user must be an
+  //    admin/super_admin/manager so this lookup is NOT region-scoped — otherwise
+  //    dedup would miss items in other regions and create duplicates.
   const searchRes = await inventoryFetch(
     `/hp-stock/items/?search=${encodeURIComponent(caseId)}&per_page=100`,
     { method: "GET" },
@@ -252,10 +126,9 @@ async function syncViaInventoryApi(
   const searchData = (await searchRes.json()) as {
     items?: Array<Record<string, any>>;
   };
-  const sameCase = (searchData.items || []).filter(
+  const existing = (searchData.items || []).find(
     (it) => String(it.case_id) === caseId,
   );
-  const existing = sameCase.find((it) => isSameStockPart(it, part));
 
   if (!existing) {
     // 2a. Create a new HP Stock item (status starts at PENDING / "Stock Entry").
@@ -271,12 +144,11 @@ async function syncViaInventoryApi(
       status: "PENDING",
       engineer_name: row.engineer ?? "",
       engineer_phone: "",
-      part_description: part.partDescription,
-      part_shipment_status: part.partShipmentStatus,
+      part_description: row.part ?? "",
       customer_name: row.customer_name ?? "",
-      good_part_number: part.goodPartNumber,
-      part_order_number: part.partOrderNumber,
-      so_number: part.soNumber,
+      good_part_number: partNumbers.goodPartNumber,
+      part_order_number: partNumbers.partOrderNumber,
+      so_number: partNumbers.soNumber,
       inventory_details: detailsString,
       opencall_case_details: detailsObj,
       case_created_time: caseCreatedIso,
@@ -290,9 +162,7 @@ async function syncViaInventoryApi(
         `HP stock create failed (${res.status}): ${await res.text()}`,
       );
     }
-    console.info(
-      `[InventorySync] Created HPStockItem via API for case ${caseId} / part ${part.goodPartNumber || part.partDescription}`,
-    );
+    console.info(`[InventorySync] Created HPStockItem via API for case ${caseId}`);
   } else {
     // 2b. Refresh the latest-snapshot fields and fill blanks only. Never overwrite
     //     status or transition_history (transition_history is read-only in the API).
@@ -311,16 +181,14 @@ async function syncViaInventoryApi(
     if (nextEngineer && nextEngineer !== (existing.engineer_name ?? "")) {
       patch.engineer_name = nextEngineer;
     }
-    if (!existing.part_description) patch.part_description = part.partDescription;
-    if (!existing.part_shipment_status && part.partShipmentStatus)
-      patch.part_shipment_status = part.partShipmentStatus;
+    if (!existing.part_description) patch.part_description = row.part ?? "";
     if (!existing.customer_name) patch.customer_name = row.customer_name ?? "";
-    if (!existing.good_part_number && part.goodPartNumber)
-      patch.good_part_number = part.goodPartNumber;
-    if (!existing.part_order_number && part.partOrderNumber)
-      patch.part_order_number = part.partOrderNumber;
-    if (!existing.so_number && part.soNumber)
-      patch.so_number = part.soNumber;
+    if (!existing.good_part_number && partNumbers.goodPartNumber)
+      patch.good_part_number = partNumbers.goodPartNumber;
+    if (!existing.part_order_number && partNumbers.partOrderNumber)
+      patch.part_order_number = partNumbers.partOrderNumber;
+    if (!existing.so_number && partNumbers.soNumber)
+      patch.so_number = partNumbers.soNumber;
 
     const res = await inventoryFetch(`/hp-stock/items/${existing.id}/`, {
       method: "PATCH",
@@ -331,9 +199,7 @@ async function syncViaInventoryApi(
         `HP stock update failed (${res.status}): ${await res.text()}`,
       );
     }
-    console.info(
-      `[InventorySync] Updated HPStockItem via API for case ${caseId} / part ${part.goodPartNumber || part.partDescription}`,
-    );
+    console.info(`[InventorySync] Updated HPStockItem via API for case ${caseId}`);
   }
 }
 
@@ -485,25 +351,45 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
     console.error("[InventorySync] Failed to fetch case history/details from PG:", pgError);
   }
 
-  // A work order can span multiple spare parts (the Flex WIP export is one row
-  // per part). Resolve every received part for the case and push each as its own
-  // HP Stock item, keyed by (case_id + good part no + part order no), so a
-  // multi-part work order shows all its parts in Inventory — grouped under one
-  // collapsible work-order header — instead of just one.
-  const parts = await resolveCasePartsToSync(String(row.case_id), row.part);
-  if (parts.length === 0) {
-    return;
+  // Good Part No / Part Order No / SO Number live in the raw FieldEZ (Flex WIP)
+  // upload row (flex_wip_records.raw_row JSONB), not in the report row itself.
+  const partNumbers = { goodPartNumber: "", partOrderNumber: "", soNumber: "" };
+  try {
+    const pn = await pgQuery<{
+      good_part_number: string | null;
+      part_order_number: string | null;
+      so_number: string | null;
+    }>(
+      `
+        SELECT
+          fw.raw_row->>'Good Part No'  AS good_part_number,
+          fw.raw_row->>'Part Order No' AS part_order_number,
+          fw.raw_row->>'SO Number'     AS so_number
+        FROM flex_wip_records fw
+        JOIN source_upload_batches b ON b.id = fw.upload_batch_id
+        WHERE fw.case_id = $1 OR fw.normalized_case_id = $1
+        ORDER BY b.created_at DESC
+        LIMIT 1
+      `,
+      [row.case_id],
+    );
+    const p = pn.rows[0];
+    if (p) {
+      partNumbers.goodPartNumber = p.good_part_number ?? "";
+      partNumbers.partOrderNumber = p.part_order_number ?? "";
+      partNumbers.soNumber = p.so_number ?? "";
+    }
+  } catch (e) {
+    console.error("[InventorySync] part-number lookup failed:", e);
   }
 
   // Prod-grade sync: push through the Inventory HTTP API when configured.
   // Local dev without INVENTORY_API_URL falls back to the direct SQLite write below.
   if (process.env.INVENTORY_API_URL) {
-    for (const part of parts) {
-      try {
-        await syncViaInventoryApi(row, detailsString, detailsObj, latestMeta, part);
-      } catch (error) {
-        console.error("[InventorySync] Error syncing part to inventory API:", error);
-      }
+    try {
+      await syncViaInventoryApi(row, detailsString, detailsObj, latestMeta, partNumbers);
+    } catch (error) {
+      console.error("[InventorySync] Error syncing to inventory API:", error);
     }
     return;
   }
@@ -518,17 +404,99 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
     const { DatabaseSync } = await import("node:sqlite");
     db = new DatabaseSync(dbPath);
 
+    // Check if a record with case_id already exists in hp_stock_hpstockitem
+    const query = db.prepare("SELECT id, status FROM hp_stock_hpstockitem WHERE case_id = ?");
+    const existing = query.all(row.case_id) as Array<{ id: number; status: string }>;
+
     const mappedRegion = mapAspCodeToRegion(row.work_location);
-    for (const part of parts) {
-      upsertStockPartSqlite(
-        db,
-        row,
+    const now = new Date().toISOString();
+
+    if (existing.length === 0) {
+      // Insert new record
+      const insert = db.prepare(`
+        INSERT INTO hp_stock_hpstockitem (
+          case_id, work_order_id, delivery_no, service_event_no,
+          material_order_no, hp_sales_order_no, gvrma_no,
+          region, status, engineer_name, engineer_phone,
+          part_description, customer_name,
+          good_part_number, part_order_number, so_number, inventory_details,
+          opencall_case_details, transition_history, created_at, updated_at,
+          warranty_trade, part_shipment_status, dc_cut_request_message,
+          dc_cut_approved, dc_cut_chat,
+          case_created_time
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      insert.run(
+        row.case_id,          // case_id
+        row.ticket_id,        // work_order_id
+        "",                   // delivery_no
+        "",                   // service_event_no
+        "",                   // material_order_no
+        "",                   // hp_sales_order_no
+        "",                   // gvrma_no
+        mappedRegion,         // region
+        "PENDING",            // status (Stock Entry)
+        row.engineer ?? "",   // engineer_name
+        "",                   // engineer_phone
+        row.part ?? "",       // part_description
+        row.customer_name ?? "", // customer_name
+        partNumbers.goodPartNumber,   // good_part_number
+        partNumbers.partOrderNumber,  // part_order_number
+        partNumbers.soNumber,         // so_number
+        detailsString,        // inventory_details
+        caseDetailsJson,      // opencall_case_details
+        "[]",                 // transition_history
+        now,                  // created_at
+        now,                  // updated_at
+        "",                   // warranty_trade (NOT NULL, no DB default)
+        "",                   // part_shipment_status (NOT NULL, no DB default)
+        "",                   // dc_cut_request_message (NOT NULL, no DB default)
+        0,                    // dc_cut_approved (NOT NULL bool)
+        "[]",                 // dc_cut_chat (NOT NULL JSON list)
+        latestMeta?.case_created_time ?? null // case_created_time
+      );
+      console.info(`[InventorySync] Created new HPStockItem for case ${row.case_id}`);
+    } else {
+      // If it exists, update work_order_id, region, and engineer_name if they are empty or different
+      // but do NOT overwrite status or transition history to keep the workflow intact!
+      const update = db.prepare(`
+        UPDATE hp_stock_hpstockitem
+        SET 
+          work_order_id = COALESCE(NULLIF(work_order_id, ''), ?),
+          region = COALESCE(NULLIF(region, ''), ?),
+          -- Engineer name: push the latest OpenCall assignment (so re-assignments
+          -- propagate), but only when OpenCall actually has a name — never blank out
+          -- an existing value. Phone is not sourced here, so it is left untouched.
+          engineer_name = CASE WHEN NULLIF(TRIM(?), '') IS NOT NULL THEN TRIM(?) ELSE engineer_name END,
+          part_description = CASE WHEN part_description = '' OR part_description IS NULL THEN ? ELSE part_description END,
+          customer_name = CASE WHEN customer_name = '' OR customer_name IS NULL THEN ? ELSE customer_name END,
+          good_part_number = COALESCE(NULLIF(good_part_number, ''), ?),
+          part_order_number = COALESCE(NULLIF(part_order_number, ''), ?),
+          so_number = COALESCE(NULLIF(so_number, ''), ?),
+          inventory_details = ?,
+          opencall_case_details = ?,
+          case_created_time = ?,
+          updated_at = ?
+        WHERE case_id = ?
+      `);
+      update.run(
+        row.ticket_id,
         mappedRegion,
+        row.engineer ?? "", // engineer_name — CASE WHEN NULLIF(TRIM(?), '')...
+        row.engineer ?? "", // engineer_name — ...THEN TRIM(?) (same value, bound twice)
+        row.part ?? "",
+        row.customer_name ?? "",
+        partNumbers.goodPartNumber,
+        partNumbers.partOrderNumber,
+        partNumbers.soNumber,
         detailsString,
         caseDetailsJson,
-        latestMeta,
-        part,
+        latestMeta?.case_created_time ?? null,
+        now,
+        row.case_id
       );
+      console.info(`[InventorySync] Updated existing HPStockItem for case ${row.case_id}`);
     }
   } catch (error) {
     console.error("[InventorySync] Error syncing to inventory db:", error);
@@ -541,132 +509,4 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
       }
     }
   }
-}
-
-/**
- * Insert-or-update ONE HP Stock part row in the local SQLite DB, keyed on
- * (case_id + good part no + part order no) so each distinct part of a work order
- * is its own row. Updates target the matched row by id (never the whole case),
- * and never overwrite the workflow status / transition history.
- */
-function upsertStockPartSqlite(
-  db: any,
-  row: SyncRowInput,
-  mappedRegion: string,
-  detailsString: string,
-  caseDetailsJson: string,
-  latestMeta: any,
-  part: SyncPart,
-): void {
-  const now = new Date().toISOString();
-
-  const existing = (
-    part.goodPartNumber
-      ? db
-          .prepare(
-            "SELECT id, status FROM hp_stock_hpstockitem WHERE case_id = ? AND good_part_number = ? AND part_order_number = ?",
-          )
-          .all(row.case_id, part.goodPartNumber, part.partOrderNumber)
-      : db
-          .prepare("SELECT id, status FROM hp_stock_hpstockitem WHERE case_id = ?")
-          .all(row.case_id)
-  ) as Array<{ id: number; status: string }>;
-
-  if (existing.length === 0) {
-    const insert = db.prepare(`
-      INSERT INTO hp_stock_hpstockitem (
-        case_id, work_order_id, delivery_no, service_event_no,
-        material_order_no, hp_sales_order_no, gvrma_no,
-        region, status, engineer_name, engineer_phone,
-        part_description, customer_name,
-        good_part_number, part_order_number, so_number, inventory_details,
-        opencall_case_details, transition_history, created_at, updated_at,
-        warranty_trade, part_shipment_status, dc_cut_request_message,
-        dc_cut_approved, dc_cut_chat,
-        case_created_time
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    insert.run(
-      row.case_id,          // case_id
-      row.ticket_id,        // work_order_id
-      "",                   // delivery_no
-      "",                   // service_event_no
-      "",                   // material_order_no
-      "",                   // hp_sales_order_no
-      "",                   // gvrma_no
-      mappedRegion,         // region
-      "PENDING",            // status (Stock Entry)
-      row.engineer ?? "",   // engineer_name
-      "",                   // engineer_phone
-      part.partDescription, // part_description
-      row.customer_name ?? "", // customer_name
-      part.goodPartNumber,  // good_part_number
-      part.partOrderNumber, // part_order_number
-      part.soNumber,        // so_number
-      detailsString,        // inventory_details
-      caseDetailsJson,      // opencall_case_details
-      "[]",                 // transition_history
-      now,                  // created_at
-      now,                  // updated_at
-      "",                   // warranty_trade (NOT NULL, no DB default)
-      part.partShipmentStatus, // part_shipment_status
-      "",                   // dc_cut_request_message (NOT NULL, no DB default)
-      0,                    // dc_cut_approved (NOT NULL bool)
-      "[]",                 // dc_cut_chat (NOT NULL JSON list)
-      latestMeta?.case_created_time ?? null // case_created_time
-    );
-    console.info(
-      `[InventorySync] Created new HPStockItem for case ${row.case_id} / part ${part.goodPartNumber || part.partDescription}`,
-    );
-    return;
-  }
-
-  const match = existing[0];
-  if (!match) {
-    return;
-  }
-
-  // Update the matched part row by id. Fill blanks only; keep status/history.
-  const update = db.prepare(`
-    UPDATE hp_stock_hpstockitem
-    SET
-      work_order_id = COALESCE(NULLIF(work_order_id, ''), ?),
-      region = COALESCE(NULLIF(region, ''), ?),
-      -- Engineer name: push the latest OpenCall assignment (so re-assignments
-      -- propagate), but only when OpenCall actually has a name — never blank out
-      -- an existing value. Phone is not sourced here, so it is left untouched.
-      engineer_name = CASE WHEN NULLIF(TRIM(?), '') IS NOT NULL THEN TRIM(?) ELSE engineer_name END,
-      part_description = CASE WHEN part_description = '' OR part_description IS NULL THEN ? ELSE part_description END,
-      customer_name = CASE WHEN customer_name = '' OR customer_name IS NULL THEN ? ELSE customer_name END,
-      good_part_number = COALESCE(NULLIF(good_part_number, ''), ?),
-      part_order_number = COALESCE(NULLIF(part_order_number, ''), ?),
-      so_number = COALESCE(NULLIF(so_number, ''), ?),
-      part_shipment_status = CASE WHEN part_shipment_status = '' OR part_shipment_status IS NULL THEN ? ELSE part_shipment_status END,
-      inventory_details = ?,
-      opencall_case_details = ?,
-      case_created_time = ?,
-      updated_at = ?
-    WHERE id = ?
-  `);
-  update.run(
-    row.ticket_id,
-    mappedRegion,
-    row.engineer ?? "", // engineer_name — CASE WHEN NULLIF(TRIM(?), '')...
-    row.engineer ?? "", // engineer_name — ...THEN TRIM(?) (same value, bound twice)
-    part.partDescription,
-    row.customer_name ?? "",
-    part.goodPartNumber,
-    part.partOrderNumber,
-    part.soNumber,
-    part.partShipmentStatus,
-    detailsString,
-    caseDetailsJson,
-    latestMeta?.case_created_time ?? null,
-    now,
-    match.id,
-  );
-  console.info(
-    `[InventorySync] Updated existing HPStockItem for case ${row.case_id} / part ${part.goodPartNumber || part.partDescription}`,
-  );
 }
