@@ -15,6 +15,7 @@ import {
   normalizeTicketId,
 } from "../normalization/valueNormalizer.js";
 import { formatOpenCallPartCell } from "../normalization/dedupeRowsByTicket.js";
+import { pickWorkOrderShipmentStatus } from "@opencall/shared";
 import {
   calculateTAT,
   getLookupNumber,
@@ -278,6 +279,9 @@ function buildEnrichedRow(
     location: callPlan?.location ?? mapLocation(flexWip?.customerPincode, input.areaNameByPincode),
     contact: flexWip?.contact ?? null,
     part: buildPartCell(flexWip),
+    // Transient: the most-blocking part-shipment status, used only to derive
+    // the auto-RCA ETA at generation. Not persisted (see EnrichedCallPlanRow).
+    part_shipment_status: pickWorkOrderShipmentStatus(flexWip?.parts ?? null),
     product_serial_no: flexWip?.productSerialNo ?? null,
     wip_aging_category: renderways?.wipAgingCategory ?? null,
     tat: calculateTAT(renderways?.partnerAccept, slaHours),

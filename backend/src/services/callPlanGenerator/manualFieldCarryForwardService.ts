@@ -12,6 +12,7 @@ import {
   OPTIONAL_MANUAL_CARRY_FORWARD_FIELDS,
 } from "../../types/reportGeneration.js";
 import { getNormalizedTicketKey } from "../normalization/dedupeRowsByTicket.js";
+import { buildAutoRca, isPartCaseText } from "@opencall/shared";
 import {
   formatDailyCallPlanRow,
   MANUAL_ENTRY_REQUIRED,
@@ -414,6 +415,31 @@ export class ManualFieldCarryForwardService {
             }
             enriched.evening_rtpl_status = sourceEvening;
           }
+        }
+      }
+
+      // Feature B — auto-RCA for a fresh NEW call, written ONCE. Only when the
+      // row has no RCA yet, so a Renderways RCA (or, on later edits, a human
+      // RCA) always wins. Frozen after today: tomorrow this ticket matches a
+      // previous row (CARRIED) and its RCA carries forward unchanged.
+      if (!previousRow && !currentFieldValue(enriched, "rca")) {
+        const autoRca = buildAutoRca({
+          caseCreatedTime: enriched.case_created_time,
+          isPartCase: isPartCaseText(enriched.part),
+          partText: enriched.part,
+          partShipmentStatus: enriched.part_shipment_status ?? null,
+          engineer: enriched.engineer,
+          todayIso: input.currentReportDate,
+        });
+        if (autoRca) {
+          enriched.rca = autoRca;
+          // Mark rca as auto-populated. This makes it (a) persist on a fresh
+          // insert, (b) get BACKFILLED into the persisted row when an existing
+          // (pre-feature) report is re-opened — via applyPersistedRowMetadata's
+          // repair path — so the shown RCA is real and never "disappears" when
+          // the row is later edited/scheduled, and (c) carry forward day-to-day
+          // as inherited (the write-once/freeze behaviour).
+          carriedForwardFields.push("rca");
         }
       }
 

@@ -61,6 +61,12 @@ export interface EnrichedCallPlanRow {
   location: string | null;
   contact: string | null;
   part: string | null;
+  /**
+   * WO-level part-shipment status (most-blocking of the part lines) resolved at
+   * generation from flexWip.parts. TRANSIENT — used only to derive the auto-RCA
+   * ETA during generation; not mapped to an output column and not persisted.
+   */
+  part_shipment_status?: string | null;
   product_serial_no: string | null;
   wip_aging_category: string | null;
   tat: string | null;

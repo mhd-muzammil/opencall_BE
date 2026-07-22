@@ -290,6 +290,25 @@ interface FinalReportManualCarryForwardDbRow {
 function mapFinalReportManualCarryForwardRow(
   row: FinalReportManualCarryForwardDbRow,
 ): FinalReportManualCarryForwardRow {
+  // Typed as the FULL record (not Partial) on purpose: carry-forward reads every
+  // declared field through `manualValues`, so a field missing here is silently
+  // never carried. `case_created_time` was omitted for months — harmless while
+  // the Flex file always supplied it, then every aging went blank the day it
+  // didn't. This annotation turns that class of omission into a compile error.
+  const manualValues: Record<ManualCarryForwardField, string | null> = {
+    rtpl_status: row.rtpl_status,
+    segment: row.segment,
+    engineer: row.engineer,
+    location: row.location,
+    case_created_time: row.case_created_time,
+    status_aging: row.status_aging,
+    hp_owner_status: row.hp_owner_status,
+    customer_mail: row.customer_mail,
+    rca: row.rca,
+    remarks: row.remarks,
+    manual_notes: row.manual_notes,
+  };
+
   return {
     serialNo: row.serial_no,
     ticketId: row.ticket_id,
@@ -324,17 +343,7 @@ function mapFinalReportManualCarryForwardRow(
     sourceReportDate: row.source_report_date,
     changeType: row.change_type,
     sameDayClosed: row.same_day_closed ?? false,
-    manualValues: {
-      rtpl_status: row.rtpl_status,
-      segment: row.segment,
-      engineer: row.engineer,
-      location: row.location,
-      status_aging: row.status_aging,
-      customer_mail: row.customer_mail,
-      rca: row.rca,
-      remarks: row.remarks,
-      manual_notes: row.manual_notes,
-    },
+    manualValues,
   };
 }
 
