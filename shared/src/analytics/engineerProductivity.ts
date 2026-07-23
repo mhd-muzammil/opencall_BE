@@ -4,20 +4,21 @@
 //
 // Day-scoped model (per region, per working day):
 //
-//   Assigned = the day's PLAN, not the whole carried-open backlog. A call is in
-//              today's Assigned if EITHER
-//                - its current (Morning/RTPL) status is a scheduling status
-//                  (Scheduled / To be Scheduled / Engg Assigned) and an
-//                  engineer is set — carried-Scheduled counts; OR
-//                - it was WORKED today: it has a today Evening outcome (any
-//                  bucket, including CX Reschedule / Engineer Delay) or it
-//                  closed today (same-day closed row).
-//              A carried call nobody touched today (e.g. Part-Ordered from
-//              last week with a blank Evening) is backlog -> excluded.
-//   Attended = worked past the scheduling stage, from the Evening (today)
-//              status ONLY (or a same-day closure) — the Morning status never
-//              feeds an outcome bucket, so a stale carried "SSC Pending" can
-//              no longer count as Part-ordered/Attended.
+//   Assigned = the day's PLAN: what the coordinators BOOKED to the engineer.
+//              A call is in today's Assigned ONLY when its current
+//              (Morning/RTPL) status is a scheduling status (Scheduled /
+//              To be Scheduled / Engg Assigned) and an engineer is set —
+//              scheduling a call auto-writes the "Scheduled on <date>" remark,
+//              so the plan is exactly the booked set. Carried backlog in any
+//              other status (SSC Pending, Customer Pending, Under
+//              Observation, ...) is NOT Assigned — even when it gets a today
+//              Evening entry or closes today. Work on unplanned calls never
+//              inflates Assigned or the outcome columns.
+//   Attended = a PLANNED call worked past the scheduling stage, from the
+//              Evening (today) status ONLY (or a same-day closure) — the
+//              Morning status decides plan membership, never the outcome, so a
+//              stale carried "SSC Pending" can never count as
+//              Part-ordered/Attended.
 //            = CLOSED + PART_ORDER + UNDER_OBSERVATION + ATTENDED_OTHER.
 //              CX Reschedule and Engineer Delay are Assigned but NOT Attended.
 //
@@ -154,19 +155,34 @@ export function classifyProductivityStatus(
 
 /**
  * The day-scoped bucket for one row, or null when the row is NOT part of the
- * day's plan (untouched carried backlog / no usable status).
+ * day's plan (not booked / no usable status).
  *
- * Split-status rule: the Morning/current status decides plan membership only;
- * the Evening (today) status or a same-day closure decides the outcome. The
- * Morning status NEVER feeds an outcome bucket.
+ * Scheduled-gate rule: ONLY calls whose Morning/current status is at the
+ * scheduling stage are in the day's plan. Everything else — untouched carried
+ * backlog AND unplanned work (a today Evening entry or a same-day closure on a
+ * call that was never Scheduled) — is excluded, so Assigned is exactly the
+ * booked set. For planned calls the Evening (today) status or a same-day
+ * closure decides the outcome; the Morning status never feeds an outcome
+ * bucket.
  */
 export function resolveDayScopedProductivityBucket(
   row: ProductivityReportRow,
 ): ProductivityBucket | null {
+  // The plan gate: the Morning/current status must be a scheduling status.
+  // A same-day-closed synthetic row keeps the RTPL status it had before the
+  // ticket vanished from the Flex WIP, so a Scheduled call that closed today
+  // still passes this gate.
+  const morningBucket = classifyProductivityStatus(
+    morningProductivityStatus(row.output),
+  );
+  if (morningBucket !== "SCHEDULED") {
+    return null;
+  }
+
   // Most calls close by DISAPPEARING from the Flex WIP (closed in HP's
   // system). On the rows this calculation sees (Records-page-visible), a
-  // closed synthetic row IS a same-day closure — the engineer's completion
-  // today regardless of what the status columns say.
+  // closed synthetic row IS a same-day closure — the engineer completed the
+  // booked call today regardless of what the status columns say.
   if (row.carryForward.closedSyntheticRow || row.carryForward.sameDayClosedRow) {
     return "CLOSED";
   }
@@ -178,12 +194,8 @@ export function resolveDayScopedProductivityBucket(
     return classifyProductivityStatus(evening);
   }
 
-  // Not worked today: in the plan only while still at the scheduling stage
-  // (carried-Scheduled counts). Any other carried status is backlog.
-  const morningBucket = classifyProductivityStatus(
-    morningProductivityStatus(row.output),
-  );
-  return morningBucket === "SCHEDULED" ? "SCHEDULED" : null;
+  // Booked and untouched today: Assigned only.
+  return "SCHEDULED";
 }
 
 export interface ProductivityBucketCounts {
