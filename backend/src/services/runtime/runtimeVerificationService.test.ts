@@ -44,6 +44,7 @@ const FEATURE_TABLES = [
   "quotation_sequences",
   "region_eod_state",
   "region_productivity_snapshot",
+  "flex_raw_records",
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
@@ -84,6 +85,7 @@ const REQUIRED_COLUMNS: Record<string, string[]> = {
   ],
   report_comparisons: ["current_session_id", "previous_session_id", "summary_json"],
   report_row_diffs: ["ticket_id", "change_type", "changed_fields"],
+  flex_raw_records: ["source_month"],
 };
 
 /** Rows as information_schema would return them for the given tables. */

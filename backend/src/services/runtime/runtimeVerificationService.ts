@@ -87,6 +87,8 @@ const FEATURE_TABLES = [
   // migrate:region-eod — the Final-EOD endpoints 500 without these.
   "region_eod_state",
   "region_productivity_snapshot",
+  // migrate:flex-raw — the raw-data import and its region-card counts 500 without it.
+  "flex_raw_records",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [
@@ -135,6 +137,8 @@ const REQUIRED_COLUMNS: readonly RequiredColumn[] = [
   { tableName: "report_row_diffs", columnName: "ticket_id" },
   { tableName: "report_row_diffs", columnName: "change_type" },
   { tableName: "report_row_diffs", columnName: "changed_fields" },
+  // migrate:flex-raw-month — the raw-data summary/sync 500 without source_month.
+  { tableName: "flex_raw_records", columnName: "source_month" },
 ];
 
 export async function verifyRuntimeSchema(): Promise<RuntimeVerificationResult> {

@@ -1,9 +1,14 @@
 import { Router } from "express";
 import {
   getClosureDatesStatusController,
+  getClosureDatesSummaryController,
   importClosureDatesController,
+  listClosureDateRecordsController,
 } from "../controllers/closureDateController.js";
-import { requireAuthenticatedUser } from "../middlewares/authMiddleware.js";
+import {
+  requireAuthenticatedUser,
+  requirePrincipal,
+} from "../middlewares/authMiddleware.js";
 import { requireRole } from "../middlewares/roleMiddleware.js";
 import { closureUploadMiddleware } from "../middlewares/closureUploadMiddleware.js";
 
@@ -15,6 +20,18 @@ closureDateRouter.get(
   "/status",
   requireAuthenticatedUser,
   getClosureDatesStatusController,
+);
+
+closureDateRouter.get(
+  "/summary",
+  requirePrincipal,
+  getClosureDatesSummaryController,
+);
+
+closureDateRouter.get(
+  "/records",
+  requirePrincipal,
+  listClosureDateRecordsController,
 );
 
 closureDateRouter.post(

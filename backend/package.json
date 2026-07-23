@@ -29,6 +29,8 @@
     "migrate:quotations": "tsx src/scripts/applyQuotationsMigration.ts",
     "migrate:region-eod": "tsx src/scripts/applyRegionEodMigration.ts",
     "migrate:engineer-ids": "tsx src/scripts/applyEngineerHpVendorIdsMigration.ts",
+    "migrate:flex-raw": "tsx src/scripts/applyFlexRawRecordsMigration.ts",
+    "migrate:flex-raw-month": "tsx src/scripts/applyFlexRawMonthMigration.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
