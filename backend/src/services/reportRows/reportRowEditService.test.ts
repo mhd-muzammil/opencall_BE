@@ -230,3 +230,107 @@ describe("Feature A — scheduling requires an engineer + auto remark", () => {
     expect(lastPayload().remarks).toBe("keep me");
   });
 });
+
+describe("KCI logging — moving a status to Customer Pending appends to the RCA", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.updateDailyCallPlanReportRowManualFields.mockImplementation(
+      async (_id, payload) => editedRow({ rca: payload.rca ?? null }),
+    );
+  });
+
+  function lastPayload(): ReportRowEditPayload {
+    const [, payload] = mocks.updateDailyCallPlanReportRowManualFields.mock
+      .calls[0] as [string, ReportRowEditPayload];
+    return payload;
+  }
+
+  it("Morning -> Customer Pending appends remarks + KCI Done to the RCA", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({
+        rca: "Case Received on 9th July - active case",
+        remarks: "part quote to be shared",
+      }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { rtplStatus: "Customer Pending" },
+    });
+
+    const payload = lastPayload();
+    expect(payload.rca).toBe(
+      "Case Received on 9th July - active case - part quote to be shared - KCI Done",
+    );
+    // rca is marked set so it is not treated as carried-forward.
+    expect(payload.clearedCarryForwardFields).toContain("rca");
+  });
+
+  it("Evening -> Customer Pending uses the remarks saved in the same edit", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({ rca: "Base RCA", remarks: null }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { eveningRtplStatus: "Customer Pending", remarks: "cu need to pay" },
+    });
+
+    expect(lastPayload().rca).toBe("Base RCA - cu need to pay - KCI Done");
+  });
+
+  it("appends just KCI Done when there are no remarks", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({ rca: "Base RCA", remarks: null }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { rtplStatus: "Customer Pending" },
+    });
+
+    expect(lastPayload().rca).toBe("Base RCA - KCI Done");
+  });
+
+  it("fires on the TRANSITION only: an already-Customer-Pending row is untouched", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({
+        rtplStatus: "Customer Pending",
+        rca: "Base RCA",
+        remarks: "part quote to be shared",
+      }),
+    );
+
+    // Re-saving the same status and editing other fields must not append.
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { rtplStatus: "Customer Pending", location: "Chennai" },
+    });
+
+    expect(lastPayload().rca).toBe("Base RCA");
+    expect(lastPayload().clearedCarryForwardFields).not.toContain("rca");
+  });
+
+  it("never stacks duplicates when the RCA already ends with the segment", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({
+        rtplStatus: "Actionable",
+        rca: "Base RCA - part quote to be shared - KCI Done",
+        remarks: "part quote to be shared",
+      }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { rtplStatus: "Customer Pending" },
+    });
+
+    expect(lastPayload().rca).toBe("Base RCA - part quote to be shared - KCI Done");
+    expect(lastPayload().clearedCarryForwardFields).not.toContain("rca");
+  });
+});

@@ -16,6 +16,21 @@ export function isScheduledStatus(value: string | null | undefined): boolean {
 }
 
 /**
+ * The status that triggers the KCI (Keep Customer Informed) RCA rule: moving a
+ * status column to Customer Pending appends the current remarks + "KCI Done"
+ * to the RCA. Matching is case-insensitive/trimmed.
+ */
+export const CUSTOMER_PENDING_STATUS = "Customer Pending";
+
+export function isCustomerPendingStatus(
+  value: string | null | undefined,
+): boolean {
+  return (
+    (value ?? "").trim().toLowerCase() === CUSTOMER_PENDING_STATUS.toLowerCase()
+  );
+}
+
+/**
  * WO-level part-shipment status precedence, most-blocking first. A work order
  * can carry many part lines each with its own status; `pickWorkOrderShipmentStatus`
  * collapses them to the single most-blocking one for the RCA line.

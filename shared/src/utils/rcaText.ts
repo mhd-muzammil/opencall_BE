@@ -122,6 +122,35 @@ export function buildScheduledRemark(todayIso: string): string {
   return `Scheduled on ${formatOrdinalDate(todayIso)}`;
 }
 
+/** The customer-informed marker the Customer-Pending rule appends to the RCA. */
+export const KCI_DONE_MARKER = "KCI Done";
+
+/**
+ * The RCA line after a status moves to Customer Pending: the Current Remarks
+ * (when present) and "KCI Done" are appended to the existing RCA as " - "
+ * segments, keeping the RCA a running professional log:
+ *   "…existing rca - part quote to be shared - KCI Done"
+ * Idempotent: when the RCA already ends with the exact segment being added,
+ * it is returned unchanged — a repeat save can never stack duplicates.
+ * Placeholder values ("Manual Entry Required") count as empty.
+ */
+export function appendCustomerPendingKci(
+  rca: string | null | undefined,
+  remarks: string | null | undefined,
+): string {
+  const base = isMeaningful(rca) ? (rca ?? "").trim() : "";
+  const remark = isMeaningful(remarks) ? (remarks ?? "").trim() : "";
+  const suffix = remark ? `${remark} - ${KCI_DONE_MARKER}` : KCI_DONE_MARKER;
+
+  if (!base) {
+    return suffix;
+  }
+  if (base.toLowerCase().endsWith(suffix.toLowerCase())) {
+    return base;
+  }
+  return `${base} - ${suffix}`;
+}
+
 /**
  * "Part case" test on the displayed Part cell: a non-empty cell that isn't the
  * "Awaiting parts" placeholder (with or without an in-transit marker).

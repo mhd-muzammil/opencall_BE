@@ -15,7 +15,9 @@ import { findRegionById } from "../../repositories/regionRepository.js";
 import { workLocationMatchesRegion } from "../rbac/regionRowAccess.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
 import {
+  appendCustomerPendingKci,
   buildScheduledRemark,
+  isCustomerPendingStatus,
   isScheduledStatus,
   istTodayIso,
 } from "@opencall/shared";
@@ -275,6 +277,31 @@ export async function applyReportRowManualFieldEdit(input: {
     merged.remarks = buildScheduledRemark(istTodayIso());
     if (!clearedCarryForwardFields.includes("remarks")) {
       clearedCarryForwardFields.push("remarks");
+    }
+  }
+
+  // Feature — KCI logging: when THIS edit moves a status column (Morning or
+  // Evening) to Customer Pending, the Current Remarks + "KCI Done" are
+  // appended to the RCA, keeping it a running log. Transition-only (the
+  // column was not already Customer Pending) and idempotent inside
+  // appendCustomerPendingKci, so repeat saves never stack duplicates. Every
+  // other RCA rule (write-once auto-RCA at generation, human edits winning)
+  // is untouched — this only ever appends to whatever RCA the row holds.
+  const movedToCustomerPending =
+    (hasEditedField(values, "rtplStatus") &&
+      isCustomerPendingStatus(merged.rtplStatus) &&
+      !isCustomerPendingStatus(cleanEditableValue(current.rtplStatus))) ||
+    (hasEditedField(values, "eveningRtplStatus") &&
+      isCustomerPendingStatus(merged.eveningRtplStatus) &&
+      !isCustomerPendingStatus(cleanEditableValue(current.eveningRtplStatus)));
+
+  if (movedToCustomerPending) {
+    const appendedRca = appendCustomerPendingKci(merged.rca, merged.remarks);
+    if (appendedRca !== (merged.rca ?? "")) {
+      merged.rca = appendedRca;
+      if (!clearedCarryForwardFields.includes("rca")) {
+        clearedCarryForwardFields.push("rca");
+      }
     }
   }
 

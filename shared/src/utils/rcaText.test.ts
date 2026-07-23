@@ -5,13 +5,18 @@ import {
   parseFlexibleDate,
 } from "./dates.js";
 import {
+  appendCustomerPendingKci,
   buildAutoRca,
   buildScheduledRemark,
   isPartCaseText,
   pickWorkOrderShipmentStatus,
   resolveShipmentEta,
 } from "./rcaText.js";
-import { isScheduledStatus, SCHEDULED_STATUS } from "../constants/scheduling.js";
+import {
+  isCustomerPendingStatus,
+  isScheduledStatus,
+  SCHEDULED_STATUS,
+} from "../constants/scheduling.js";
 
 describe("parseFlexibleDate", () => {
   it("parses ISO year-first and Indian day-first, ignoring trailing time", () => {
@@ -147,6 +152,64 @@ describe("pickWorkOrderShipmentStatus", () => {
     expect(
       pickWorkOrderShipmentStatus([{ partShipmentStatus: "Awaiting Vendor" }]),
     ).toBe("Awaiting Vendor");
+  });
+});
+
+describe("appendCustomerPendingKci", () => {
+  it("appends remarks + KCI Done to an existing RCA", () => {
+    expect(
+      appendCustomerPendingKci(
+        "Case Received on 9th July - active case - engineer scheduled 15th July",
+        "part quote to be shared",
+      ),
+    ).toBe(
+      "Case Received on 9th July - active case - engineer scheduled 15th July - part quote to be shared - KCI Done",
+    );
+  });
+
+  it("appends only KCI Done when there are no remarks", () => {
+    expect(appendCustomerPendingKci("Existing RCA", "")).toBe(
+      "Existing RCA - KCI Done",
+    );
+    expect(appendCustomerPendingKci("Existing RCA", null)).toBe(
+      "Existing RCA - KCI Done",
+    );
+  });
+
+  it("starts the RCA from the segment when the RCA is empty or a placeholder", () => {
+    expect(appendCustomerPendingKci("", "cu need to pay")).toBe(
+      "cu need to pay - KCI Done",
+    );
+    expect(appendCustomerPendingKci("Manual Entry Required", "cu need to pay")).toBe(
+      "cu need to pay - KCI Done",
+    );
+    expect(appendCustomerPendingKci(null, null)).toBe("KCI Done");
+  });
+
+  it("is idempotent: a repeat save never stacks duplicates", () => {
+    const once = appendCustomerPendingKci("Base RCA", "part quote to be shared");
+    expect(appendCustomerPendingKci(once, "part quote to be shared")).toBe(once);
+    // Case-insensitive tail match.
+    expect(
+      appendCustomerPendingKci("base rca - part quote to be shared - kci done", "Part Quote To Be Shared"),
+    ).toBe("base rca - part quote to be shared - kci done");
+  });
+
+  it("treats placeholder remarks as empty", () => {
+    expect(appendCustomerPendingKci("Base RCA", "Manual Entry Required")).toBe(
+      "Base RCA - KCI Done",
+    );
+  });
+});
+
+describe("isCustomerPendingStatus", () => {
+  it("matches Customer Pending case-insensitively and nothing else", () => {
+    expect(isCustomerPendingStatus("Customer Pending")).toBe(true);
+    expect(isCustomerPendingStatus("  customer pending ")).toBe(true);
+    expect(isCustomerPendingStatus("CX Pending")).toBe(false);
+    expect(isCustomerPendingStatus("Customer Pending - callback")).toBe(false);
+    expect(isCustomerPendingStatus("")).toBe(false);
+    expect(isCustomerPendingStatus(null)).toBe(false);
   });
 });
 
