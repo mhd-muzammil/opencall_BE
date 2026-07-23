@@ -1,12 +1,17 @@
 // Per-region "Final EOD" day boundary for engineer productivity.
 //
 // Closing a region's day computes that region's productivity from the day's
-// report via the SAME shared function the live dashboard runs
+// PERSISTED report rows via the SAME shared function the live dashboard runs
 // (computeEngineerProductivity), persists it as a frozen snapshot and marks
 // the region-day CLOSED. Edits made afterwards no longer change the frozen
 // day — they roll into the region's next working day, whose plan is computed
 // from the next day's report. A SUPER_ADMIN can reopen a mistakenly-closed
 // region-day (snapshot deleted, region live again).
+//
+// INVARIANT: everything in this service is READ-ONLY with respect to the
+// day's report. Closing a day must never regenerate it — regenerating from a
+// region-scoped Flex batch mass-closes every other region's calls (the
+// 2026-07-23 incident).
 import {
   computeEngineerProductivity,
   type EngineerProductivityResult,
@@ -17,6 +22,10 @@ import {
   type ReportProductivityResponse,
 } from "@opencall/shared";
 import { withTransaction } from "../../config/database.js";
+import {
+  findProductivityRowsByReportId,
+  type ProductivityPersistedRow,
+} from "../../repositories/dailyCallPlanReportRepository.js";
 import { findLatestCompletedSessionByReportDate } from "../../repositories/historyRepository.js";
 import {
   deleteProductivitySnapshot,
@@ -35,9 +44,7 @@ import {
   type Region,
 } from "../../repositories/regionRepository.js";
 import type { AuthenticatedUser } from "../../types/auth.js";
-import type { GeneratedDailyCallPlanReport } from "../../types/reportGeneration.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
-import { generateDailyCallPlanReport } from "../callPlanGenerator/dailyCallPlanGenerator.js";
 import { findAllowedRegionsForUser } from "../rbac/regionAccessService.js";
 import { aspCodesForRegion } from "../rbac/regionRowAccess.js";
 
@@ -79,55 +86,50 @@ async function authorizeRegionDayAccess(
   return region;
 }
 
-/** Shared-calc row shape from a generated report row (explicit, cast-free). */
-function toProductivityRows(
-  report: GeneratedDailyCallPlanReport,
-): ProductivityReportRow[] {
-  return report.rows.map((row) => {
-    const output: Record<string, string | number> = {};
-    for (const [column, value] of Object.entries(row.output)) {
-      output[column] = value;
-    }
-    return {
-      serialNo: row.serialNo,
-      output,
-      carryForward: {
-        closedSyntheticRow: row.carryForward.closedSyntheticRow,
-        sameDayClosedRow: row.carryForward.sameDayClosedRow,
-      },
-      comparison: row.comparison
-        ? { previousFlexStatus: row.comparison.previousFlexStatus }
-        : null,
-    };
-  });
+/** Shared-calc row shape from a persisted report row (explicit, cast-free). */
+function toProductivityRow(row: ProductivityPersistedRow): ProductivityReportRow {
+  return {
+    serialNo: row.serialNo,
+    output: {
+      "Ticket ID": row.ticketId,
+      Engineer: row.engineer,
+      "RTPL status": row.rtplStatus,
+      "Evening status": row.eveningRtplStatus,
+      "Work Location": row.workLocation,
+      "Flex Status": row.flexStatus,
+    },
+    carryForward: {
+      closedSyntheticRow: row.closedSyntheticRow,
+      sameDayClosedRow: row.sameDayClosedRow,
+    },
+    comparison: null,
+  };
 }
 
 /**
- * Regenerate the day's report server-side — the exact flow the frontend uses
- * to restore a day from history (same session, same batches, deterministic).
- * allowCreate:false guarantees this can only reopen an existing report.
+ * The day's rows as PERSISTED for the latest completed session — strictly
+ * READ-ONLY. This must never regenerate the report: regeneration rewrites
+ * every region's rows from a single Flex batch, and when that batch is
+ * region-scoped it mass-closes every other region's calls (the 2026-07-23
+ * incident, triggered by exactly this close path). The persisted rows are
+ * also what the admin is looking at when they click Final EOD, so the frozen
+ * numbers match the screen by construction.
  */
-async function loadDayReport(
+async function loadDayProductivityRows(
   workingDate: string,
-  generatedBy: string,
-): Promise<GeneratedDailyCallPlanReport> {
+): Promise<ProductivityReportRow[]> {
   const session = await findLatestCompletedSessionByReportDate(workingDate);
-  if (!session?.flex_upload_batch_id) {
+  if (!session?.daily_call_plan_report_id) {
     throw unprocessableEntity(
       "No completed report exists for this working date",
       { workingDate },
     );
   }
 
-  return generateDailyCallPlanReport({
-    reportDate: workingDate,
-    generatedBy,
-    regionId: null,
-    flexUploadBatchId: session.flex_upload_batch_id,
-    renderwaysUploadBatchId: session.renderways_upload_batch_id,
-    callPlanUploadBatchId: session.call_plan_upload_batch_id,
-    allowCreate: false,
-  });
+  const rows = await findProductivityRowsByReportId(
+    session.daily_call_plan_report_id,
+  );
+  return rows.map(toProductivityRow);
 }
 
 function computeRegionProductivity(
@@ -166,13 +168,10 @@ export async function closeRegionEod(
     }
   }
 
-  // Compute the freeze OUTSIDE the state transaction (report regeneration
-  // manages its own transaction).
-  const report = await loadDayReport(workingDate, user.id);
-  const productivity = computeRegionProductivity(
-    toProductivityRows(report),
-    region,
-  );
+  // Compute the freeze OUTSIDE the state transaction, from the day's
+  // persisted rows — the close is read-only with respect to the report.
+  const rows = await loadDayProductivityRows(workingDate);
+  const productivity = computeRegionProductivity(rows, region);
 
   return withTransaction(async (client) => {
     // Re-check under the row lock: if another request closed the day while we
@@ -270,7 +269,7 @@ export async function getRegionEodState(
  * paths through the same shared function.
  */
 export async function getReportProductivity(
-  user: AuthenticatedUser,
+  _user: AuthenticatedUser,
   workingDate: string,
 ): Promise<ReportProductivityResponse> {
   assertValidWorkingDate(workingDate);
@@ -285,16 +284,14 @@ export async function getReportProductivity(
   );
   const snapshotByRegion = new Map(snapshots.map((s) => [s.regionId, s]));
 
-  // Regenerate the day's report once only if any region still needs a live
+  // Read the day's persisted rows once only if any region still needs a live
   // compute; a fully-frozen day is served purely from snapshots.
   const liveRegions = regions.filter(
     (region) =>
       !closedRegionIds.has(region.id) || !snapshotByRegion.has(region.id),
   );
   const liveRows =
-    liveRegions.length > 0
-      ? toProductivityRows(await loadDayReport(workingDate, user.id))
-      : [];
+    liveRegions.length > 0 ? await loadDayProductivityRows(workingDate) : [];
 
   const entries: RegionProductivityEntry[] = regions.map((region) => {
     const frozen = closedRegionIds.has(region.id)

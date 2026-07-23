@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngineerProductivityResult } from "@opencall/shared";
 import type { AuthenticatedUser } from "../../types/auth.js";
-import type { GeneratedDailyCallPlanReport } from "../../types/reportGeneration.js";
 
 const mocks = vi.hoisted(() => {
   interface StoredState {
@@ -24,6 +23,7 @@ const mocks = vi.hoisted(() => {
     snapshots,
     key,
     generateDailyCallPlanReport: vi.fn(),
+    findProductivityRowsByReportId: vi.fn(),
     findLatestCompletedSessionByReportDate: vi.fn(),
     findAllowedRegionsForUser: vi.fn(),
     findRegionById: vi.fn(),
@@ -36,8 +36,15 @@ vi.mock("../../config/database.js", () => ({
   withTransaction: (fn: (client: unknown) => Promise<unknown>) => fn({}),
 }));
 
+// The EOD service must be READ-ONLY over the day's report: it reads persisted
+// rows and must NEVER call the generator (regenerating from a region-scoped
+// batch mass-closes other regions — the 2026-07-23 incident).
 vi.mock("../callPlanGenerator/dailyCallPlanGenerator.js", () => ({
   generateDailyCallPlanReport: mocks.generateDailyCallPlanReport,
+}));
+
+vi.mock("../../repositories/dailyCallPlanReportRepository.js", () => ({
+  findProductivityRowsByReportId: mocks.findProductivityRowsByReportId,
 }));
 
 vi.mock("../../repositories/historyRepository.js", () => ({
@@ -176,7 +183,8 @@ const chennaiAdmin: AuthenticatedUser = {
   region_id: chennai.id,
 };
 
-function reportWithRows(
+/** Persisted-row shapes as findProductivityRowsByReportId returns them. */
+function persistedRows(
   rows: Array<{
     ticketId: string;
     engineer: string;
@@ -185,25 +193,18 @@ function reportWithRows(
     workLocation?: string;
     sameDayClosed?: boolean;
   }>,
-): GeneratedDailyCallPlanReport {
-  return {
-    rows: rows.map((row, index) => ({
-      serialNo: index + 1,
-      output: {
-        "Ticket ID": row.ticketId,
-        Engineer: row.engineer,
-        "RTPL status": row.morning ?? "",
-        "Evening status": row.evening ?? "",
-        "Work Location": row.workLocation ?? chennai.code,
-        "Flex Status": "Open",
-      },
-      carryForward: {
-        closedSyntheticRow: row.sameDayClosed ?? false,
-        sameDayClosedRow: row.sameDayClosed ?? false,
-      },
-      comparison: null,
-    })),
-  } as unknown as GeneratedDailyCallPlanReport;
+) {
+  return rows.map((row, index) => ({
+    serialNo: index + 1,
+    ticketId: row.ticketId,
+    engineer: row.engineer,
+    rtplStatus: row.morning ?? "",
+    eveningRtplStatus: row.evening ?? "",
+    workLocation: row.workLocation ?? chennai.code,
+    flexStatus: "Open",
+    closedSyntheticRow: row.sameDayClosed ?? false,
+    sameDayClosedRow: row.sameDayClosed ?? false,
+  }));
 }
 
 beforeEach(() => {
@@ -217,6 +218,7 @@ beforeEach(() => {
   mocks.listRegions.mockResolvedValue([chennai, vellore]);
   mocks.findLatestCompletedSessionByReportDate.mockResolvedValue({
     id: "session-1",
+    daily_call_plan_report_id: "report-1",
     flex_upload_batch_id: "6f5b0000-0000-4000-8000-000000000001",
     renderways_upload_batch_id: null,
     call_plan_upload_batch_id: null,
@@ -225,8 +227,8 @@ beforeEach(() => {
     async (user: AuthenticatedUser) =>
       user.role === "SUPER_ADMIN" ? null : [chennai],
   );
-  mocks.generateDailyCallPlanReport.mockResolvedValue(
-    reportWithRows([
+  mocks.findProductivityRowsByReportId.mockResolvedValue(
+    persistedRows([
       { ticketId: "W1", engineer: "Ravi", morning: "Scheduled" },
       { ticketId: "W2", engineer: "Ravi", morning: "Scheduled", evening: "Case-Closed" },
       { ticketId: "V1", engineer: "Vel", morning: "Scheduled", workLocation: vellore.code },
@@ -253,8 +255,8 @@ describe("closeRegionEod", () => {
     expect(first.snapshot.totalAttended).toBe(1);
 
     // The day's report changes after the close (an evening edit, a new call).
-    mocks.generateDailyCallPlanReport.mockResolvedValue(
-      reportWithRows([
+    mocks.findProductivityRowsByReportId.mockResolvedValue(
+      persistedRows([
         { ticketId: "W1", engineer: "Ravi", morning: "Scheduled", evening: "Case-Closed" },
         { ticketId: "W2", engineer: "Ravi", morning: "Scheduled", evening: "Case-Closed" },
         { ticketId: "W9", engineer: "Ravi", morning: "Scheduled", evening: "Case-Closed" },
@@ -300,6 +302,19 @@ describe("closeRegionEod", () => {
     await expect(
       closeRegionEod(superAdmin, chennai.id, WORKING_DATE),
     ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  // Regression for the 2026-07-23 mass-close: closing a region regenerated the
+  // whole day's report from the newest session's Flex batch; when that batch
+  // was region-scoped (one region's file), every other region's open call was
+  // treated as vanished-from-Flex and persisted as same-day CLOSED. The close
+  // and the productivity read must be strictly read-only over the report.
+  it("never regenerates the day's report — close and reads are read-only", async () => {
+    await closeRegionEod(superAdmin, chennai.id, WORKING_DATE);
+    await getReportProductivity(superAdmin, WORKING_DATE);
+
+    expect(mocks.generateDailyCallPlanReport).not.toHaveBeenCalled();
+    expect(mocks.findProductivityRowsByReportId).toHaveBeenCalledWith("report-1");
   });
 });
 

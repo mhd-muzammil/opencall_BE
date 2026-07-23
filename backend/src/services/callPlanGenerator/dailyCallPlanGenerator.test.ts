@@ -23,6 +23,9 @@ const mocks = vi.hoisted(() => ({
   findPreviousCompletedComparisonSession: vi.fn(),
   findComparableReportRowsBySessionId: vi.fn(),
   replaceReportComparison: vi.fn(),
+  findUploadBatchesForValidation: vi.fn(),
+  findRegionById: vi.fn(),
+  findMaxDailyCallPlanReportRowSerialNo: vi.fn(),
 }));
 
 vi.mock("../../config/database.js", () => ({
@@ -47,6 +50,8 @@ vi.mock("../../repositories/dailyCallPlanReportRepository.js", () => ({
   findFlexStatusHistoryForUnchangedDays:
     mocks.findFlexStatusHistoryForUnchangedDays,
   insertDailyCallPlanReportRows: mocks.insertDailyCallPlanReportRows,
+  findMaxDailyCallPlanReportRowSerialNo:
+    mocks.findMaxDailyCallPlanReportRowSerialNo,
 }));
 
 vi.mock("../../repositories/historyRepository.js", () => ({
@@ -73,6 +78,14 @@ vi.mock("../compareService/matchingEngine.js", () => ({
 
 vi.mock("./reportGenerationValidation.js", () => ({
   validateReportGenerationTransaction: mocks.validateReportGenerationTransaction,
+}));
+
+vi.mock("../../repositories/uploadBatchRepository.js", () => ({
+  findUploadBatchesForValidation: mocks.findUploadBatchesForValidation,
+}));
+
+vi.mock("../../repositories/regionRepository.js", () => ({
+  findRegionById: mocks.findRegionById,
 }));
 
 function previousFinalRow(): FinalReportManualCarryForwardRow {
@@ -194,6 +207,10 @@ function currentMatch(): MatchedCallPlanRecord {
 describe("generateDailyCallPlanReport", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: an unscoped (full-coverage) Flex batch — no batch-derived scope.
+    mocks.findUploadBatchesForValidation.mockResolvedValue([]);
+    mocks.findRegionById.mockResolvedValue(null);
+    mocks.findMaxDailyCallPlanReportRowSerialNo.mockResolvedValue(0);
   });
 
   it("does not let blank persisted RTPL erase previous-final carry-forward on existing reports", async () => {
@@ -332,5 +349,83 @@ describe("generateDailyCallPlanReport", () => {
     expect(
       mocks.backfillMissingDailyCallPlanReportRowCarryForward,
     ).not.toHaveBeenCalled();
+  });
+
+  // Regression for the 2026-07-23 mass-close: regenerating an EXISTING report
+  // from a REGION-SCOPED Flex batch used to run unrestricted, so every other
+  // region's carried ticket was "absent from Flex" -> persisted as CLOSED.
+  // The batch's own region must scope the regeneration: out-of-scope tickets
+  // are carried forward verbatim, never closed.
+  it("a region-scoped Flex batch never closes other regions' carried tickets", async () => {
+    const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
+    const client = {} as PoolClient;
+
+    mocks.withTransaction.mockImplementation(async (callback) => callback(client));
+    mocks.validateReportGenerationTransaction.mockResolvedValue("report-1");
+    mocks.findFlexWipRecordsByBatchId.mockResolvedValue([{ ticketId: "WO-123", rowNumber: 1 }]);
+    mocks.findRenderwaysRecordsByBatchId.mockResolvedValue([]);
+    mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
+    mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
+    mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+
+    // The file only covers Chennai (ASPS01461) — it is a region-scoped upload.
+    mocks.findUploadBatchesForValidation.mockResolvedValue([
+      { id: "batch-flex", regionId: "region-chn" },
+    ]);
+    mocks.findRegionById.mockResolvedValue({
+      id: "region-chn",
+      code: "CHN",
+      name: "Chennai",
+      isActive: true,
+      createdAt: "",
+    });
+
+    const inScope = currentMatch();
+    inScope.enrichedRow.work_location = "ASPS01461";
+
+    const chennaiPrevious = previousFinalRow();
+    chennaiPrevious.workLocation = "ASPS01461";
+    chennaiPrevious.manualValues = { ...chennaiPrevious.manualValues };
+
+    // A Hosur ticket carried from the previous report — absent from the
+    // Chennai file, and that absence must NOT close it.
+    const hosurPrevious = previousFinalRow();
+    hosurPrevious.ticketId = "WO-999";
+    hosurPrevious.workLocation = "ASPS01511";
+    hosurPrevious.rtplStatus = "Scheduled";
+    hosurPrevious.manualValues = {
+      ...hosurPrevious.manualValues,
+      rtpl_status: "Scheduled",
+    };
+
+    mocks.matchSourceRecords.mockReturnValue([inScope]);
+    mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([
+      chennaiPrevious,
+      hosurPrevious,
+    ]);
+    mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
+    mocks.findDailyCallPlanReportRowMetadataByReportId.mockResolvedValue([]);
+    mocks.findOrCreateCompletedHistorySessionForReport.mockResolvedValue({
+      id: "session-1",
+    });
+    mocks.findPreviousCompletedComparisonSession.mockResolvedValue(null);
+
+    const report = await generateDailyCallPlanReport({
+      reportDate: "2026-05-26",
+      generatedBy: "user-1",
+      regionId: null,
+      flexUploadBatchId: "batch-flex",
+      allowCreate: false,
+    });
+
+    const hosurRow = report.rows.find((row) => row.enriched.ticket_id === "WO-999");
+    expect(hosurRow).toBeDefined();
+    expect(hosurRow?.carryForward.closedSyntheticRow).toBe(false);
+    expect(hosurRow?.carryForward.sameDayClosedRow).toBe(false);
+    expect(hosurRow?.carryForward.changeType).not.toBe("CLOSED");
+    expect(hosurRow?.enriched.rtpl_status).toBe("Scheduled");
+
+    const chennaiRow = report.rows.find((row) => row.enriched.ticket_id === "WO-123");
+    expect(chennaiRow?.carryForward.closedSyntheticRow).toBe(false);
   });
 });

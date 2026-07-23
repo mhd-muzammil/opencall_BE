@@ -41,7 +41,10 @@ import type {
   ManualCarryForwardRowMetadata,
 } from "../../types/reportGeneration.js";
 import { MANUAL_CARRY_FORWARD_FIELDS } from "../../types/reportGeneration.js";
+import { findRegionById } from "../../repositories/regionRepository.js";
+import { findUploadBatchesForValidation } from "../../repositories/uploadBatchRepository.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
+import { aspCodesForRegion } from "../rbac/regionRowAccess.js";
 import { matchSourceRecords } from "../compareService/matchingEngine.js";
 import {
   dedupeRowsByTicket,
@@ -673,6 +676,27 @@ function assertNoResidualDuplicates(
   }
 }
 
+/**
+ * The work-location scope a region-scoped Flex batch imposes on generation,
+ * or null for a full (unscoped) batch. A scoped file only covers its own
+ * region, so tickets from other regions must be carried forward verbatim —
+ * never closed for being absent from it. Erring narrow is safe (out-of-scope
+ * rows are retained, not closed); erring wide is the mass-close bug.
+ */
+async function regionScopeForFlexBatch(
+  client: Parameters<typeof findFlexWipRecordsByBatchId>[0],
+  flexUploadBatchId: string,
+): Promise<Set<string> | null> {
+  const [batch] = await findUploadBatchesForValidation(client, [
+    flexUploadBatchId,
+  ]);
+  if (!batch?.regionId) {
+    return null;
+  }
+  const region = await findRegionById(batch.regionId);
+  return region ? aspCodesForRegion(region) : null;
+}
+
 export async function generateDailyCallPlanReport(
   input: GenerateDailyCallPlanInput,
 ): Promise<GeneratedDailyCallPlanReport> {
@@ -768,16 +792,23 @@ export async function generateDailyCallPlanReport(
       return valB - valA;
     });
 
-    // Region scope only applies when CREATING a report from a fresh upload. Reopening
-    // an existing report regenerates it unrestricted (as today) and relies on the
-    // response-level region filter, so a scoped regenerate can never rewrite another
-    // region's persisted rows.
+    // Region scope: explicit caller scope applies when CREATING a report from
+    // a fresh upload. Beyond that, a REGION-SCOPED Flex batch enforces its own
+    // region's scope on EVERY flow that regenerates from it (reopen, restore,
+    // any caller that passes no scope): a scoped file only contains one
+    // region's tickets, and regenerating unrestricted from it treats every
+    // other region's open call as "vanished from Flex" and mass-closes them —
+    // the 2026-07-23 incident, triggered by the Final-EOD close path.
+    const flexBatchRegionScope = await regionScopeForFlexBatch(
+      client,
+      input.flexUploadBatchId,
+    );
     const allowedWorkLocations =
       !existingReportId && input.allowedRegionAspCodes
         ? new Set(
             input.allowedRegionAspCodes.map((code) => code.trim().toUpperCase()),
           )
-        : null;
+        : flexBatchRegionScope;
     // Out-of-scope file rows are ignored entirely: a region-scoped upload adds no
     // new cases outside its regions, and its (possibly stale) data for other
     // regions' existing tickets is discarded — those tickets are carried forward

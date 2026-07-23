@@ -696,6 +696,70 @@ export async function findDailyCallPlanReportRowMetadataByReportId(
   return result.rows.map(mapPersistedReportRowMetadata);
 }
 
+/**
+ * The minimal PERSISTED row fields the engineer-productivity calculation
+ * needs. Reading these (instead of regenerating the report) is what keeps the
+ * Final-EOD freeze and the productivity endpoint strictly READ-ONLY: closing a
+ * region's day must never rewrite the day's report (regenerating from a
+ * region-scoped Flex batch is how the 2026-07-23 mass-close happened).
+ */
+export interface ProductivityPersistedRow {
+  serialNo: number;
+  ticketId: string;
+  engineer: string;
+  rtplStatus: string;
+  eveningRtplStatus: string;
+  workLocation: string;
+  flexStatus: string;
+  closedSyntheticRow: boolean;
+  sameDayClosedRow: boolean;
+}
+
+export async function findProductivityRowsByReportId(
+  reportId: string,
+): Promise<ProductivityPersistedRow[]> {
+  const result = await query<{
+    serial_no: number;
+    ticket_id: string | null;
+    engineer: string | null;
+    rtpl_status: string | null;
+    evening_rtpl_status: string | null;
+    work_location: string | null;
+    flex_status: string | null;
+    change_type: string | null;
+    same_day_closed: boolean | null;
+  }>(
+    `
+      SELECT
+        serial_no,
+        ticket_id,
+        engineer,
+        rtpl_status,
+        evening_rtpl_status,
+        work_location,
+        flex_status,
+        change_type::TEXT AS change_type,
+        same_day_closed
+      FROM daily_call_plan_report_rows
+      WHERE report_id = $1 AND NOT is_excluded
+      ORDER BY serial_no ASC, id ASC
+    `,
+    [reportId],
+  );
+
+  return result.rows.map((row) => ({
+    serialNo: row.serial_no,
+    ticketId: row.ticket_id ?? "",
+    engineer: row.engineer ?? "",
+    rtplStatus: row.rtpl_status ?? "",
+    eveningRtplStatus: row.evening_rtpl_status ?? "",
+    workLocation: row.work_location ?? "",
+    flexStatus: row.flex_status ?? "",
+    closedSyntheticRow: row.change_type === "CLOSED",
+    sameDayClosedRow: row.same_day_closed === true,
+  }));
+}
+
 export async function findPreviousFinalReportRowsForManualCarryForward(
   client: PoolClient,
   input: {
