@@ -6,14 +6,15 @@
 //
 //   Assigned = the day's PLAN: what the coordinators BOOKED to the engineer.
 //              A call is in today's Assigned ONLY when its current
-//              (Morning/RTPL) status is a scheduling status (Scheduled /
-//              To be Scheduled / Engg Assigned) and an engineer is set —
-//              scheduling a call auto-writes the "Scheduled on <date>" remark,
-//              so the plan is exactly the booked set. Carried backlog in any
-//              other status (SSC Pending, Customer Pending, Under
-//              Observation, ...) is NOT Assigned — even when it gets a today
-//              Evening entry or closes today. Work on unplanned calls never
-//              inflates Assigned or the outcome columns.
+//              (Morning/RTPL) status is EXACTLY "Scheduled" (isScheduledStatus
+//              — the same predicate that forces an engineer and auto-writes
+//              the "Scheduled on <date>" remark) and an engineer is set, so
+//              the plan is precisely the booked set. Pre-booking states
+//              ("To be Scheduled", "Engg Assigned") and carried backlog in
+//              any other status (SSC Pending, Customer Pending, Under
+//              Observation, ...) are NOT Assigned — even when they get a
+//              today Evening entry or close today. Work on unplanned calls
+//              never inflates Assigned or the outcome columns.
 //   Attended = a PLANNED call worked past the scheduling stage, from the
 //              Evening (today) status ONLY (or a same-day closure) — the
 //              Morning status decides plan membership, never the outcome, so a
@@ -31,6 +32,7 @@
 //   Engineer Delay                              -> ENGINEER_DELAY
 //   any other status                            -> ATTENDED_OTHER
 import { ASP_CODE_REGION_MAP } from "../constants/regions.js";
+import { isScheduledStatus } from "../constants/scheduling.js";
 
 export type ProductivityBucket =
   | "SCHEDULED"
@@ -168,14 +170,14 @@ export function classifyProductivityStatus(
 export function resolveDayScopedProductivityBucket(
   row: ProductivityReportRow,
 ): ProductivityBucket | null {
-  // The plan gate: the Morning/current status must be a scheduling status.
-  // A same-day-closed synthetic row keeps the RTPL status it had before the
-  // ticket vanished from the Flex WIP, so a Scheduled call that closed today
-  // still passes this gate.
-  const morningBucket = classifyProductivityStatus(
-    morningProductivityStatus(row.output),
-  );
-  if (morningBucket !== "SCHEDULED") {
+  // The plan gate: STRICTLY the booked status — the exact same predicate the
+  // edit guard uses when it demands an engineer and writes the "Scheduled on
+  // <date>" remark, so Assigned = precisely the calls booked through that
+  // flow. Pre-booking states ("To be Scheduled", "Engg Assigned") are NOT in
+  // the plan. A same-day-closed synthetic row keeps the RTPL status it had
+  // before the ticket vanished from the Flex WIP, so a Scheduled call that
+  // closed today still passes this gate.
+  if (!isScheduledStatus(morningProductivityStatus(row.output))) {
     return null;
   }
 
