@@ -456,6 +456,22 @@ export async function createDailyCallPlanReport(
   return row.id;
 }
 
+/** Highest persisted serial_no for a report (0 when the report has no rows). */
+export async function findMaxDailyCallPlanReportRowSerialNo(
+  client: PoolClient,
+  reportId: string,
+): Promise<number> {
+  const result = await client.query<{ max_serial: number | string | null }>(
+    `
+      SELECT MAX(serial_no) AS max_serial
+      FROM daily_call_plan_report_rows
+      WHERE report_id = $1
+    `,
+    [reportId],
+  );
+  return Number(result.rows[0]?.max_serial ?? 0);
+}
+
 export async function insertDailyCallPlanReportRows(
   client: PoolClient,
   reportId: string,

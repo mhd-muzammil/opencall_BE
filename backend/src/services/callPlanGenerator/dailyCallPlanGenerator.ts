@@ -10,6 +10,7 @@ import {
   createDailyCallPlanReport,
   findDailyCallPlanReportRowMetadataByReportId,
   findFlexStatusHistoryForUnchangedDays,
+  findMaxDailyCallPlanReportRowSerialNo,
   findPreviousFinalReportRowsForManualCarryForward,
   insertDailyCallPlanReportRows,
   overwriteCarriedForwardFieldValues,
@@ -987,6 +988,35 @@ export async function generateDailyCallPlanReport(
       // Recalculate again after applying metadata to ensure aging is up-to-date
       // and accounts for any manually updated case_created_time.
       updateAging("existing-report");
+
+      // A regeneration can synthesize rows the report has never stored: the
+      // carry-forward source is re-resolved on every run, so tickets that
+      // entered the source AFTER this report was created arrive here with no
+      // persisted counterpart (id = null). They render on Records but every
+      // edit fails with "row has not been persisted yet" — persist them now,
+      // appended after the report's existing serials (report_id+serial_no is
+      // UNIQUE). Runs under the same advisory lock as the rest of generation,
+      // so a concurrent regeneration cannot double-insert.
+      const unpersistedRows = rows.filter((row) => !row.id);
+      if (unpersistedRows.length > 0) {
+        let nextSerial = await findMaxDailyCallPlanReportRowSerialNo(
+          client,
+          reportId,
+        );
+        for (const row of unpersistedRows) {
+          nextSerial += 1;
+          row.serialNo = nextSerial;
+        }
+        await insertDailyCallPlanReportRows(client, reportId, unpersistedRows);
+        console.info("[dailyCallPlanGenerator] persisted late synthetic rows", {
+          reportDate: input.reportDate,
+          reportId,
+          insertedRows: unpersistedRows.length,
+          sampleTickets: unpersistedRows
+            .slice(0, 5)
+            .map((row) => row.enriched.ticket_id),
+        });
+      }
     }
 
     // Surface raw Flex WIP Excel columns (those not already a mapped report
