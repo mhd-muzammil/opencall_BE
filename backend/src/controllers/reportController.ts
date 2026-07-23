@@ -57,7 +57,7 @@ export const generateDailyCallPlanReportController: RequestHandler =
     });
     // Still validated for everyone: a REGION_ADMIN naming another region is
     // rejected here, exactly as before.
-    const requestedRegionId = resolveEffectiveRegionId(
+    const requestedRegionId = await resolveEffectiveRegionId(
       currentUser,
       body.regionId ?? null,
     );

@@ -11,7 +11,7 @@ export const matchPreviewController: RequestHandler = asyncHandler(
   async (request, response) => {
     const currentUser = requireCurrentUser(request.currentUser);
     const input = matchPreviewRequestSchema.parse(request.body);
-    const regionId = resolveEffectiveRegionId(
+    const regionId = await resolveEffectiveRegionId(
       currentUser,
       request.header("x-region-id") ?? null,
     );

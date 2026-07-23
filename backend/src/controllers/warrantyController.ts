@@ -19,7 +19,7 @@ const XLSX_CONTENT_TYPE =
 export const createWarrantyJobController: RequestHandler = asyncHandler(
   async (request, response) => {
     const currentUser = requireCurrentUser(request.currentUser);
-    const regionId = resolveEffectiveRegionId(
+    const regionId = await resolveEffectiveRegionId(
       currentUser,
       request.header("x-region-id") ?? request.body?.regionId ?? null,
     );

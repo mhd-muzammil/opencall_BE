@@ -17,7 +17,7 @@ export const uploadReportsController: RequestHandler = asyncHandler(
       uploadedBy: currentUser.id,
       regionId: request.header("x-region-id") ?? request.body.regionId ?? null,
     });
-    const regionId = resolveEffectiveRegionId(
+    const regionId = await resolveEffectiveRegionId(
       currentUser,
       metadata.regionId ?? null,
     );
