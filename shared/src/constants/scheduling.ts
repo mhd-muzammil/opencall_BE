@@ -23,6 +23,7 @@ export function isScheduledStatus(value: string | null | undefined): boolean {
 export const PART_SHIPMENT_STATUS_PRECEDENCE = [
   "Backordered",
   "Recommended",
+  "Ordered",
   "Locked",
   "Shipped",
   "POD",
@@ -32,8 +33,9 @@ export const PART_SHIPMENT_STATUS_PRECEDENCE = [
 /**
  * The single source of truth mapping a part-shipment status to its RCA ETA.
  * `label` = a literal ETA string; `offsetDays` = an ETA date derived purely
- * from case_created_time (Shipped/Locked = +1 calendar day, POD = same day).
- * An unknown status is echoed verbatim (handled in `resolveShipmentEta`).
+ * from case_created_time (Ordered = +2 calendar days, Shipped/Locked = +1,
+ * POD = same day). An unknown status is echoed verbatim (handled in
+ * `resolveShipmentEta`).
  */
 export type ShipmentEtaRule =
   | { readonly kind: "label"; readonly label: string }
@@ -42,6 +44,7 @@ export type ShipmentEtaRule =
 export const PART_SHIPMENT_ETA: Readonly<Record<string, ShipmentEtaRule>> = {
   recommended: { kind: "label", label: "Part Recommended" },
   backordered: { kind: "label", label: "Backordered" },
+  ordered: { kind: "offsetDays", offsetDays: 2 },
   shipped: { kind: "offsetDays", offsetDays: 1 },
   locked: { kind: "offsetDays", offsetDays: 1 },
   pod: { kind: "offsetDays", offsetDays: 0 },

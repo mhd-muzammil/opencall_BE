@@ -77,10 +77,16 @@ describe("resolveShipmentEta", () => {
   it("maps each known status", () => {
     expect(resolveShipmentEta("Recommended", CREATED)).toBe("Part Recommended");
     expect(resolveShipmentEta("Backordered", CREATED)).toBe("Backordered");
+    expect(resolveShipmentEta("Ordered", CREATED)).toBe("21st July"); // +2 days
     expect(resolveShipmentEta("Shipped", CREATED)).toBe("20th July"); // +1 day
     expect(resolveShipmentEta("Locked", CREATED)).toBe("20th July"); // +1 day
     expect(resolveShipmentEta("POD", CREATED)).toBe("19th July"); // same day
     expect(resolveShipmentEta("Closed", CREATED)).toBe("Closed");
+  });
+
+  it("Ordered: case received 16th -> ETA 18th (+2 calendar days)", () => {
+    expect(resolveShipmentEta("Ordered", "2026-07-16")).toBe("18th July");
+    expect(resolveShipmentEta(" ordered ", "2026-07-16")).toBe("18th July");
   });
 
   it("is case-insensitive and trims", () => {
@@ -112,6 +118,19 @@ describe("pickWorkOrderShipmentStatus", () => {
     expect(
       pickWorkOrderShipmentStatus([
         { partShipmentStatus: "POD" },
+        { partShipmentStatus: "Recommended" },
+      ]),
+    ).toBe("Recommended");
+    // Ordered sits between Recommended and Locked/Shipped.
+    expect(
+      pickWorkOrderShipmentStatus([
+        { partShipmentStatus: "Shipped" },
+        { partShipmentStatus: "Ordered" },
+      ]),
+    ).toBe("Ordered");
+    expect(
+      pickWorkOrderShipmentStatus([
+        { partShipmentStatus: "Ordered" },
         { partShipmentStatus: "Recommended" },
       ]),
     ).toBe("Recommended");

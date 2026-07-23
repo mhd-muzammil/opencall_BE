@@ -56,8 +56,9 @@ export function pickWorkOrderShipmentStatus(
  * The ETA label for a part-shipment status, derived purely from
  * case_created_time (NOT from any delivery-date field):
  *   Recommended -> "Part Recommended", Backordered -> "Backordered",
- *   Shipped/Locked -> created + 1 day (ordinal), POD -> created (same day),
- *   Closed -> "Closed", any other status -> that status verbatim.
+ *   Ordered -> created + 2 days (ordinal), Shipped/Locked -> created + 1 day,
+ *   POD -> created (same day), Closed -> "Closed",
+ *   any other status -> that status verbatim.
  * Case-insensitive/trimmed.
  */
 export function resolveShipmentEta(
