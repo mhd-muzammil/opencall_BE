@@ -75,6 +75,26 @@ export function itemMatchesPart(
   return !itemPo && !itemGp;
 }
 
+/**
+ * The existing item a part should update, from the not-yet-claimed items. A
+ * keyed part (has a Part Order No / Good Part No) matches by identity. An
+ * UNKEYED part (no numbers — the Flex export carried none) can't be told apart
+ * from any item, so it ADOPTS any unclaimed item rather than spawning a blank
+ * duplicate; the caller only creates a fresh item for it when the case has none.
+ */
+export function findItemForPart<
+  T extends { part_order_number?: string | null; good_part_number?: string | null },
+>(
+  items: readonly T[],
+  part: CasePartNumbers,
+  isClaimed: (item: T) => boolean,
+): T | undefined {
+  if (partIdentity(part)) {
+    return items.find((it) => !isClaimed(it) && itemMatchesPart(it, part));
+  }
+  return items.find((it) => !isClaimed(it));
+}
+
 const EMPTY_PART: CasePartNumbers = {
   goodPartNumber: "",
   partOrderNumber: "",
@@ -239,12 +259,16 @@ async function syncCasePartsViaApi(
   // 2. Upsert one item per part, matching on (case_id + part). `claimed` stops a
   //    single existing item from being assigned to two parts.
   const claimed = new Set<unknown>();
+  let itemCount = caseItems.length;
   for (const part of parts) {
-    const existing = caseItems.find(
-      (it) => !claimed.has(it.id) && itemMatchesPart(it, part),
-    );
+    const existing = findItemForPart(caseItems, part, (it) => claimed.has(it.id));
 
     if (!existing) {
+      // An unkeyed part (no numbers) must never spawn a blank duplicate when the
+      // case already has an item — skip it; a later export with real numbers
+      // will add it as its own item.
+      if (!partIdentity(part) && itemCount > 0) continue;
+      itemCount += 1;
       // 2a. Create a new HP Stock item (status starts at PENDING / "Stock Entry").
       const body = {
         case_id: row.case_id,
@@ -547,12 +571,15 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
     `);
 
     const claimed = new Set<number>();
+    let itemCount = existingItems.length;
     for (const part of parts) {
-      const existing = existingItems.find(
-        (it) => !claimed.has(it.id) && itemMatchesPart(it, part),
-      );
+      const existing = findItemForPart(existingItems, part, (it) => claimed.has(it.id));
 
       if (!existing) {
+        // Never spawn a blank duplicate for an unkeyed part when the case
+        // already has an item (see the API path).
+        if (!partIdentity(part) && itemCount > 0) continue;
+        itemCount += 1;
         insert.run(
           row.case_id,          // case_id
           row.ticket_id,        // work_order_id

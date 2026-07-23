@@ -27,6 +27,7 @@ import {
   fetchCaseParts,
   inventoryFetch,
   itemMatchesPart,
+  partIdentity,
   syncPartToInventory,
   type CasePartNumbers,
 } from "../services/inventorySyncService.js";
@@ -186,9 +187,22 @@ async function main(): Promise<void> {
   for (const caseId of caseIds) {
     const items = openByCase.get(caseId) ?? [];
     const parts = await fetchCaseParts(caseId);
-    const missing = parts.filter(
-      (p) => !items.some((it) => itemMatchesPart(it, p)),
-    );
+    // A keyed part is missing when no item matches its identity. An unkeyed
+    // (no-number) part is NOT missing when the case already has any item — it
+    // would only create a blank duplicate, so it never counts as missing.
+    const claimed = new Set<number>();
+    const missing: CasePartNumbers[] = [];
+    for (const p of parts) {
+      const idx = partIdentity(p)
+        ? items.findIndex((it, i) => !claimed.has(i) && itemMatchesPart(it, p))
+        : items.findIndex((_, i) => !claimed.has(i));
+      if (idx >= 0) {
+        claimed.add(idx);
+        continue;
+      }
+      if (!partIdentity(p) && items.length > 0) continue;
+      missing.push(p);
+    }
     if (missing.length > 0) {
       plan.push({
         caseId,

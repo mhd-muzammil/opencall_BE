@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   dedupeCaseParts,
+  findItemForPart,
   itemMatchesPart,
   partIdentity,
   type CasePartNumbers,
@@ -96,5 +97,30 @@ describe("itemMatchesPart", () => {
     );
     expect(missing).toHaveLength(1);
     expect(missing[0]?.partOrderNumber).toBe("MO-717006912");
+  });
+});
+
+describe("findItemForPart — unkeyed parts adopt, never duplicate", () => {
+  const items = [
+    { id: 1, part_order_number: "MO-716945726", good_part_number: "P13341-601" },
+  ];
+
+  it("a keyed part matches its item by identity", () => {
+    const hit = findItemForPart(items, part("MO-716945726", "P13341-601"), () => false);
+    expect(hit?.id).toBe(1);
+    const miss = findItemForPart(items, part("MO-717006912", "L40098-001"), () => false);
+    expect(miss).toBeUndefined();
+  });
+
+  it("an unkeyed (no-number) part ADOPTS the existing item instead of adding a blank", () => {
+    // The regression behind the "(no number)" backfill junk: an unkeyed part
+    // must reuse the case's item, not create a second blank one.
+    const adopted = findItemForPart(items, part("", ""), () => false);
+    expect(adopted?.id).toBe(1);
+  });
+
+  it("an unkeyed part with NO unclaimed item is unmatched (caller creates only if the case is empty)", () => {
+    expect(findItemForPart(items, part("", ""), (it) => it.id === 1)).toBeUndefined();
+    expect(findItemForPart([], part("", ""), () => false)).toBeUndefined();
   });
 });
