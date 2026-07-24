@@ -389,31 +389,41 @@ export class ManualFieldCarryForwardService {
           carriedForwardFields.push(field);
         }
 
-        // Morning / Evening day-boundary promotion. Fresh generated rows always
-        // arrive with a blank Morning here; for existing reports the persisted
-        // Morning/Evening are restored later (applyPersistedRowMetadata), which
-        // overrides this.
-        if (!currentFieldValue(enriched, "rtpl_status")) {
+        // Morning / Evening day-boundary rules. A fresh row's Morning is NOT
+        // always blank here — matchingEngine seeds rtpl_status from the
+        // Renderways file / call-plan morningStatus — so the Evening rule must
+        // not hide behind the Morning-promotion gate: skipping it silently
+        // wiped the same-day Evening work of every file-scheduled row on a
+        // re-upload. Morning promotion still only fills a blank Morning; the
+        // Evening rule now applies to every matched row. For existing reports
+        // the persisted Morning/Evening are restored later
+        // (applyPersistedRowMetadata), which overrides this.
+        {
           const sourceMorning = cleanManualValue(previousRow.rtplStatus);
           const sourceEvening = cleanManualValue(previousRow.eveningRtplStatus);
+          const morningIsBlank = !currentFieldValue(enriched, "rtpl_status");
 
           if (sourceIsPriorDay(previousRow, input.currentReportDate)) {
             // New day: yesterday's Evening becomes today's Morning (fall back to
             // yesterday's Morning if Evening was left blank); Evening starts empty.
-            const promotedMorning = sourceEvening ?? sourceMorning;
-            if (promotedMorning) {
-              assignManualField(enriched, "rtpl_status", promotedMorning);
-              carriedForwardFields.push("rtpl_status");
+            if (morningIsBlank) {
+              const promotedMorning = sourceEvening ?? sourceMorning;
+              if (promotedMorning) {
+                assignManualField(enriched, "rtpl_status", promotedMorning);
+                carriedForwardFields.push("rtpl_status");
+              }
             }
             enriched.evening_rtpl_status = null;
           } else {
             // Same-day re-upload: keep the Morning baseline and preserve the
-            // Evening work entered earlier today.
-            if (sourceMorning) {
+            // Evening work entered earlier today — even when today's files
+            // already supplied the Morning.
+            if (morningIsBlank && sourceMorning) {
               assignManualField(enriched, "rtpl_status", sourceMorning);
               carriedForwardFields.push("rtpl_status");
             }
-            enriched.evening_rtpl_status = sourceEvening;
+            enriched.evening_rtpl_status =
+              cleanManualValue(enriched.evening_rtpl_status) ?? sourceEvening;
           }
         }
       }

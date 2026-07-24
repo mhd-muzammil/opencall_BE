@@ -261,6 +261,48 @@ describe("ManualFieldCarryForwardService", () => {
     expect(row?.enriched.evening_rtpl_status).toBe("Closed");
   });
 
+  it("preserves Evening on a same-day re-upload even when today's files supplied the Morning", () => {
+    // Regression: matchingEngine seeds rtpl_status from the Renderways file /
+    // call-plan morningStatus, so a fresh row can arrive with Morning already
+    // set. The Evening rule used to hide behind the blank-Morning gate, which
+    // wiped the same-day Evening work of every file-scheduled row on re-upload.
+    const result = service.apply({
+      currentReportDate: "2026-03-28",
+      currentRows: [generatedRow({ rtpl_status: "Scheduled", segment: "Print" })],
+      previousFinalRows: [
+        previousFinalRow({
+          rtplStatus: "Scheduled",
+          eveningRtplStatus: "Customer Pending",
+          sourceReportDate: "2026-03-28",
+        }),
+      ],
+    });
+
+    const [row] = result.rows;
+    // Morning keeps the file-supplied value (not carried); Evening survives.
+    expect(row?.enriched.rtpl_status).toBe("Scheduled");
+    expect(row?.carryForward.carriedForwardFields).not.toContain("rtpl_status");
+    expect(row?.enriched.evening_rtpl_status).toBe("Customer Pending");
+  });
+
+  it("still clears Evening for the new day when today's files supplied the Morning", () => {
+    const result = service.apply({
+      currentReportDate: "2026-03-28",
+      currentRows: [generatedRow({ rtpl_status: "Scheduled", segment: "Print" })],
+      previousFinalRows: [
+        previousFinalRow({
+          rtplStatus: "Open",
+          eveningRtplStatus: "Closed",
+          sourceReportDate: "2026-03-27",
+        }),
+      ],
+    });
+
+    const [row] = result.rows;
+    expect(row?.enriched.rtpl_status).toBe("Scheduled");
+    expect(row?.enriched.evening_rtpl_status).toBeNull();
+  });
+
   it("never carries the segment forward, even when the current value is blank", () => {
     const result = service.apply({
       currentReportDate: "2026-03-28",
