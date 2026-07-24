@@ -224,7 +224,6 @@ describe("insertDailyCallPlanReportRows", () => {
 
     const rows = await findPreviousFinalReportRowsForManualCarryForward(client, {
       reportDate: "2026-07-21",
-      regionId: "region-1",
     });
 
     expect(rows[0]?.manualValues.case_created_time).toBe("2026-06-06T10:08:12.522Z");
@@ -243,7 +242,6 @@ describe("insertDailyCallPlanReportRows", () => {
 
     await findPreviousFinalReportRowsForManualCarryForward(client, {
       reportDate: "2026-07-08",
-      regionId: "region-1",
       excludeReportId: "report-current",
     });
 
@@ -253,8 +251,33 @@ describe("insertDailyCallPlanReportRows", () => {
     // morning report's manual work, not just yesterday's final report.
     expect(sql).toContain("effective_report_date <= $1::date");
     // The report being (re)generated must never be its own carry-forward source.
-    expect(sql).toContain("report_id::text <> $3::text");
-    expect(values).toEqual(["2026-07-08", "region-1", "report-current"]);
+    expect(sql).toContain("report_id::text <> $2::text");
+    expect(values).toEqual(["2026-07-08", "report-current"]);
+  });
+
+  it("selects the source across regions and by upload order, immune to reopens", async () => {
+    // Regression (prod 2026-07-24): the source query filtered sessions by the
+    // requester's region_id and ordered same-day ties by updated_at. A
+    // different admin's next upload (different region selection) could not see
+    // today's earlier report, so carry-forward fell back to a PRIOR day and
+    // the day-boundary rule wiped every Evening entered earlier today; and a
+    // mere reopen (which bumps updated_at) could promote a stale same-day
+    // report over the one holding the day's Evening work.
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const client = { query } as unknown as PoolClient;
+
+    await findPreviousFinalReportRowsForManualCarryForward(client, {
+      reportDate: "2026-07-24",
+      excludeReportId: "report-current",
+    });
+
+    const [sql] = query.mock.calls[0] as [string, unknown[]];
+
+    expect(sql).not.toContain("region_id IS NOT DISTINCT FROM");
+    expect(sql).toContain(
+      "ORDER BY effective_report_date DESC, created_at DESC, id DESC",
+    );
+    expect(sql).not.toContain("updated_at DESC");
   });
 
   it("passes a null exclusion when generating a brand-new report", async () => {
@@ -263,11 +286,10 @@ describe("insertDailyCallPlanReportRows", () => {
 
     await findPreviousFinalReportRowsForManualCarryForward(client, {
       reportDate: "2026-07-08",
-      regionId: "region-1",
     });
 
     const [, values] = query.mock.calls[0] as [string, unknown[]];
-    expect(values[2]).toBeNull();
+    expect(values[1]).toBeNull();
   });
 
   it("updates only the addressed report row for persisted manual edits", async () => {

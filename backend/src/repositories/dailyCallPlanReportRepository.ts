@@ -765,7 +765,6 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
   client: PoolClient,
   input: {
     reportDate: string;
-    regionId: string | null;
     // The report currently being (re)generated, so carry-forward never sources
     // from itself. Null when generating a brand-new report.
     excludeReportId?: string | null;
@@ -776,7 +775,7 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
       WITH completed_sessions AS (
         SELECT
           sessions.id,
-          sessions.updated_at,
+          sessions.created_at,
           reports.id AS report_id,
           COALESCE(
             reports.report_date,
@@ -798,7 +797,13 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         ) AS title_date(parts) ON TRUE
         WHERE sessions.status = 'COMPLETED'
           AND sessions.daily_call_plan_report_id IS NOT NULL
-          AND sessions.region_id IS NOT DISTINCT FROM $2
+        -- Deliberately NOT filtered by sessions.region_id: completed reports
+        -- are shared all-region artifacts (each report row set spans every
+        -- region; region-scoped uploads retain out-of-scope rows). Filtering
+        -- by the requester's region hid today's earlier report whenever a
+        -- different admin (different region selection) uploaded next, so
+        -- carry-forward fell back to a PRIOR day and the day-boundary rule
+        -- wiped every Evening entered earlier today.
       ),
       previous_session AS (
         SELECT id, effective_report_date
@@ -807,10 +812,13 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         -- new report must inherit the accumulated manual work from the most
         -- recent prior report (e.g. this morning's), not just yesterday's.
         WHERE effective_report_date <= $1::date
-          AND ($3::text IS NULL OR report_id::text <> $3::text)
-        -- Prefer the latest report: newest date, then most recent activity,
-        -- then newest row id, so same-day ties resolve to the current report.
-        ORDER BY effective_report_date DESC, updated_at DESC, id DESC
+          AND ($2::text IS NULL OR report_id::text <> $2::text)
+        -- Prefer the latest report: newest date, then newest UPLOAD. Ordering
+        -- by created_at (not updated_at) keeps the true latest report the
+        -- source even after an older same-day report is reopened (reopening
+        -- bumps updated_at, which used to promote a stale report over the one
+        -- holding the day's Evening work).
+        ORDER BY effective_report_date DESC, created_at DESC, id DESC
         LIMIT 1
       )
       SELECT
@@ -855,7 +863,7 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
       WHERE NOT rows.is_excluded
       ORDER BY rows.serial_no ASC, rows.id ASC
     `,
-    [input.reportDate, input.regionId, input.excludeReportId ?? null],
+    [input.reportDate, input.excludeReportId ?? null],
   );
 
   return result.rows.map(mapFinalReportManualCarryForwardRow);

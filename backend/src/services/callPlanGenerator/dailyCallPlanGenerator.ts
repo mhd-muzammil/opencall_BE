@@ -842,10 +842,12 @@ export async function generateDailyCallPlanReport(
     const previousFinalRows =
       await findPreviousFinalReportRowsForManualCarryForward(client, {
         reportDate: input.reportDate,
-        regionId: input.regionId,
         // Never carry forward from the report currently being regenerated; the
         // most recent *other* report (incl. an earlier one uploaded today) is
-        // the source so same-day manual work is preserved.
+        // the source so same-day manual work is preserved. Not region-filtered:
+        // reports are shared all-region artifacts, and a region filter hid the
+        // same-day source whenever a different admin uploaded next (mass
+        // Evening wipe).
         excludeReportId: existingReportId,
       });
     // Full Flex Status history (one report per prior day, most-recent first) so

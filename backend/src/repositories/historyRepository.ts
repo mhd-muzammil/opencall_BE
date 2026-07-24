@@ -112,7 +112,12 @@ export async function findOrCreateCompletedHistorySessionForReport(
       SET
         title = COALESCE(NULLIF(sessions.title, ''), $1),
         status = 'COMPLETED',
-        region_id = $2,
+        -- Keep the region the session was originally created under. This
+        -- branch also runs on every REOPEN of an existing report, and
+        -- restamping the reopener's region made same-day sessions' region_ids
+        -- drift apart (historically breaking carry-forward source selection,
+        -- and still feeding the frontend's daySession.regionId).
+        region_id = COALESCE(sessions.region_id, $2),
         daily_call_plan_report_id = $6,
         total_rows = $7,
         updated_at = NOW()
