@@ -95,6 +95,7 @@ export interface ReportRowEditPayload {
    * Regular-user edits leave this undefined and behave exactly as before.
    */
   updatedBySpecialAccess?: string | null;
+  updatedByVendorAccess?: string | null;
 }
 
 export interface ReportRowCarryForwardBackfillPayload {
@@ -1012,7 +1013,8 @@ export async function updateDailyCallPlanReportRowManualFields(
         manual_fields_missing = $17::text[],
         updated_at = NOW(),
         updated_by = $18,
-        updated_by_special_access = $20
+        updated_by_special_access = $20,
+        updated_by_vendor_access = $21
       FROM daily_call_plan_reports reports
       WHERE rows.id = $1
         AND reports.id = rows.report_id
@@ -1066,6 +1068,7 @@ export async function updateDailyCallPlanReportRowManualFields(
       edit.updatedBy,
       edit.eveningRtplStatus,
       edit.updatedBySpecialAccess ?? null,
+      edit.updatedByVendorAccess ?? null,
     ],
   );
 

@@ -89,6 +89,9 @@ const FEATURE_TABLES = [
   "region_productivity_snapshot",
   // migrate:flex-raw — the raw-data import and its region-card counts 500 without it.
   "flex_raw_records",
+  // migrate:vendor-access — the vendor portal + case assignment 500 without these.
+  "vendor_access",
+  "vendor_case_assignments",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [

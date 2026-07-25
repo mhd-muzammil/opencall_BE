@@ -1,15 +1,18 @@
 import type { RequestHandler } from "express";
 import { findActiveUserById } from "../repositories/userRepository.js";
 import { findActiveSpecialAccessForPrincipal } from "../repositories/specialAccessRepository.js";
-import type { SpecialAccessPrincipal } from "../types/auth.js";
+import { findActiveVendorAccessForPrincipal } from "../repositories/vendorAccessRepository.js";
+import type { SpecialAccessPrincipal, VendorAccessPrincipal } from "../types/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { unauthorized } from "../utils/httpError.js";
+import { unauthorized, forbidden } from "../utils/httpError.js";
 import {
   verifyToken,
   verifyAnyToken,
   SPECIAL_ACCESS_TOKEN_KIND,
+  VENDOR_ACCESS_TOKEN_KIND,
 } from "../utils/jwt.js";
 import type { SpecialAccessRecord } from "../repositories/specialAccessRepository.js";
+import type { VendorAccessRecord } from "../repositories/vendorAccessRepository.js";
 
 function getBearerToken(authorizationHeader: string | undefined): string {
   if (!authorizationHeader) {
@@ -35,6 +38,15 @@ function toPrincipal(record: SpecialAccessRecord): SpecialAccessPrincipal {
     allRegions: record.allRegions,
     regions: record.regions,
     dataScope: record.dataScope,
+    permissionLevel: record.permissionLevel,
+  };
+}
+
+function toVendorPrincipal(record: VendorAccessRecord): VendorAccessPrincipal {
+  return {
+    id: record.id,
+    username: record.username,
+    sections: record.sections,
     permissionLevel: record.permissionLevel,
   };
 }
@@ -84,11 +96,46 @@ export const requirePrincipal: RequestHandler = asyncHandler(
       return;
     }
 
+    if (verified.kind === VENDOR_ACCESS_TOKEN_KIND) {
+      const record = await findActiveVendorAccessForPrincipal(
+        verified.vendorAccessId,
+      );
+      if (!record) {
+        throw unauthorized("Vendor-access credential was not found or is inactive");
+      }
+      request.vendorAccess = toVendorPrincipal(record);
+      next();
+      return;
+    }
+
     const user = await findActiveUserById(verified.payload.userId);
     if (!user) {
       throw unauthorized("Authenticated user was not found or is inactive");
     }
     request.currentUser = user;
+    next();
+  },
+);
+
+/**
+ * Vendor-only guard for the vendor portal endpoints. Resolves a vendor-access token onto
+ * `request.vendorAccess` and rejects everything else (users, special-access) with 403 —
+ * so a regular or special-access token can never reach a vendor endpoint.
+ */
+export const requireVendorAccess: RequestHandler = asyncHandler(
+  async (request, _response, next) => {
+    const token = getBearerToken(request.header("authorization"));
+    const verified = verifyAnyToken(token);
+
+    if (verified.kind !== VENDOR_ACCESS_TOKEN_KIND) {
+      throw forbidden("Vendor access required");
+    }
+
+    const record = await findActiveVendorAccessForPrincipal(verified.vendorAccessId);
+    if (!record) {
+      throw unauthorized("Vendor-access credential was not found or is inactive");
+    }
+    request.vendorAccess = toVendorPrincipal(record);
     next();
   },
 );

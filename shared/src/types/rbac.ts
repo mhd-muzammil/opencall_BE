@@ -9,3 +9,11 @@ export type UserRole = "SUPER_ADMIN" | "REGION_ADMIN";
 export type SpecialAccessDataScope = "overall" | "warranty" | "trade";
 
 export type SpecialAccessPermissionLevel = "view" | "edit";
+
+/**
+ * Vendor-access credentials are ALSO not rows in `users`, and are separate from
+ * special-access too. A vendor is scoped by the specific CASES an admin assigns to it
+ * (not by region), granted a set of vendor-portal views, and either read-only or allowed
+ * to update its own assigned cases.
+ */
+export type VendorAccessPermissionLevel = "view" | "update";

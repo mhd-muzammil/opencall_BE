@@ -26,6 +26,18 @@ interface EncodedSpecialAccessJwtPayload extends SpecialAccessJwtPayload {
   iat: number;
 }
 
+export const VENDOR_ACCESS_TOKEN_KIND = "VENDOR_ACCESS" as const;
+
+export interface VendorAccessJwtPayload {
+  kind: typeof VENDOR_ACCESS_TOKEN_KIND;
+  vendorAccessId: string;
+}
+
+interface EncodedVendorAccessJwtPayload extends VendorAccessJwtPayload {
+  exp: number;
+  iat: number;
+}
+
 const TOKEN_TTL_SECONDS = 60 * 60 * 8;
 
 function base64UrlEncode(value: Buffer | string): string {
@@ -155,23 +167,38 @@ export function generateSpecialAccessToken(specialAccessId: string): string {
   return `${unsignedToken}.${sign(unsignedToken)}`;
 }
 
+export function generateVendorAccessToken(vendorAccessId: string): string {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "HS256", typ: "JWT" };
+  const payload: EncodedVendorAccessJwtPayload = {
+    kind: VENDOR_ACCESS_TOKEN_KIND,
+    vendorAccessId,
+    iat: now,
+    exp: now + TOKEN_TTL_SECONDS,
+  };
+  const unsignedToken = `${base64UrlJson(header)}.${base64UrlJson(payload)}`;
+
+  return `${unsignedToken}.${sign(unsignedToken)}`;
+}
+
 export type VerifiedToken =
   | { kind: "USER"; payload: JwtPayload }
-  | { kind: typeof SPECIAL_ACCESS_TOKEN_KIND; specialAccessId: string };
+  | { kind: typeof SPECIAL_ACCESS_TOKEN_KIND; specialAccessId: string }
+  | { kind: typeof VENDOR_ACCESS_TOKEN_KIND; vendorAccessId: string };
 
 /**
- * Verifies a bearer token that may belong to either a regular user or a special-access
- * credential, returning a discriminated result. Regular-user tokens (no `kind`) are parsed
- * exactly as `verifyToken` does, so existing behaviour is unchanged.
+ * Verifies a bearer token that may belong to a regular user, a special-access credential,
+ * or a vendor-access credential, returning a discriminated result. Regular-user tokens
+ * (no `kind`) are parsed exactly as `verifyToken` does, so existing behaviour is unchanged.
  */
 export function verifyAnyToken(token: string): VerifiedToken {
   const decoded = verifySignatureAndDecode(token);
+  const kind =
+    typeof decoded === "object" && decoded !== null
+      ? (decoded as { kind?: unknown }).kind
+      : undefined;
 
-  if (
-    typeof decoded === "object" &&
-    decoded !== null &&
-    (decoded as { kind?: unknown }).kind === SPECIAL_ACCESS_TOKEN_KIND
-  ) {
+  if (kind === SPECIAL_ACCESS_TOKEN_KIND) {
     const parsed = decoded as Partial<EncodedSpecialAccessJwtPayload>;
     if (
       typeof parsed.specialAccessId !== "string" ||
@@ -184,6 +211,22 @@ export function verifyAnyToken(token: string): VerifiedToken {
     return {
       kind: SPECIAL_ACCESS_TOKEN_KIND,
       specialAccessId: parsed.specialAccessId,
+    };
+  }
+
+  if (kind === VENDOR_ACCESS_TOKEN_KIND) {
+    const parsed = decoded as Partial<EncodedVendorAccessJwtPayload>;
+    if (
+      typeof parsed.vendorAccessId !== "string" ||
+      typeof parsed.exp !== "number" ||
+      typeof parsed.iat !== "number"
+    ) {
+      throw unauthorized("Invalid token payload");
+    }
+    assertNotExpired(parsed.exp);
+    return {
+      kind: VENDOR_ACCESS_TOKEN_KIND,
+      vendorAccessId: parsed.vendorAccessId,
     };
   }
 

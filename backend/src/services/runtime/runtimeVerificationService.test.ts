@@ -45,6 +45,8 @@ const FEATURE_TABLES = [
   "region_eod_state",
   "region_productivity_snapshot",
   "flex_raw_records",
+  "vendor_access",
+  "vendor_case_assignments",
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {

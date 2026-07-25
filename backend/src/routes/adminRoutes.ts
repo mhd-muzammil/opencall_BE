@@ -39,9 +39,16 @@ import {
   reactivateAdminRtplStatusController,
   updateAdminRtplStatusController,
 } from "../controllers/adminRtplStatusController.js";
+import {
+  getSpecialAccessLoginHistoryController,
+  getSpecialAccessLoginSummaryController,
+  getUserLoginHistoryController,
+  getUserLoginSummaryController,
+} from "../controllers/loginActivityController.js";
 import { requireAuthenticatedUser } from "../middlewares/authMiddleware.js";
 import { requireRole } from "../middlewares/roleMiddleware.js";
 import { specialAccessRouter } from "./specialAccessRoutes.js";
+import { vendorAccessRouter } from "./vendorAccessRoutes.js";
 
 export const adminRouter = Router();
 
@@ -52,6 +59,36 @@ adminRouter.use(
   "/special-access",
   requireRole(["SUPER_ADMIN"]),
   specialAccessRouter,
+);
+
+// Vendor-access management (scoped vendor logins + case assignment) — SUPER_ADMIN only.
+adminRouter.use(
+  "/vendor-access",
+  requireRole(["SUPER_ADMIN"]),
+  vendorAccessRouter,
+);
+
+// Login-location monitoring — where users / special-access logins signed in from
+// (IP-derived place + history). SUPER_ADMIN only; never exposed to the observed principal.
+adminRouter.get(
+  "/login-activity/users",
+  requireRole(["SUPER_ADMIN"]),
+  getUserLoginSummaryController,
+);
+adminRouter.get(
+  "/login-activity/users/:id",
+  requireRole(["SUPER_ADMIN"]),
+  getUserLoginHistoryController,
+);
+adminRouter.get(
+  "/login-activity/special-access",
+  requireRole(["SUPER_ADMIN"]),
+  getSpecialAccessLoginSummaryController,
+);
+adminRouter.get(
+  "/login-activity/special-access/:id",
+  requireRole(["SUPER_ADMIN"]),
+  getSpecialAccessLoginHistoryController,
 );
 
 adminRouter.get(

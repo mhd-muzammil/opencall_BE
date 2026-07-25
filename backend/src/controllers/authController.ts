@@ -5,10 +5,15 @@ import {
   touchLastLogin,
 } from "../repositories/userRepository.js";
 import { findActiveSpecialAccessByUsername } from "../repositories/specialAccessRepository.js";
+import { findActiveVendorAccessByUsername } from "../repositories/vendorAccessRepository.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { unauthorized } from "../utils/httpError.js";
-import { generateToken, generateSpecialAccessToken } from "../utils/jwt.js";
+import {
+  generateToken,
+  generateSpecialAccessToken,
+  generateVendorAccessToken,
+} from "../utils/jwt.js";
 import { loginRequestSchema } from "../validators/loginRequestValidator.js";
 
 /**
@@ -71,6 +76,61 @@ async function trySpecialAccessLogin(
   };
 }
 
+/**
+ * Fallback login path for vendor-access credentials (rows in `vendor_access`, separate
+ * from users AND special_access). Only reached when neither a user nor a special-access
+ * credential matched, so existing behaviour is completely unaffected.
+ */
+async function tryVendorAccessLogin(
+  username: string,
+  password: string,
+  request: Parameters<RequestHandler>[0],
+): Promise<{ token: string; user: unknown; vendorAccess: unknown } | null> {
+  const match = await findActiveVendorAccessByUsername(username);
+  if (!match) {
+    return null;
+  }
+
+  const passwordMatches = await bcrypt.compare(password, match.passwordHash);
+  if (!passwordMatches) {
+    recordActivity({
+      eventType: "LOGIN_FAILED",
+      actorEmailFallback: username,
+      status: "FAILURE",
+      metadata: { reason: "BAD_PASSWORD", kind: "VENDOR_ACCESS" },
+      request,
+    });
+    throw unauthorized("Invalid login credentials");
+  }
+
+  const { record } = match;
+  recordActivity({
+    eventType: "LOGIN_SUCCESS",
+    actorEmailFallback: record.username,
+    metadata: { kind: "VENDOR_ACCESS", vendorAccessId: record.id },
+    request,
+  });
+
+  return {
+    token: generateVendorAccessToken(record.id),
+    user: {
+      id: record.id,
+      username: record.username,
+      email: null,
+      role: "VENDOR_ACCESS",
+      regionId: null,
+      region_id: null,
+      mustChangePassword: false,
+    },
+    vendorAccess: {
+      id: record.id,
+      username: record.username,
+      sections: record.sections,
+      permissionLevel: record.permissionLevel,
+    },
+  };
+}
+
 export const loginController: RequestHandler = asyncHandler(
   async (request, response) => {
     const input = loginRequestSchema.parse(request.body);
@@ -84,6 +144,16 @@ export const loginController: RequestHandler = asyncHandler(
       );
       if (specialAccess) {
         response.status(200).json({ data: specialAccess });
+        return;
+      }
+
+      const vendorAccess = await tryVendorAccessLogin(
+        input.username,
+        input.password,
+        request,
+      );
+      if (vendorAccess) {
+        response.status(200).json({ data: vendorAccess });
         return;
       }
 

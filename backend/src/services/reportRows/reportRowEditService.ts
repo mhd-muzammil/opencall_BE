@@ -245,7 +245,10 @@ export async function applyReportRowManualFieldEdit(input: {
   rowId: string;
   current: EditedReportRow;
   values: ReportRowEditInput;
-  editor: { kind: "USER"; id: string } | { kind: "SPECIAL_ACCESS"; id: string };
+  editor:
+    | { kind: "USER"; id: string }
+    | { kind: "SPECIAL_ACCESS"; id: string }
+    | { kind: "VENDOR_ACCESS"; id: string };
 }): Promise<EditedReportRow> {
   const { rowId, current, values, editor } = input;
 
@@ -327,6 +330,7 @@ export async function applyReportRowManualFieldEdit(input: {
     manualFieldsMissing: missing,
     updatedBy: editor.kind === "USER" ? editor.id : null,
     updatedBySpecialAccess: editor.kind === "SPECIAL_ACCESS" ? editor.id : null,
+    updatedByVendorAccess: editor.kind === "VENDOR_ACCESS" ? editor.id : null,
   });
 
   if (!updated) {

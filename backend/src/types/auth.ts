@@ -2,6 +2,7 @@ import type {
   UserRole,
   SpecialAccessDataScope,
   SpecialAccessPermissionLevel,
+  VendorAccessPermissionLevel,
 } from "@opencall/shared";
 
 export interface AuthenticatedUser {
@@ -35,4 +36,19 @@ export interface SpecialAccessPrincipal {
   regions: string[];
   dataScope: SpecialAccessDataScope;
   permissionLevel: SpecialAccessPermissionLevel;
+}
+
+/**
+ * A vendor-access principal — a standalone scoped login (row in `vendor_access`, NOT in
+ * `users` and separate from `special_access`). Resolved by `requirePrincipal` onto
+ * `request.vendorAccess`. A vendor is scoped to the specific CASES assigned to it (not by
+ * region); its `sections` are the granted vendor-portal views and `permissionLevel`
+ * decides whether it may update its own assigned cases. A separate shape so it can never
+ * satisfy the user or special-access guards.
+ */
+export interface VendorAccessPrincipal {
+  id: string;
+  username: string;
+  sections: string[];
+  permissionLevel: VendorAccessPermissionLevel;
 }

@@ -16,6 +16,7 @@ import { customerFeedbackRouter } from "./customerFeedbackRoutes.js";
 import { partsCatalogRouter } from "./partsCatalogRoutes.js";
 import { quotationRouter } from "./quotationRoutes.js";
 import { specialAccessSessionRouter } from "./specialAccessSessionRoutes.js";
+import { vendorAccessSessionRouter } from "./vendorAccessSessionRoutes.js";
 import { warrantyRouter } from "./warrantyRoutes.js";
 
 export const apiRouter = Router();
@@ -37,4 +38,5 @@ apiRouter.use("/admin", adminRouter);
 apiRouter.use("/me", meRouter);
 apiRouter.use("/record-layout", recordLayoutRouter);
 apiRouter.use("/special-access", specialAccessSessionRouter);
+apiRouter.use("/vendor-access", vendorAccessSessionRouter);
 apiRouter.use("/warranty", warrantyRouter);
