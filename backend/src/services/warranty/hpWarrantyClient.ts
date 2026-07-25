@@ -280,6 +280,20 @@ async function readResultText(page: Page): Promise<string> {
     .catch(() => "");
 }
 
+/**
+ * A compact `url + text` snapshot for the failure log — so a serial that HP
+ * actually resolves (but we did not recognise) can be diagnosed from one log
+ * line: the URL tells us the result path, the text the page's shape.
+ */
+async function describePage(page: Page): Promise<string> {
+  const url = page.url();
+  const text = (await page.locator("body").innerText().catch(() => ""))
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+  return `[url=${url}] [text=${text}]`;
+}
+
 export interface LookupWarrantyOptions {
   hpUrl?: string;
   timeoutMs?: number;
@@ -318,7 +332,7 @@ export async function lookupWarranty(
 
   if (outcome === null) {
     throw new WarrantyLookupError(
-      `HP neither resolved serial ${serial} nor asked for a product number`,
+      `HP neither resolved serial ${serial} nor asked for a product number ${await describePage(page)}`,
     );
   }
 
@@ -348,7 +362,7 @@ export async function lookupWarranty(
 
     if (!resolved) {
       throw new WarrantyLookupError(
-        `HP did not resolve serial ${serial} even with product number ${productNumber}`,
+        `HP did not resolve serial ${serial} even with product number ${productNumber} ${await describePage(page)}`,
       );
     }
   }
