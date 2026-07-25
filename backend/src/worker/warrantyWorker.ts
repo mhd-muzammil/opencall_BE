@@ -46,6 +46,16 @@ const config = {
   pollIntervalMs: readNumberEnv("WARRANTY_POLL_INTERVAL_MS", 5_000),
   profileDir: process.env.WARRANTY_PROFILE_DIR || "/data/warranty-profile",
   /**
+   * How many serials to look up in parallel. Each lane gets its own page in the
+   * one shared (warm) browser context, and they claim distinct queue rows via
+   * `FOR UPDATE SKIP LOCKED`, so N lanes ≈ N× throughput. Each lane still paces
+   * itself by `min/maxDelayMs`, so the aggregate request rate is roughly
+   * `concurrency / delay` — raise this to drain a backlog faster, but watch the
+   * `failed` count: too much traffic from one IP invites HP's reCAPTCHA. Capped
+   * at 8 (one warm context can't sanely juggle more pages).
+   */
+  concurrency: Math.min(readNumberEnv("WARRANTY_CONCURRENCY", 3), 8),
+  /**
    * How long an item may sit in `processing` before we assume the worker that
    * claimed it died. Generously above the 45s lookup timeout plus the pacing
    * delay, so a slow-but-alive worker is never robbed of its item.
@@ -56,8 +66,12 @@ const config = {
 };
 
 let isShuttingDown = false;
-/** Resolves early when a shutdown signal lands, so we never sit out a full delay. */
-let wakeUp: (() => void) | null = null;
+/**
+ * Aborted on shutdown so every in-flight `interruptibleSleep` resolves at once —
+ * a shared signal instead of a single callback, since many lanes sleep at the
+ * same time.
+ */
+const shutdownController = new AbortController();
 
 /**
  * Closed-calls auto sweep: periodically enqueue uncached serials from the latest report's
@@ -81,18 +95,28 @@ async function maybeSweepClosedCalls(): Promise<void> {
   }
 }
 
-function sleep(durationMs: number): Promise<void> {
+/**
+ * A `setTimeout` sleep that also resolves the instant shutdown is signalled, so
+ * a lane never sits out a full pacing delay while the process is trying to exit.
+ * Safe to call from many lanes concurrently (unlike a single shared callback):
+ * the abort listener is removed when the timer wins, so listeners never pile up
+ * over the worker's lifetime.
+ */
+function interruptibleSleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      wakeUp = null;
+    if (shutdownController.signal.aborted) {
       resolve();
-    }, durationMs);
-
-    wakeUp = () => {
+      return;
+    }
+    const onAbort = () => {
       clearTimeout(timer);
-      wakeUp = null;
       resolve();
     };
+    const timer = setTimeout(() => {
+      shutdownController.signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, durationMs);
+    shutdownController.signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -159,9 +183,65 @@ async function processItem(page: Page, item: WarrantyJobItem): Promise<boolean> 
   return true;
 }
 
+/**
+ * One drain lane: claim the next pending item, look it up on its own page, pace,
+ * repeat. Many lanes run concurrently against the same queue — `FOR UPDATE SKIP
+ * LOCKED` in `claimNextPendingItem` hands each lane a distinct row.
+ */
+async function drainLane(page: Page): Promise<void> {
+  while (!isShuttingDown) {
+    let item: WarrantyJobItem | null;
+    try {
+      item = await claimNextPendingItem();
+    } catch (error) {
+      // A transient DB hiccup must not kill the lane; back off and retry.
+      console.error(`[warranty] claim failed — ${errorMessage(error)}`);
+      await interruptibleSleep(config.pollIntervalMs);
+      continue;
+    }
+
+    if (!item) {
+      await interruptibleSleep(config.pollIntervalMs);
+      continue;
+    }
+
+    const contactedHp = await processItem(page, item);
+
+    if (contactedHp && !isShuttingDown) {
+      await interruptibleSleep(nextDelayMs());
+    }
+  }
+}
+
+/**
+ * Housekeeping runs on its own cadence, independent of the drain lanes: feed the
+ * queue from the latest report's closed calls, and recover items a crashed
+ * worker abandoned mid-flight (stuck in 'processing') so their job can complete.
+ */
+async function housekeepingLane(): Promise<void> {
+  while (!isShuttingDown) {
+    try {
+      await maybeSweepClosedCalls();
+
+      const reclaimed = await reclaimStaleProcessingItems(
+        config.staleLockSeconds,
+        config.maxAttempts,
+      );
+      if (reclaimed.requeued > 0 || reclaimed.exhausted > 0) {
+        console.warn(
+          `[warranty] reclaimed stale locks: ${reclaimed.requeued} requeued, ${reclaimed.exhausted} failed (attempt limit)`,
+        );
+      }
+    } catch (error) {
+      console.error(`[warranty] housekeeping failed — ${errorMessage(error)}`);
+    }
+    await interruptibleSleep(config.pollIntervalMs);
+  }
+}
+
 async function run(): Promise<void> {
   console.log(
-    `[warranty] worker starting (profile=${config.profileDir}, delay=${config.minDelayMs}-${config.maxDelayMs}ms)`,
+    `[warranty] worker starting (profile=${config.profileDir}, concurrency=${config.concurrency}, delay=${config.minDelayMs}-${config.maxDelayMs}ms)`,
   );
 
   // A persistent context keeps cookies and the reCAPTCHA v3 reputation warm
@@ -181,38 +261,18 @@ async function run(): Promise<void> {
     },
   );
 
-  const page = context.pages()[0] ?? (await context.newPage());
+  // One page per drain lane, reused for that lane's whole run (cheaper than a
+  // page per lookup and keeps the warm session).
+  const pages: Page[] = [context.pages()[0] ?? (await context.newPage())];
+  for (let i = 1; i < config.concurrency; i += 1) {
+    pages.push(await context.newPage());
+  }
 
   try {
-    while (!isShuttingDown) {
-      // Unattended: keep feeding the queue from the latest report's closed calls.
-      await maybeSweepClosedCalls();
-
-      // Recover anything a previously-crashed worker abandoned mid-item. Without
-      // this the item stays 'processing' forever, and its job never completes.
-      const reclaimed = await reclaimStaleProcessingItems(
-        config.staleLockSeconds,
-        config.maxAttempts,
-      );
-      if (reclaimed.requeued > 0 || reclaimed.exhausted > 0) {
-        console.warn(
-          `[warranty] reclaimed stale locks: ${reclaimed.requeued} requeued, ${reclaimed.exhausted} failed (attempt limit)`,
-        );
-      }
-
-      const item = await claimNextPendingItem();
-
-      if (!item) {
-        await sleep(config.pollIntervalMs);
-        continue;
-      }
-
-      const contactedHp = await processItem(page, item);
-
-      if (contactedHp && !isShuttingDown) {
-        await sleep(nextDelayMs());
-      }
-    }
+    await Promise.all([
+      housekeepingLane(),
+      ...pages.map((page) => drainLane(page)),
+    ]);
   } finally {
     await context.close().catch((error: unknown) => {
       console.error("[warranty] failed to close browser context", error);
@@ -226,8 +286,8 @@ function shutdown(signal: NodeJS.Signals): void {
   }
 
   isShuttingDown = true;
-  console.log(`[warranty] received ${signal}; finishing current item`);
-  wakeUp?.();
+  console.log(`[warranty] received ${signal}; finishing current items`);
+  shutdownController.abort();
 }
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
