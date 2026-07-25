@@ -144,6 +144,28 @@ async function assertNoInteractiveChallenge(page: Page): Promise<void> {
   }
 }
 
+/**
+ * Removes any OneTrust consent widget still in the DOM and restores scrolling.
+ * The `onetrust-pc-dark-filter` overlay is what "intercepts pointer events" and
+ * makes the Submit click time out, so tearing it out of the DOM is the reliable
+ * guarantee the form stays clickable — even if the accept button was never hit.
+ * Safe to call anytime; best-effort.
+ */
+async function stripOneTrustOverlay(page: Page): Promise<void> {
+  await page
+    .evaluate(() => {
+      document
+        .querySelectorAll(
+          "#onetrust-consent-sdk, .onetrust-pc-dark-filter, .onetrust-banner-sdk, #onetrust-pc-sdk",
+        )
+        .forEach((el) => el.remove());
+      document.documentElement.classList.remove("ot-overflow-hidden");
+      document.body?.classList.remove("ot-overflow-hidden");
+      document.body?.style.removeProperty("overflow");
+    })
+    .catch(() => undefined);
+}
+
 async function submitForm(
   page: Page,
   selectors: readonly string[],
@@ -151,6 +173,9 @@ async function submitForm(
 ): Promise<void> {
   const submitSelector = await firstVisible(page, selectors, 5_000);
   if (submitSelector) {
+    // A cookie overlay can (re)appear between page load and submit and cover the
+    // button; clear it immediately before the click so it is never intercepted.
+    await stripOneTrustOverlay(page);
     await page.locator(submitSelector).first().click({ timeout: timeoutMs });
     return;
   }
@@ -159,12 +184,36 @@ async function submitForm(
   await page.keyboard.press("Enter");
 }
 
-/** Dismisses the OneTrust cookie banner if it is up. Best-effort. */
+/**
+ * Dismisses HP's OneTrust cookie consent. It is injected *asynchronously* (so it
+ * is usually absent at domcontentloaded) and, in some regions, renders as a
+ * Preference Center whose dark-filter overlay intercepts every click. So: wait
+ * for it to appear, accept it (or reject-all) to store the consent cookie in the
+ * warm persistent profile so it stops returning, then strip any residual overlay
+ * out of the DOM. Best-effort throughout — never throws.
+ */
 async function dismissCookieBanner(page: Page): Promise<void> {
-  const accept = page.locator("#onetrust-accept-btn-handler").first();
-  if (await accept.isVisible().catch(() => false)) {
-    await accept.click({ timeout: 5_000 }).catch(() => undefined);
+  // Give the async OneTrust SDK a moment to render before we look for it.
+  await page
+    .waitForSelector(
+      "#onetrust-consent-sdk, #onetrust-accept-btn-handler, .onetrust-pc-dark-filter",
+      { timeout: 6_000, state: "attached" },
+    )
+    .catch(() => undefined);
+
+  for (const selector of [
+    "#onetrust-accept-btn-handler",
+    "#onetrust-reject-all-handler",
+    ".onetrust-close-btn-handler",
+  ]) {
+    const button = page.locator(selector).first();
+    if (await button.isVisible().catch(() => false)) {
+      await button.click({ timeout: 5_000 }).catch(() => undefined);
+      break;
+    }
   }
+
+  await stripOneTrustOverlay(page);
 }
 
 type SubmitOutcome = "result" | "product-number-prompt";
@@ -250,8 +299,9 @@ export async function lookupWarranty(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   await page.goto(hpUrl, { waitUntil: "domcontentloaded", timeout: timeoutMs });
-  // The cookie banner does not block the form, but dismissing it keeps clicks
-  // from ever being intercepted.
+  // HP's OneTrust consent overlay intercepts pointer events and makes the Submit
+  // click time out (45s) — dismiss it before touching the form. On a fresh
+  // profile it shows every load until accepted; the warm profile then keeps it away.
   await dismissCookieBanner(page);
   await assertNoInteractiveChallenge(page);
 
