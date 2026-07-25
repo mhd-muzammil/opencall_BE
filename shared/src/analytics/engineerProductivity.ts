@@ -142,10 +142,14 @@ export function classifyProductivityStatus(
     return "ENGINEER_DELAY";
   }
 
-  // The customer pushed the visit out: "CX Pending" in this team's vocabulary,
-  // plus explicit reschedules.
+  // The customer pushed the visit out. "Customer Pending" is the team's current
+  // label (renamed from "CX Reschedule"); "CX Pending"/"CX Reschedule" are the
+  // older spellings, plus explicit reschedules. Without "customer pending" here
+  // the status the team now writes falls through to ATTENDED_OTHER and silently
+  // inflates Attended instead of landing in the Customer Pending column.
   if (
     normalized.includes("cx pending") ||
+    normalized.includes("customer pending") ||
     normalized.includes("reschedule") ||
     normalized.includes("reshedule")
   ) {
