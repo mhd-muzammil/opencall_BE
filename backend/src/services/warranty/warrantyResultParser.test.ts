@@ -71,6 +71,7 @@ describe("parseWarrantyResult", () => {
   it("reads End date and Status by label", () => {
     expect(parseWarrantyResult(ADDITIONAL_INFORMATION_BLOCK)).toEqual({
       lookupStatus: "OK",
+      startDate: "2023-01-06",
       endDate: "2026-01-05",
       hpStatus: "Active",
     });
@@ -79,6 +80,7 @@ describe("parseWarrantyResult", () => {
   it("handles the DD-Mon-YYYY variant", () => {
     expect(parseWarrantyResult(DD_MON_YYYY_BLOCK)).toEqual({
       lookupStatus: "OK",
+      startDate: "2023-01-06",
       endDate: "2026-01-05",
       hpStatus: "Expired",
     });
@@ -87,6 +89,7 @@ describe("parseWarrantyResult", () => {
   it("handles labels and values on the same line", () => {
     expect(parseWarrantyResult(INLINE_LABEL_BLOCK)).toEqual({
       lookupStatus: "OK",
+      startDate: null,
       endDate: "2026-01-05",
       hpStatus: "Active",
     });
@@ -95,6 +98,7 @@ describe("parseWarrantyResult", () => {
   it("returns NOT_FOUND when a resolved page carries no end date", () => {
     expect(parseWarrantyResult(NO_ENTITLEMENT_BLOCK)).toEqual({
       lookupStatus: "NOT_FOUND",
+      startDate: null,
       endDate: null,
       hpStatus: "No warranty found",
     });
@@ -103,6 +107,7 @@ describe("parseWarrantyResult", () => {
   it("returns NOT_FOUND for an empty page", () => {
     expect(parseWarrantyResult("")).toEqual({
       lookupStatus: "NOT_FOUND",
+      startDate: null,
       endDate: null,
       hpStatus: null,
     });

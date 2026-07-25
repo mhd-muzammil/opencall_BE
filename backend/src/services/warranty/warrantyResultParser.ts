@@ -11,12 +11,15 @@ import type { WarrantyLookupStatus } from "@opencall/shared";
 export interface ParsedWarrantyResult {
   /** `OK` when an end date was found, `NOT_FOUND` when the page resolved without one. */
   lookupStatus: Extract<WarrantyLookupStatus, "OK" | "NOT_FOUND">;
+  /** ISO `YYYY-MM-DD` warranty start date (when coverage began), or null. */
+  startDate: string | null;
   /** ISO `YYYY-MM-DD`, or null when HP reported no entitlement. */
   endDate: string | null;
   /** HP's raw "Status" text (e.g. `Active`, `Expired`). */
   hpStatus: string | null;
 }
 
+const START_DATE_LABEL = "start date";
 const END_DATE_LABEL = "end date";
 const STATUS_LABEL = "status";
 
@@ -160,11 +163,13 @@ function readLabelledValue(lines: readonly string[], label: string): string | nu
 export function parseWarrantyResult(pageText: string): ParsedWarrantyResult {
   const lines = toLines(pageText);
 
+  const startDate = parseHpDate(readLabelledValue(lines, START_DATE_LABEL));
   const endDate = parseHpDate(readLabelledValue(lines, END_DATE_LABEL));
   const hpStatus = readLabelledValue(lines, STATUS_LABEL);
 
   return {
     lookupStatus: endDate ? "OK" : "NOT_FOUND",
+    startDate,
     endDate,
     hpStatus,
   };

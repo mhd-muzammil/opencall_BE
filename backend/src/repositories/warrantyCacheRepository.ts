@@ -12,6 +12,7 @@ export type CachedWarrantyStatus = "OK" | "NOT_FOUND";
 export interface WarrantyCacheRow {
   serial: string;
   lookup_status: CachedWarrantyStatus;
+  start_date: string | null;
   end_date: string | null;
   product_number: string | null;
   hp_status: string | null;
@@ -21,6 +22,8 @@ export interface WarrantyCacheRow {
 export interface WarrantyCacheEntry {
   serial: string;
   lookupStatus: CachedWarrantyStatus;
+  /** ISO `YYYY-MM-DD` warranty start date (when coverage began), or null. */
+  startDate: string | null;
   /** ISO `YYYY-MM-DD`, or null when HP reported no entitlement. */
   endDate: string | null;
   productNumber: string | null;
@@ -32,6 +35,7 @@ export interface WarrantyCacheEntry {
 const WARRANTY_CACHE_COLUMNS = `
   serial,
   lookup_status,
+  start_date::TEXT AS start_date,
   end_date::TEXT AS end_date,
   product_number,
   hp_status,
@@ -42,6 +46,7 @@ function mapWarrantyCacheEntry(row: WarrantyCacheRow): WarrantyCacheEntry {
   return {
     serial: row.serial,
     lookupStatus: row.lookup_status,
+    startDate: row.start_date,
     endDate: row.end_date,
     productNumber: row.product_number,
     hpStatus: row.hp_status,
@@ -87,6 +92,7 @@ export async function findCachedWarranties(
 export interface UpsertWarrantyCacheInput {
   serial: string;
   lookupStatus: CachedWarrantyStatus;
+  startDate: string | null;
   endDate: string | null;
   productNumber: string | null;
   hpStatus: string | null;
@@ -98,12 +104,13 @@ export async function upsertWarrantyCache(
   const result = await query<WarrantyCacheRow>(
     `
       INSERT INTO hp_warranty_cache (
-        serial, lookup_status, end_date, product_number, hp_status, fetched_at
+        serial, lookup_status, start_date, end_date, product_number, hp_status, fetched_at
       )
-      VALUES ($1, $2, $3, $4, $5, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
       ON CONFLICT (serial) DO UPDATE
       SET
         lookup_status = EXCLUDED.lookup_status,
+        start_date = EXCLUDED.start_date,
         end_date = EXCLUDED.end_date,
         product_number = EXCLUDED.product_number,
         hp_status = EXCLUDED.hp_status,
@@ -113,6 +120,7 @@ export async function upsertWarrantyCache(
     [
       input.serial,
       input.lookupStatus,
+      input.startDate,
       input.endDate,
       input.productNumber,
       input.hpStatus,

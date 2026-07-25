@@ -15,6 +15,7 @@ import {
   DEFAULT_HP_WARRANTY_URL,
   lookupWarranty,
 } from "../services/warranty/hpWarrantyClient.js";
+import { runDailyClosedCallSweep } from "../services/warranty/closedCallWarrantyService.js";
 
 /**
  * Standalone worker that drains the `warranty_job_items` queue.
@@ -57,6 +58,28 @@ const config = {
 let isShuttingDown = false;
 /** Resolves early when a shutdown signal lands, so we never sit out a full delay. */
 let wakeUp: (() => void) | null = null;
+
+/**
+ * Closed-calls auto sweep: periodically enqueue uncached serials from the latest report's
+ * closed calls (capped ~100/day in the service). Throttled here so we do not sweep every
+ * poll; the daily cap lives in the service, so a coarse hourly check is plenty.
+ */
+const CLOSED_CALL_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+let lastClosedCallSweepAt = 0;
+
+async function maybeSweepClosedCalls(): Promise<void> {
+  const now = Date.now();
+  if (now - lastClosedCallSweepAt < CLOSED_CALL_SWEEP_INTERVAL_MS) return;
+  lastClosedCallSweepAt = now;
+  try {
+    const { enqueued } = await runDailyClosedCallSweep();
+    if (enqueued > 0) {
+      console.log(`[warranty] closed-calls sweep enqueued ${enqueued} serial(s)`);
+    }
+  } catch (error) {
+    console.error("[warranty] closed-calls sweep failed", error);
+  }
+}
 
 function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -110,6 +133,7 @@ async function processItem(page: Page, item: WarrantyJobItem): Promise<boolean> 
     await upsertWarrantyCache({
       serial: item.serial,
       lookupStatus: result.lookupStatus,
+      startDate: result.startDate,
       endDate: result.endDate,
       productNumber: item.productNumber,
       hpStatus: result.hpStatus,
@@ -161,6 +185,9 @@ async function run(): Promise<void> {
 
   try {
     while (!isShuttingDown) {
+      // Unattended: keep feeding the queue from the latest report's closed calls.
+      await maybeSweepClosedCalls();
+
       // Recover anything a previously-crashed worker abandoned mid-item. Without
       // this the item stays 'processing' forever, and its job never completes.
       const reclaimed = await reclaimStaleProcessingItems(

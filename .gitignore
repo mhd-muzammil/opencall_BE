@@ -66,3 +66,7 @@ env/
 **/*.pyd
 .Python
 backend/.venv/
+
+# Local Playwright warranty-worker browser profile (runtime only)
+.warranty-profile/
+backend/.warranty-profile/

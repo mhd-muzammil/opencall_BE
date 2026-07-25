@@ -13,6 +13,9 @@ const sqlQueries = [
       fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
   );`,
 
+  // Warranty start date (when coverage began) — added later, so ALTER for existing DBs.
+  `ALTER TABLE hp_warranty_cache ADD COLUMN IF NOT EXISTS start_date DATE;`,
+
   `CREATE TABLE IF NOT EXISTS warranty_jobs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       original_file_name VARCHAR NOT NULL,

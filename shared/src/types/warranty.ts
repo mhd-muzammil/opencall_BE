@@ -18,6 +18,67 @@
 export type WarrantyLookupStatus = "OK" | "NOT_FOUND" | "NO_SERIAL" | "FAILED";
 
 /**
+ * Per-closed-call warranty status shown in the Closed Calls "Warranty Lookup" list.
+ * Derived from the permanent hp_warranty_cache + the live lookup queue:
+ * - IN_WARRANTY / OUT_OF_WARRANTY  cache hit (OK), by end date vs today
+ * - NOT_FOUND                       cache hit (HP has no entitlement for this serial)
+ * - CHECKING                        enqueued, worker not done yet
+ * - NO_SERIAL                       blank / NOSN serial — never sent to HP
+ * - NOT_CHECKED                     not cached and not (yet) queued
+ */
+export type ClosedCallWarrantyStatus =
+  | "IN_WARRANTY"
+  | "OUT_OF_WARRANTY"
+  | "NOT_FOUND"
+  | "CHECKING"
+  | "NO_SERIAL"
+  | "NOT_CHECKED";
+
+export interface ClosedCallWarrantyEntry {
+  /** The serial exactly as sent by the caller (so the client can join back). */
+  serial: string;
+  status: ClosedCallWarrantyStatus;
+  /** ISO `YYYY-MM-DD` warranty end date, or null. */
+  endDate: string | null;
+  /** HP's raw status text (Active / Expired), or null. */
+  hpStatus: string | null;
+}
+
+export interface ClosedCallWarrantyResponse {
+  entries: ClosedCallWarrantyEntry[];
+  /** Uncached serials newly enqueued for HP lookup by this request. */
+  enqueued: number;
+  /** Remaining daily lookup budget after this request (of the ~100/day cap). */
+  dailyRemaining: number;
+  /** False when the warranty tables are not present (feature not migrated). */
+  available: boolean;
+}
+
+/** One closed call + its resolved warranty status, for the self-contained list. */
+export interface ClosedCallWarrantyListRow {
+  ticketId: string;
+  customer: string;
+  serial: string;
+  region: string;
+  model: string;
+  status: ClosedCallWarrantyStatus;
+  /** ISO `YYYY-MM-DD` warranty start date (when coverage began), or null. */
+  startDate: string | null;
+  endDate: string | null;
+  hpStatus: string | null;
+}
+
+export interface ClosedCallWarrantyListResponse {
+  rows: ClosedCallWarrantyListRow[];
+  /** Uncached serials newly enqueued for HP lookup by this request. */
+  enqueued: number;
+  /** Remaining daily lookup budget after this request (of the ~100/day cap). */
+  dailyRemaining: number;
+  /** False when the warranty tables are not present (feature not migrated). */
+  available: boolean;
+}
+
+/**
  * Queue state of a `warranty_job_items` row. Distinct from the business
  * outcome above: an item can be `done` with a lookup status of `NOT_FOUND`.
  */
