@@ -1,52 +1,58 @@
 import { query } from "../config/database.js";
+import type { ActivityEventType } from "./activityLogRepository.js";
 
 /**
- * Read-only helpers over the existing `user_activity_log` to surface WHERE a principal
- * logged in from (IP address per successful login). Purely additive: no new table, no
- * write — it only reads login events already recorded by the audit logger.
+ * Read-only helpers over the existing `user_activity_log` to surface WHERE a principal has
+ * been active from (IP per action) and WHEN they were last seen. Purely additive: no new
+ * table, no write — it only reads events already recorded by the audit logger.
  *
- * A regular user's login carries `actor_user_id`; a special-access login carries the id in
- * `metadata->>'specialAccessId'` (see authController.trySpecialAccessLogin), so the two
- * principal types are queried differently but yield the same LoginPing shape.
+ * Covers ALL successful activity (login, report edits, uploads, …), not just logins, so the
+ * admin sees a "last seen" location for each principal. A regular user's action carries
+ * `actor_user_id`; a special-access action carries the id in `metadata->>'specialAccessId'`
+ * (both the login AND edit paths set it), so the two principal types are queried differently
+ * but yield the same ActivityPing shape.
  */
 
-export interface LoginPing {
+export interface ActivityPing {
   /** users.id, or special_access.id — depending on the query. */
   principalId: string | null;
   occurredAt: string;
+  eventType: ActivityEventType;
   /** Text form of the INET (host()), or null when not captured. */
   ip: string | null;
   userAgent: string | null;
 }
 
-interface LoginPingDb {
+interface ActivityPingDb {
   principal_id: string | null;
   occurred_at: string;
+  event_type: ActivityEventType;
   ip: string | null;
   user_agent: string | null;
 }
 
-function mapPing(row: LoginPingDb): LoginPing {
+function mapPing(row: ActivityPingDb): ActivityPing {
   return {
     principalId: row.principal_id,
     occurredAt: row.occurred_at,
+    eventType: row.event_type,
     ip: row.ip,
     userAgent: row.user_agent,
   };
 }
 
-/** Latest successful login per user (one row each) — for the admin list column. */
-export async function getLastLoginsForUsers(): Promise<LoginPing[]> {
-  const result = await query<LoginPingDb>(
+/** Most recent successful action per user (one row each) — for the admin list column. */
+export async function getLastActivityForUsers(): Promise<ActivityPing[]> {
+  const result = await query<ActivityPingDb>(
     `
       SELECT DISTINCT ON (actor_user_id)
         actor_user_id            AS principal_id,
         occurred_at::TEXT        AS occurred_at,
+        event_type,
         host(ip_address)         AS ip,
         user_agent
       FROM user_activity_log
-      WHERE event_type = 'LOGIN_SUCCESS'
-        AND status = 'SUCCESS'
+      WHERE status = 'SUCCESS'
         AND actor_user_id IS NOT NULL
       ORDER BY actor_user_id, occurred_at DESC
     `,
@@ -54,21 +60,21 @@ export async function getLastLoginsForUsers(): Promise<LoginPing[]> {
   return result.rows.map(mapPing);
 }
 
-/** Recent successful logins for one user, newest first. */
-export async function getLoginHistoryForUser(
+/** Recent successful actions for one user, newest first. */
+export async function getActivityHistoryForUser(
   userId: string,
   limit: number,
-): Promise<LoginPing[]> {
-  const result = await query<LoginPingDb>(
+): Promise<ActivityPing[]> {
+  const result = await query<ActivityPingDb>(
     `
       SELECT
         actor_user_id            AS principal_id,
         occurred_at::TEXT        AS occurred_at,
+        event_type,
         host(ip_address)         AS ip,
         user_agent
       FROM user_activity_log
-      WHERE event_type = 'LOGIN_SUCCESS'
-        AND status = 'SUCCESS'
+      WHERE status = 'SUCCESS'
         AND actor_user_id = $1
       ORDER BY occurred_at DESC
       LIMIT $2
@@ -78,18 +84,18 @@ export async function getLoginHistoryForUser(
   return result.rows.map(mapPing);
 }
 
-/** Latest successful login per special-access login (keyed on metadata.specialAccessId). */
-export async function getLastLoginsForSpecialAccess(): Promise<LoginPing[]> {
-  const result = await query<LoginPingDb>(
+/** Most recent successful action per special-access login (keyed on metadata.specialAccessId). */
+export async function getLastActivityForSpecialAccess(): Promise<ActivityPing[]> {
+  const result = await query<ActivityPingDb>(
     `
       SELECT DISTINCT ON (metadata->>'specialAccessId')
         metadata->>'specialAccessId' AS principal_id,
         occurred_at::TEXT            AS occurred_at,
+        event_type,
         host(ip_address)             AS ip,
         user_agent
       FROM user_activity_log
-      WHERE event_type = 'LOGIN_SUCCESS'
-        AND status = 'SUCCESS'
+      WHERE status = 'SUCCESS'
         AND metadata->>'specialAccessId' IS NOT NULL
       ORDER BY metadata->>'specialAccessId', occurred_at DESC
     `,
@@ -97,21 +103,21 @@ export async function getLastLoginsForSpecialAccess(): Promise<LoginPing[]> {
   return result.rows.map(mapPing);
 }
 
-/** Recent successful logins for one special-access login, newest first. */
-export async function getLoginHistoryForSpecialAccess(
+/** Recent successful actions for one special-access login, newest first. */
+export async function getActivityHistoryForSpecialAccess(
   id: string,
   limit: number,
-): Promise<LoginPing[]> {
-  const result = await query<LoginPingDb>(
+): Promise<ActivityPing[]> {
+  const result = await query<ActivityPingDb>(
     `
       SELECT
         metadata->>'specialAccessId' AS principal_id,
         occurred_at::TEXT            AS occurred_at,
+        event_type,
         host(ip_address)             AS ip,
         user_agent
       FROM user_activity_log
-      WHERE event_type = 'LOGIN_SUCCESS'
-        AND status = 'SUCCESS'
+      WHERE status = 'SUCCESS'
         AND metadata->>'specialAccessId' = $1
       ORDER BY occurred_at DESC
       LIMIT $2
