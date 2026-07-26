@@ -26,3 +26,9 @@ jobs:
 
       - name: Test
         run: pnpm test
+        env:
+          # env.ts hard-requires these two at import time; the suite is
+          # mocked-client, so dummy values are fine (the pool never connects).
+          NODE_ENV: test
+          DATABASE_URL: postgres://ci:ci@localhost:5432/opencall_ci
+          JWT_ACCESS_SECRET: ci-only-dummy-secret
