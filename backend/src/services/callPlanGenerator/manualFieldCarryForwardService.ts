@@ -211,12 +211,21 @@ function missingManualFields(
 
 function closedRowToEnriched(
   row: FinalReportManualCarryForwardRow,
+  currentReportDate: string,
 ): EnrichedCallPlanRow {
   return {
     ticket_id: row.ticketId,
     case_id: row.caseId ?? "",
     case_created_time: row.caseCreatedTime,
     wip_aging: row.wipAging,
+    // A same-day closure keeps the Evening entered earlier today (e.g.
+    // "Case-Closed") — the closed row stays on the Records page all day, and a
+    // blank Evening there misreads as unfinished EOD work. A prior-day closure
+    // starts blank: Evening is per-day, so yesterday's value must not leak
+    // into today's report.
+    evening_rtpl_status: sourceIsPriorDay(row, currentReportDate)
+      ? null
+      : cleanManualValue(row.eveningRtplStatus),
     rtpl_status: previousFieldValue(row, "rtpl_status") ?? "",
     segment: previousFieldValue(row, "segment") ?? "",
     engineer: previousFieldValue(row, "engineer"),
@@ -287,7 +296,7 @@ function retainedRowToEnriched(
   row: FinalReportManualCarryForwardRow,
   currentReportDate: string,
 ): EnrichedCallPlanRow {
-  const enriched = closedRowToEnriched(row);
+  const enriched = closedRowToEnriched(row, currentReportDate);
   const sourceMorning = cleanManualValue(row.rtplStatus);
   const sourceEvening = cleanManualValue(row.eveningRtplStatus);
 
@@ -528,7 +537,7 @@ export class ManualFieldCarryForwardService {
         continue;
       }
 
-      const enriched = closedRowToEnriched(previousRow);
+      const enriched = closedRowToEnriched(previousRow, input.currentReportDate);
       const match = closedSyntheticMatch(enriched);
 
       mergedRows.push({

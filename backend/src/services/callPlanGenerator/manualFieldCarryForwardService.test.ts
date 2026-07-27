@@ -448,6 +448,44 @@ describe("ManualFieldCarryForwardService", () => {
       expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(true);
     });
 
+    // The team set Evening (e.g. "Case-Closed") before the call left the file on a
+    // later same-day upload. The closed row stays on Records all day, so it must keep
+    // that Evening — a blank there misreads as unfinished EOD work.
+    it("keeps the Evening entered earlier today on a same-day closed row", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            changeType: "CARRIED",
+            eveningRtplStatus: "Case-Closed",
+          }),
+        ],
+      });
+
+      expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(true);
+      expect(result.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
+    });
+
+    // Evening is per-day: a call closed by the day's FIRST upload must not carry
+    // yesterday's Evening into today's report.
+    it("leaves Evening blank on a row closed by the day's first upload", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-27",
+            eveningRtplStatus: "Case-Closed",
+          }),
+        ],
+      });
+
+      expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(true);
+      expect(result.rows[0]?.enriched.evening_rtpl_status ?? null).toBeNull();
+    });
+
     // Upload #3 must not resurrect a row that upload #1 already took off Records.
     it("keeps a row closed by the day's first upload off Records on later re-uploads", () => {
       const result = service.apply({
