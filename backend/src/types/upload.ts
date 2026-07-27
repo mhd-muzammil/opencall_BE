@@ -48,3 +48,20 @@ export interface ParsedUploadSummary {
   duplicateNormalizedCaseIds: string[];
   duplicateCount: number;
 }
+
+/**
+ * Emitted when a region-scoped upload contains Flex rows outside that region's
+ * ASP scope. Those rows are DISCARDED at generation (new out-of-scope cases
+ * never enter any report), so the uploader must be told at upload time — a
+ * full all-region file has to be uploaded unscoped instead.
+ */
+export interface UploadRegionScopeWarning {
+  regionId: string;
+  regionName: string;
+  aspCodes: string[];
+  /** Flex file rows whose Work Location is outside the region's ASP scope. */
+  outOfScopeRowCount: number;
+  /** Flex file rows with no Work Location at all — also dropped when scoped. */
+  blankWorkLocationRowCount: number;
+  sampleTicketIds: string[];
+}

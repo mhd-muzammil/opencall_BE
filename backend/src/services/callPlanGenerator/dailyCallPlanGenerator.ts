@@ -36,6 +36,7 @@ import type {
   GeneratedReportComparisonMetadata,
   GeneratedDailyCallPlanReport,
   GeneratedDailyCallPlanRow,
+  GeneratedRegionScopeSummary,
   GenerateDailyCallPlanInput,
   ManualCarryForwardField,
   ManualCarryForwardRowMetadata,
@@ -819,6 +820,31 @@ export async function generateDailyCallPlanReport(
           return aspCode.length > 0 && allowedWorkLocations.has(aspCode);
         })
       : matchedMatches;
+    // The scope drop must never be silent: a dropped file row is a work order
+    // that will NOT be in this report, and if it is a NEW case it exists in no
+    // report at all (the 2026-07-27 "missing latest calls" incident). Summarize
+    // it on the response so the UI can warn the uploader.
+    const regionScope: GeneratedRegionScopeSummary | null = allowedWorkLocations
+      ? {
+          aspCodes: [...allowedWorkLocations].sort(),
+          droppedFileRows: matchedMatches.length - scopedMatches.length,
+          droppedSampleTickets: matchedMatches
+            .filter((match) => {
+              const aspCode = (match.enrichedRow.work_location ?? "").trim().toUpperCase();
+              return aspCode.length === 0 || !allowedWorkLocations.has(aspCode);
+            })
+            .slice(0, 10)
+            .map((match) => String(match.enrichedRow.ticket_id ?? "")),
+        }
+      : null;
+
+    if (regionScope && regionScope.droppedFileRows > 0) {
+      console.warn("[dailyCallPlanGenerator] Region scope dropped flex file rows", {
+        reportDate: input.reportDate,
+        flexUploadBatchId: input.flexUploadBatchId,
+        ...regionScope,
+      });
+    }
 
     const generatedRows = scopedMatches.map<GeneratedDailyCallPlanRow>((match, index) => {
       const serialNo = index + 1;
@@ -1087,6 +1113,7 @@ export async function generateDailyCallPlanReport(
       carryForward: carryForwardResult.summary,
       comparison,
       regionBreakdown: computeRegionBreakdown(rows),
+      regionScope,
       rows,
     };
   });

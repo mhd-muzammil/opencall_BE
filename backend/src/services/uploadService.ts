@@ -3,9 +3,12 @@ import type {
   UploadBatchRecord,
   UploadColumnValidationResult,
   UploadedSourceFile,
+  UploadRegionScopeWarning,
 } from "../types/upload.js";
 import { withTransaction } from "../config/database.js";
 import { createUploadBatch } from "../repositories/uploadBatchRepository.js";
+import { findRegionById } from "../repositories/regionRepository.js";
+import { aspCodesForRegion } from "./rbac/regionRowAccess.js";
 import {
   insertCallPlanRecords,
   insertFlexWipRecords,
@@ -27,6 +30,8 @@ export interface RegisterUploadsResult {
   batches: UploadBatchRecord[];
   validations: UploadColumnValidationResult[];
   parseSummaries: ParsedUploadSummary[];
+  /** Set when a region-scoped flex upload contains rows generation will drop. */
+  scopeWarning: UploadRegionScopeWarning | null;
 }
 
 type ParsedUpload =
@@ -176,6 +181,69 @@ function sourceErrors(
   });
 }
 
+/**
+ * A region-scoped flex batch makes generation silently drop every file row
+ * whose Work Location is outside the region's ASP scope (new out-of-scope
+ * cases then never reach any report — the 2026-07-27 "missing latest calls"
+ * incident). Detect that at upload time and return a loud warning instead of
+ * letting the drop happen invisibly.
+ */
+async function buildRegionScopeWarning(
+  regionId: string | null,
+  parsedUploads: readonly (ParsedUpload | null)[],
+): Promise<UploadRegionScopeWarning | null> {
+  if (!regionId) {
+    return null;
+  }
+
+  const region = await findRegionById(regionId);
+  if (!region) {
+    return null;
+  }
+
+  const scope = aspCodesForRegion(region);
+  let outOfScopeRowCount = 0;
+  let blankWorkLocationRowCount = 0;
+  const sampleTicketIds: string[] = [];
+
+  for (const upload of parsedUploads) {
+    if (upload?.sourceType !== "FLEX_WIP") {
+      continue;
+    }
+
+    for (const record of upload.parsed.records) {
+      const aspCode = (record.workLocation ?? "").trim().toUpperCase();
+
+      if (!aspCode) {
+        blankWorkLocationRowCount += 1;
+      } else if (scope.has(aspCode)) {
+        continue;
+      } else {
+        outOfScopeRowCount += 1;
+      }
+
+      if (sampleTicketIds.length < 10) {
+        sampleTicketIds.push(record.ticketId);
+      }
+    }
+  }
+
+  if (outOfScopeRowCount === 0 && blankWorkLocationRowCount === 0) {
+    return null;
+  }
+
+  const warning: UploadRegionScopeWarning = {
+    regionId,
+    regionName: region.name,
+    aspCodes: [...scope].sort(),
+    outOfScopeRowCount,
+    blankWorkLocationRowCount,
+    sampleTicketIds,
+  };
+  console.warn("[uploadService] Region-scoped upload contains rows generation will drop", warning);
+  return warning;
+}
+
 export async function registerUploadedReports(
   input: RegisterUploadsInput,
 ): Promise<RegisterUploadsResult> {
@@ -186,6 +254,7 @@ export async function registerUploadedReports(
     return validation?.isValid ? buildParsedUpload(upload) : null;
   });
   const uploadGroups = groupUploadsBySource(input.uploads, parsedUploads);
+  const scopeWarning = await buildRegionScopeWarning(input.regionId, parsedUploads);
 
   const batches = await withTransaction(async (client) => {
     const records: UploadBatchRecord[] = [];
@@ -241,5 +310,6 @@ export async function registerUploadedReports(
     parseSummaries: parsedUploads
       .filter((upload): upload is ParsedUpload => upload !== null)
       .map(buildParseSummary),
+    scopeWarning,
   };
 }

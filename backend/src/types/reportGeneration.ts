@@ -117,6 +117,18 @@ export interface RegionBreakdownEntry {
   }>;
 }
 
+/**
+ * How the region scope affected this generation. Present (non-null) only when
+ * the generation ran scoped; `droppedFileRows > 0` means the flex file
+ * contained work orders the scope discarded — new cases in other regions that
+ * will NOT appear in this report. Callers should surface that loudly.
+ */
+export interface GeneratedRegionScopeSummary {
+  aspCodes: string[];
+  droppedFileRows: number;
+  droppedSampleTickets: string[];
+}
+
 export interface GeneratedDailyCallPlanReport {
   reportId: string;
   sessionId: string;
@@ -129,5 +141,6 @@ export interface GeneratedDailyCallPlanReport {
   carryForward: ManualCarryForwardSummary;
   comparison: GeneratedReportComparisonMetadata;
   regionBreakdown: RegionBreakdownEntry[];
+  regionScope?: GeneratedRegionScopeSummary | null;
   rows: GeneratedDailyCallPlanRow[];
 }
