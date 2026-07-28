@@ -70,3 +70,7 @@ backend/.venv/
 # Local Playwright warranty-worker browser profile (runtime only)
 .warranty-profile/
 backend/.warranty-profile/
+
+# Local FieldEZ worker browser profile + state (runtime only)
+.fieldez-profile/
+backend/.fieldez-profile/

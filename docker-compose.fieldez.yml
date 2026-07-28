@@ -1,0 +1,67 @@
+# FieldEZ auto-sync worker — run as an OVERLAY on the base stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.fieldez.yml up -d --build fieldez-worker
+#
+# It logs in to FieldEZ, downloads "Flex WIP Report ASP" (XLSX) and uploads it to
+# the OpenCall API on a timer (default 15 min), then triggers report generation —
+# so the OpenCall report auto-refreshes. It talks to the API over the internal
+# `app` network (http://api:4000) and never touches Postgres directly.
+#
+# Secrets come from the deploy environment (.env), NEVER committed.
+
+name: opencall-backend
+
+services:
+  fieldez-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.fieldez-worker
+    container_name: opencall-fieldez-worker
+    restart: unless-stopped
+    init: true
+    # Let a download/upload in flight finish before the process is killed.
+    stop_grace_period: 60s
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      # --- FieldEZ (source) — REQUIRED ---
+      FIELDEZ_USERNAME: ${FIELDEZ_USERNAME:?set FIELDEZ_USERNAME}
+      FIELDEZ_PASSWORD: ${FIELDEZ_PASSWORD:?set FIELDEZ_PASSWORD}
+      FIELDEZ_URL: ${FIELDEZ_URL:-https://prod.fsmsupport.com/frontend/auth/login}
+      FIELDEZ_REPORTS_URL: ${FIELDEZ_REPORTS_URL:-https://prod.fsmsupport.com/frontend/birt/viewlist}
+      FIELDEZ_REPORT_NAME: ${FIELDEZ_REPORT_NAME:-Flex WIP Report ASP}
+      FIELDEZ_FORMAT: ${FIELDEZ_FORMAT:-XLSX}
+      FIELDEZ_SYNC_INTERVAL_MS: ${FIELDEZ_SYNC_INTERVAL_MS:-900000}
+      FIELDEZ_PROFILE_DIR: /data/fieldez-profile
+      # --- OpenCall (target) ---
+      # Internal service URL on the `app` network — no public round-trip.
+      OPENCALL_API_URL: ${OPENCALL_API_URL:-http://api:4000}
+      # Admin login used to obtain + auto-refresh an upload token — REQUIRED.
+      OPENCALL_USERNAME: ${OPENCALL_USERNAME:?set OPENCALL_USERNAME}
+      OPENCALL_PASSWORD: ${OPENCALL_PASSWORD:?set OPENCALL_PASSWORD}
+      # Optional: pin uploads to a region (blank = all regions, as a SUPER_ADMIN).
+      OPENCALL_REGION_ID: ${OPENCALL_REGION_ID:-}
+    volumes:
+      # Warm browser profile: the FieldEZ session persists across restarts.
+      - fieldez-profile:/data/fieldez-profile:rw
+    networks:
+      # `app` gives egress to FieldEZ AND reaches the `api` service.
+      - app
+    # Chromium needs a large /dev/shm or it crashes on content-heavy pages.
+    shm_size: 1gb
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    pids_limit: 512
+    mem_reservation: 512m
+    mem_limit: ${FIELDEZ_WORKER_MEM_LIMIT:-2g}
+    cpus: ${FIELDEZ_WORKER_CPUS:-1.0}
+
+volumes:
+  fieldez-profile:
+    name: opencall-fieldez-profile
