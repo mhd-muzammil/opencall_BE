@@ -211,6 +211,48 @@ describe("Feature A — scheduling requires an engineer + auto remark", () => {
     expect(lastPayload().remarks).toMatch(/^Scheduled on /);
   });
 
+  it("keeps a client-supplied remark when scheduling (the FE previews the generated line and the user may edit it)", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({ engineer: "Praveen", remarks: null }),
+    );
+    mocks.updateDailyCallPlanReportRowManualFields.mockImplementation(
+      async (_id, payload) => editedRow({ remarks: payload.remarks ?? null }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: {
+        rtplStatus: "Scheduled",
+        remarks: "Scheduled on 29th July - customer confirmed slot",
+      },
+    });
+
+    const payload = lastPayload();
+    expect(payload.remarks).toBe("Scheduled on 29th July - customer confirmed slot");
+    // Still marked set so it is not treated as carried-forward.
+    expect(payload.clearedCarryForwardFields).toContain("remarks");
+  });
+
+  it("still generates the remark when the edit clears remarks while scheduling", async () => {
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(
+      editedRow({ engineer: "Praveen", remarks: "old note" }),
+    );
+    mocks.updateDailyCallPlanReportRowManualFields.mockImplementation(
+      async (_id, payload) => editedRow({ remarks: payload.remarks ?? null }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { rtplStatus: "Scheduled", remarks: null },
+    });
+
+    expect(lastPayload().remarks).toMatch(
+      /^Scheduled on \d{1,2}(st|nd|rd|th) [A-Z][a-z]+$/,
+    );
+  });
+
   it("does not fire on an unrelated edit of an already-scheduled row", async () => {
     // Row is already Scheduled with no engineer (legacy data); editing only RCA
     // must NOT 422 and must NOT overwrite remarks.

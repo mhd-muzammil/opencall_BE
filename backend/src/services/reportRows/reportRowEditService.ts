@@ -275,9 +275,20 @@ export async function applyReportRowManualFieldEdit(input: {
         { rowId },
       );
     }
-    // Overwrite Current Remarks with the generated line while scheduling; a
-    // later non-scheduling edit leaves the user's remarks untouched.
-    merged.remarks = buildScheduledRemark(istTodayIso());
+    // Write the generated "Scheduled on <today>" line while scheduling —
+    // UNLESS this edit itself supplies a meaningful remark. The frontend now
+    // previews the generated line in the Current Remarks box the moment the
+    // editor drafts Scheduled + engineer (see the records page's
+    // scheduledRemarkPreview helper), and the user may adjust it before
+    // saving, so a client-supplied remark must win here. Schedules carrying
+    // no remark (special-access, direct API, or a cleared box) still get the
+    // auto line, and a later non-scheduling edit leaves remarks untouched.
+    if (
+      !hasEditedField(values, "remarks") ||
+      !isCarryForwardValue(merged.remarks)
+    ) {
+      merged.remarks = buildScheduledRemark(istTodayIso());
+    }
     if (!clearedCarryForwardFields.includes("remarks")) {
       clearedCarryForwardFields.push("remarks");
     }
