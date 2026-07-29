@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EngineerProductivityResult } from "@opencall/shared";
+import {
+  classifyProductivityStatus,
+  type EngineerProductivityResult,
+} from "@opencall/shared";
 import type { AuthenticatedUser } from "../../types/auth.js";
 
 const mocks = vi.hoisted(() => {
@@ -346,6 +349,45 @@ describe("reopenRegionEod", () => {
   it("is an idempotent no-op when the region-day was never closed", async () => {
     const result = await reopenRegionEod(superAdmin, chennai.id, WORKING_DATE);
     expect(result.reopened).toBe(false);
+  });
+});
+
+// The shared classifier feeds the frozen snapshots, so its mapping is part of
+// the backend contract too — not just the frontend live view.
+describe("classifyProductivityStatus (shared classifier)", () => {
+  it("maps the bare 'Elevation' status (any casing) to UNDER_OBSERVATION", () => {
+    expect(classifyProductivityStatus("elevation")).toBe("UNDER_OBSERVATION");
+    expect(classifyProductivityStatus("Elevation")).toBe("UNDER_OBSERVATION");
+    expect(classifyProductivityStatus("ELEVATION")).toBe("UNDER_OBSERVATION");
+    expect(classifyProductivityStatus("under observation")).toBe(
+      "UNDER_OBSERVATION",
+    );
+  });
+
+  it("keeps the longer 'Elevation ...' statuses in their existing class", () => {
+    expect(classifyProductivityStatus("Elevation HP Pending")).toBe(
+      "ATTENDED_OTHER",
+    );
+    expect(classifyProductivityStatus("Elevation Part Pending")).toBe(
+      "ATTENDED_OTHER",
+    );
+  });
+
+  it("freezes an Elevation evening into the underObservation snapshot column", async () => {
+    mocks.findProductivityRowsByReportId.mockResolvedValue(
+      persistedRows([
+        { ticketId: "E1", engineer: "Ravi", morning: "Scheduled", evening: "Elevation" },
+        { ticketId: "E2", engineer: "Ravi", morning: "Scheduled", evening: "Elevation HP Pending" },
+      ]),
+    );
+
+    const result = await closeRegionEod(superAdmin, chennai.id, WORKING_DATE);
+    // The snapshot payload keys stay the stable camelCase fields — stored
+    // frozen snapshots must keep deserializing unchanged.
+    expect(result.snapshot.list[0]?.underObservation).toBe(1);
+    expect(result.snapshot.list[0]?.underObservationTickets).toEqual(["E1"]);
+    // Both are attended work; only the bare "Elevation" is under-observation.
+    expect(result.snapshot.list[0]?.attended).toBe(2);
   });
 });
 

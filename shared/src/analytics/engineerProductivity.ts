@@ -27,7 +27,7 @@
 //   Scheduled / To be Scheduled / Engg Assigned -> SCHEDULED (booked only)
 //   Case-Closed / WO Closed (or closed today)   -> CLOSED
 //   SSC Pending / Part Order / Additional Part  -> PART_ORDER
-//   Under Observation                           -> UNDER_OBSERVATION
+//   Under Observation / bare "Elevation"        -> UNDER_OBSERVATION
 //   CX Pending / CX Reschedule                  -> CX_RESCHEDULE
 //   Engineer Delay                              -> ENGINEER_DELAY
 //   any other status                            -> ATTENDED_OTHER
@@ -133,7 +133,12 @@ export function classifyProductivityStatus(
     return "PART_ORDER";
   }
 
-  if (normalized.includes("observation")) {
+  // "Under Observation" plus the bare "Elevation" status share one bucket
+  // (displayed as "Under Observation/Elevation"). "elevation" is an EXACT
+  // match on the normalized status, NOT a substring: the longer distinct
+  // statuses ("Elevation HP Pending", "Elevation Part Pending") must keep
+  // their existing ATTENDED_OTHER classification.
+  if (normalized.includes("observation") || normalized === "elevation") {
     return "UNDER_OBSERVATION";
   }
 
