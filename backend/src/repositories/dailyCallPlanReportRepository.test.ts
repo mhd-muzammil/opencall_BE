@@ -7,8 +7,10 @@ import {
   OPTIONAL_MANUAL_CARRY_FORWARD_FIELDS,
 } from "../types/reportGeneration.js";
 import {
+  fillReportRowEveningStatusIfBlank,
   findDailyCallPlanReportRowMetadataByReportId,
   findPreviousFinalReportRowsForManualCarryForward,
+  findSameDayUserSetEveningRows,
   insertDailyCallPlanReportRows,
   updateDailyCallPlanReportRowManualFields,
 } from "./dailyCallPlanReportRepository.js";
@@ -290,6 +292,76 @@ describe("insertDailyCallPlanReportRows", () => {
 
     const [, values] = query.mock.calls[0] as [string, unknown[]];
     expect(values[1]).toBeNull();
+  });
+
+  it("exposes the source row's own updated_at for the same-day Evening rules", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const client = { query } as unknown as PoolClient;
+
+    await findPreviousFinalReportRowsForManualCarryForward(client, {
+      reportDate: "2026-07-29",
+    });
+
+    const [sql] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("rows.updated_at::TEXT AS row_updated_at");
+  });
+
+  it("finds only user-touched, non-blank Evenings for the given date, newest first", async () => {
+    // The same-day Evening authority: it must consider EVERY report of the
+    // date (not one LIMIT-1 source), only rows a user actually edited
+    // (updated_at stamped — generation never stamps it), skip soft-deleted
+    // rows, and order newest-edit-first so the first row per ticket wins.
+    const query = vi.fn().mockResolvedValue({
+      rows: [
+        {
+          ticket_id: "WO-123",
+          evening_rtpl_status: "Attended",
+          updated_at: "2026-07-29 17:30:00+05:30",
+        },
+      ],
+    });
+    const client = { query } as unknown as PoolClient;
+
+    const rows = await findSameDayUserSetEveningRows(client, {
+      reportDate: "2026-07-29",
+    });
+
+    const [sql, values] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("reports.report_date = $1::date");
+    expect(sql).toContain("rows.updated_at IS NOT NULL");
+    expect(sql).toContain("NOT rows.is_excluded");
+    expect(sql).toContain(
+      "NULLIF(TRIM(COALESCE(rows.evening_rtpl_status, '')), '') IS NOT NULL",
+    );
+    expect(sql).toContain("ORDER BY rows.updated_at DESC, rows.id DESC");
+    expect(values).toEqual(["2026-07-29"]);
+    expect(rows).toEqual([
+      {
+        ticketId: "WO-123",
+        eveningRtplStatus: "Attended",
+        updatedAt: "2026-07-29 17:30:00+05:30",
+      },
+    ]);
+  });
+
+  it("fills a blank Evening without ever overwriting a concurrently saved value", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 1 });
+    const client = { query } as unknown as PoolClient;
+
+    await fillReportRowEveningStatusIfBlank(client, {
+      rowId: "row-1",
+      eveningRtplStatus: "Case-Closed",
+    });
+
+    const [sql, values] = query.mock.calls[0] as [string, unknown[]];
+    // Guarded in-SQL: only a blank Evening is ever written to.
+    expect(sql).toContain(
+      "NULLIF(TRIM(COALESCE(evening_rtpl_status, '')), '') IS NULL",
+    );
+    // A system copy of another report's user edit — must NOT stamp updated_at,
+    // or it would masquerade as a user edit in the authority ordering.
+    expect(sql).not.toContain("updated_at");
+    expect(values).toEqual(["row-1", "Case-Closed"]);
   });
 
   it("updates only the addressed report row for persisted manual edits", async () => {

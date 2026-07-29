@@ -8,10 +8,12 @@ import {
 import {
   backfillMissingDailyCallPlanReportRowCarryForward,
   createDailyCallPlanReport,
+  fillReportRowEveningStatusIfBlank,
   findDailyCallPlanReportRowMetadataByReportId,
   findFlexStatusHistoryForUnchangedDays,
   findMaxDailyCallPlanReportRowSerialNo,
   findPreviousFinalReportRowsForManualCarryForward,
+  findSameDayUserSetEveningRows,
   insertDailyCallPlanReportRows,
   overwriteCarriedForwardFieldValues,
   type FlexStatusHistoryReport,
@@ -62,8 +64,10 @@ import {
 } from "./dailyCallPlanFormatter.js";
 import { computeFlexStatusUnchangedDaysFromHistory } from "./flexStatusUnchangedDays.js";
 import {
+  buildSameDayEveningAuthority,
   cleanManualValue,
   manualFieldCarryForwardService,
+  type SameDayEveningAuthorityEntry,
 } from "./manualFieldCarryForwardService.js";
 import { validateReportGenerationTransaction } from "./reportGenerationValidation.js";
 import { calculateWipAging } from "../compareService/wipAgingCalculator.js";
@@ -481,10 +485,19 @@ function applyComparisonRtplFallbackToRows(
   return fallbackCount;
 }
 
+function parseDbTimestamp(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 async function applyPersistedRowMetadata(
   client: Parameters<typeof findDailyCallPlanReportRowMetadataByReportId>[0],
   reportId: string,
   rows: GeneratedDailyCallPlanRow[],
+  sameDayEveningAuthority: ReadonlyMap<string, SameDayEveningAuthorityEntry>,
 ): Promise<GeneratedDailyCallPlanRow[]> {
   const metadata = await findDailyCallPlanReportRowMetadataByReportId(
     client,
@@ -595,6 +608,35 @@ async function applyPersistedRowMetadata(
     // per-report and set to blank at each new day's upload), so it is restored
     // directly from the persisted snapshot rather than through the field loop.
     row.enriched.evening_rtpl_status = persisted.eveningRtplStatus;
+
+    // Same-day Evening heal: this report's row is blank, but a user set an
+    // Evening for the ticket on ANOTHER of today's reports (stale tab /
+    // FieldEZ-worker churn) after this row was last touched. Adopt it and
+    // persist it (guarded fill-if-blank), so the report everyone reads — and
+    // the EOD productivity freeze, which reads persisted rows — shows the
+    // user's entry instead of a wiped blank. A row edited at-or-after the
+    // authority entry keeps its own state, so an explicit clear made on THIS
+    // report is never resurrected.
+    if (!cleanManualValue(persisted.eveningRtplStatus)) {
+      const ticketAuthorityKey = getNormalizedTicketKey(row.enriched.ticket_id);
+      const authorityEntry = ticketAuthorityKey
+        ? sameDayEveningAuthority.get(ticketAuthorityKey)
+        : undefined;
+      const persistedEditedAt = parseDbTimestamp(persisted.updatedAt);
+      const authorityEditedAt = parseDbTimestamp(authorityEntry?.updatedAt);
+      const rowSpeaksForItself =
+        persistedEditedAt !== null &&
+        authorityEditedAt !== null &&
+        persistedEditedAt >= authorityEditedAt;
+
+      if (authorityEntry && !rowSpeaksForItself) {
+        row.enriched.evening_rtpl_status = authorityEntry.eveningRtplStatus;
+        await fillReportRowEveningStatusIfBlank(client, {
+          rowId: persisted.id,
+          eveningRtplStatus: authorityEntry.eveningRtplStatus,
+        });
+      }
+    }
 
     row.match.enrichedRow = row.enriched;
     row.carryForward.carriedForwardFields = [...carriedForwardFields];
@@ -885,11 +927,23 @@ export async function generateDailyCallPlanReport(
         regionId: input.regionId,
       },
     );
+    // Same-day Evening authority: users may have entered Evening statuses on
+    // ANY of today's reports (multiple exist per day — the FieldEZ worker
+    // creates one per changed file — and edits can land on a report that is
+    // no longer the newest). The LIMIT-1 carry-forward source alone loses
+    // those entries; this merges them back so no upload/regeneration ever
+    // blanks a same-day Evening a user already set.
+    const sameDayEveningAuthority = buildSameDayEveningAuthority(
+      await findSameDayUserSetEveningRows(client, {
+        reportDate: input.reportDate,
+      }),
+    );
     const carryForwardResult = manualFieldCarryForwardService.apply({
       currentRows: generatedRows,
       previousFinalRows,
       currentReportDate: input.reportDate,
       allowedWorkLocations,
+      sameDayEveningAuthority,
     });
     let rows = carryForwardResult.rows;
     console.info("[dailyCallPlanGenerator] RTPL carry-forward input", {
@@ -1037,7 +1091,12 @@ export async function generateDailyCallPlanReport(
       updateAging("fresh-report");
       await insertDailyCallPlanReportRows(client, reportId, rows);
     } else {
-      rows = await applyPersistedRowMetadata(client, reportId, rows);
+      rows = await applyPersistedRowMetadata(
+        client,
+        reportId,
+        rows,
+        sameDayEveningAuthority,
+      );
       console.info("[dailyCallPlanGenerator] RTPL persisted metadata applied", {
         reportDate: input.reportDate,
         regionId: input.regionId,

@@ -6,7 +6,10 @@ import {
   formatDailyCallPlanRow,
   orderedDailyCallPlanRow,
 } from "./dailyCallPlanFormatter.js";
-import { ManualFieldCarryForwardService } from "./manualFieldCarryForwardService.js";
+import {
+  buildSameDayEveningAuthority,
+  ManualFieldCarryForwardService,
+} from "./manualFieldCarryForwardService.js";
 
 function enrichedRow(
   overrides: Partial<EnrichedCallPlanRow> = {},
@@ -124,6 +127,7 @@ function previousFinalRow(
     statusAging: "2",
     changeType: null,
     sameDayClosed: false,
+    rowUpdatedAt: null,
     manualValues: {
       rtpl_status: "Pending customer",
       segment: "Enterprise",
@@ -555,6 +559,235 @@ describe("ManualFieldCarryForwardService", () => {
       expect(result.rows).toHaveLength(1);
       expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(false);
       expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(false);
+    });
+  });
+
+  // Multiple reports exist per day (each upload — incl. the FieldEZ auto-sync
+  // worker's, every ~15 min — creates one), and users can be typing Evening
+  // statuses into a report that is no longer the newest (stale tab, worker
+  // churn, in-flight generation race). Carry-forward sources rows from only
+  // ONE report (LIMIT 1), so an Evening entered on any OTHER same-day report
+  // used to vanish from every later report — the production "Evening status
+  // disappears against Scheduled cases" wipe. The same-day Evening authority
+  // (the user's newest non-blank Evening per ticket across ALL of today's
+  // reports) closes that hole.
+  describe("same-day Evening authority", () => {
+    const authorityFor = (
+      eveningRtplStatus: string,
+      updatedAt = "2026-03-28 17:30:00+05:30",
+    ) =>
+      buildSameDayEveningAuthority([
+        { ticketId: "WO-000123", eveningRtplStatus, updatedAt },
+      ]);
+
+    // FieldEZ-worker path: flex-only upload, so the fresh row arrives with a
+    // BLANK Morning; the source report (created by the worker's previous
+    // cycle before the user typed) never saw the Evening entry.
+    it("recovers an Evening the LIMIT-1 source chain lost (worker-shaped upload)", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [generatedRow({ rtpl_status: "", segment: "Print" })],
+        previousFinalRows: [
+          previousFinalRow({
+            rtplStatus: "Scheduled",
+            eveningRtplStatus: null,
+            sourceReportDate: "2026-03-28",
+          }),
+        ],
+        sameDayEveningAuthority: authorityFor("Attended"),
+      });
+
+      const [row] = result.rows;
+      expect(row?.enriched.rtpl_status).toBe("Scheduled");
+      expect(row?.enriched.evening_rtpl_status).toBe("Attended");
+    });
+
+    // Manual path: the Renderways/call-plan file supplied the Morning.
+    it("recovers a lost Evening even when today's files supplied the Morning", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [
+          generatedRow({ rtpl_status: "Scheduled", segment: "Print" }),
+        ],
+        previousFinalRows: [
+          previousFinalRow({
+            rtplStatus: "Scheduled",
+            eveningRtplStatus: null,
+            sourceReportDate: "2026-03-28",
+          }),
+        ],
+        sameDayEveningAuthority: authorityFor("Case-Closed"),
+      });
+
+      const [row] = result.rows;
+      expect(row?.enriched.rtpl_status).toBe("Scheduled");
+      expect(row?.carryForward.carriedForwardFields).not.toContain("rtpl_status");
+      expect(row?.enriched.evening_rtpl_status).toBe("Case-Closed");
+    });
+
+    it("prefers a newer authority Evening over the source row's older value", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [generatedRow({ segment: "Print" })],
+        previousFinalRows: [
+          previousFinalRow({
+            rtplStatus: "Scheduled",
+            eveningRtplStatus: "Attended",
+            sourceReportDate: "2026-03-28",
+            rowUpdatedAt: "2026-03-28 17:00:00+05:30",
+          }),
+        ],
+        sameDayEveningAuthority: authorityFor(
+          "Case-Closed",
+          "2026-03-28 17:30:00+05:30",
+        ),
+      });
+
+      expect(result.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
+    });
+
+    it("lets a source row edited AFTER the authority speak for itself (explicit clear survives)", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [generatedRow({ segment: "Print" })],
+        previousFinalRows: [
+          previousFinalRow({
+            rtplStatus: "Scheduled",
+            // The user deliberately cleared the Evening on the newest report.
+            eveningRtplStatus: null,
+            sourceReportDate: "2026-03-28",
+            rowUpdatedAt: "2026-03-28 18:00:00+05:30",
+          }),
+        ],
+        sameDayEveningAuthority: authorityFor(
+          "Case-Closed",
+          "2026-03-28 17:00:00+05:30",
+        ),
+      });
+
+      expect(result.rows[0]?.enriched.evening_rtpl_status ?? null).toBeNull();
+    });
+
+    it("keeps the source row's own newer Evening over an older authority entry", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [generatedRow({ segment: "Print" })],
+        previousFinalRows: [
+          previousFinalRow({
+            rtplStatus: "Scheduled",
+            eveningRtplStatus: "Attended",
+            sourceReportDate: "2026-03-28",
+            rowUpdatedAt: "2026-03-28 18:00:00+05:30",
+          }),
+        ],
+        sameDayEveningAuthority: authorityFor(
+          "Case-Closed",
+          "2026-03-28 17:00:00+05:30",
+        ),
+      });
+
+      expect(result.rows[0]?.enriched.evening_rtpl_status).toBe("Attended");
+    });
+
+    it("recovers a lost Evening on a same-day closed synthetic row", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            changeType: "CARRIED",
+            eveningRtplStatus: null,
+          }),
+        ],
+        sameDayEveningAuthority: authorityFor("Case-Closed"),
+      });
+
+      expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(true);
+      expect(result.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
+    });
+
+    // Evening is per-day: a prior-day source (the day's first upload) starts
+    // blank no matter what — the authority only ever holds same-day entries,
+    // so this can only trigger with a stale/foreign map and must still be a
+    // no-op.
+    it("never applies the authority to a prior-day closure", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-27",
+            eveningRtplStatus: "Case-Closed",
+          }),
+        ],
+        sameDayEveningAuthority: authorityFor("Case-Closed"),
+      });
+
+      expect(result.rows[0]?.carryForward.closedSyntheticRow).toBe(true);
+      expect(result.rows[0]?.enriched.evening_rtpl_status ?? null).toBeNull();
+    });
+
+    it("recovers a lost Evening on an out-of-scope retained row", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            workLocation: "ASPS01463",
+            changeType: "CARRIED",
+            rtplStatus: "Scheduled",
+            eveningRtplStatus: null,
+          }),
+        ],
+        allowedWorkLocations: new Set(["ASPS01461"]),
+        sameDayEveningAuthority: authorityFor("Attended"),
+      });
+
+      const [row] = result.rows;
+      expect(row?.carryForward.regionScopeRetainedRow).toBe(true);
+      expect(row?.enriched.rtpl_status).toBe("Scheduled");
+      expect(row?.enriched.evening_rtpl_status).toBe("Attended");
+    });
+
+    it("applies a user-set same-day Evening even when the source report misses the ticket", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [generatedRow({ segment: "Print" })],
+        previousFinalRows: [],
+        sameDayEveningAuthority: authorityFor("Attended"),
+      });
+
+      expect(result.rows[0]?.enriched.evening_rtpl_status).toBe("Attended");
+    });
+
+    it("buildSameDayEveningAuthority keeps the newest entry per ticket and drops placeholders", () => {
+      const authority = buildSameDayEveningAuthority([
+        // Ordered most-recently-edited first, exactly as the repository
+        // returns them.
+        {
+          ticketId: "WO-000123",
+          eveningRtplStatus: "Case-Closed",
+          updatedAt: "2026-03-28 18:00:00+05:30",
+        },
+        {
+          ticketId: "123",
+          eveningRtplStatus: "Attended",
+          updatedAt: "2026-03-28 17:00:00+05:30",
+        },
+        {
+          ticketId: "WO-777",
+          eveningRtplStatus: "N/A",
+          updatedAt: "2026-03-28 16:00:00+05:30",
+        },
+      ]);
+
+      // "WO-000123" and "123" normalize to the same ticket; newest wins.
+      expect(authority.size).toBe(1);
+      const [entry] = authority.values();
+      expect(entry?.eveningRtplStatus).toBe("Case-Closed");
+      expect(entry?.updatedAt).toBe("2026-03-28 18:00:00+05:30");
     });
   });
 

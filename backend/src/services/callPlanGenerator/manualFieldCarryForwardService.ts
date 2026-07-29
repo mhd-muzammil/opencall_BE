@@ -1,5 +1,8 @@
 import type { ReportRowComparisonInsight } from "@opencall/shared";
-import type { FinalReportManualCarryForwardRow } from "../../repositories/dailyCallPlanReportRepository.js";
+import type {
+  FinalReportManualCarryForwardRow,
+  SameDayUserSetEveningRow,
+} from "../../repositories/dailyCallPlanReportRepository.js";
 import type { EnrichedCallPlanRow, MatchedCallPlanRecord } from "../../types/matching.js";
 import type {
   GeneratedDailyCallPlanRow,
@@ -50,6 +53,89 @@ export interface ApplyManualFieldCarryForwardInput {
    * dropped out-of-scope rows from currentRows.
    */
   allowedWorkLocations?: ReadonlySet<string> | null;
+  /**
+   * Same-day Evening authority: for each ticket, the user's most recent
+   * NON-BLANK Evening entry across ALL of today's reports (see
+   * buildSameDayEveningAuthority). previousFinalRows come from only ONE
+   * report (LIMIT 1), and with multiple reports per day (each upload — incl.
+   * the FieldEZ worker's — creates one) the Evening a user entered on a
+   * different same-day report is invisible there; without this it vanished
+   * from every later report. Null/absent = no same-day user-set Evenings
+   * (e.g. the day's first upload) — behaviour is byte-identical to before.
+   */
+  sameDayEveningAuthority?: ReadonlyMap<string, SameDayEveningAuthorityEntry> | null;
+}
+
+export interface SameDayEveningAuthorityEntry {
+  /** Cleaned, non-blank Evening value (never null). */
+  eveningRtplStatus: string;
+  /** rows.updated_at (pg text) of the user edit that holds this value. */
+  updatedAt: string;
+}
+
+/**
+ * Collapses the user-touched Evening rows (ordered most-recently-edited
+ * first) into one entry per normalized ticket — the user's newest same-day
+ * Evening state. Placeholder values ("N/A", "-", …) are dropped.
+ */
+export function buildSameDayEveningAuthority(
+  rows: readonly SameDayUserSetEveningRow[],
+): Map<string, SameDayEveningAuthorityEntry> {
+  const authority = new Map<string, SameDayEveningAuthorityEntry>();
+
+  for (const row of rows) {
+    const ticketKey = getNormalizedTicketKey(row.ticketId);
+    const evening = cleanManualValue(row.eveningRtplStatus);
+    if (!ticketKey || !evening || authority.has(ticketKey)) {
+      continue;
+    }
+    authority.set(ticketKey, {
+      eveningRtplStatus: evening,
+      updatedAt: row.updatedAt,
+    });
+  }
+
+  return authority;
+}
+
+function parseDbTimestamp(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * The effective same-day Evening for a source row: the row's own value,
+ * unless the same-day authority holds a NEWER user-set Evening for the
+ * ticket (entered on another of today's reports that the LIMIT-1 source
+ * missed). A source row edited at-or-after the authority entry speaks for
+ * itself — including an explicit clear — so a deliberately blanked Evening
+ * is never resurrected from an older report.
+ */
+function sameDaySourceEvening(
+  previousRow: FinalReportManualCarryForwardRow,
+  authority: ReadonlyMap<string, SameDayEveningAuthorityEntry> | null | undefined,
+): string | null {
+  const sourceEvening = cleanManualValue(previousRow.eveningRtplStatus);
+  const ticketKey = getNormalizedTicketKey(previousRow.ticketId);
+  const entry = ticketKey ? authority?.get(ticketKey) : undefined;
+  if (!entry) {
+    return sourceEvening;
+  }
+
+  const sourceEditedAt = parseDbTimestamp(previousRow.rowUpdatedAt);
+  const authorityEditedAt = parseDbTimestamp(entry.updatedAt);
+  if (
+    sourceEditedAt !== null &&
+    authorityEditedAt !== null &&
+    sourceEditedAt >= authorityEditedAt
+  ) {
+    return sourceEvening;
+  }
+
+  return entry.eveningRtplStatus;
 }
 
 export interface ApplyManualFieldCarryForwardResult {
@@ -212,6 +298,7 @@ function missingManualFields(
 function closedRowToEnriched(
   row: FinalReportManualCarryForwardRow,
   currentReportDate: string,
+  eveningAuthority?: ReadonlyMap<string, SameDayEveningAuthorityEntry> | null,
 ): EnrichedCallPlanRow {
   return {
     ticket_id: row.ticketId,
@@ -220,12 +307,13 @@ function closedRowToEnriched(
     wip_aging: row.wipAging,
     // A same-day closure keeps the Evening entered earlier today (e.g.
     // "Case-Closed") — the closed row stays on the Records page all day, and a
-    // blank Evening there misreads as unfinished EOD work. A prior-day closure
-    // starts blank: Evening is per-day, so yesterday's value must not leak
-    // into today's report.
+    // blank Evening there misreads as unfinished EOD work. The same-day value
+    // comes through the Evening authority so an entry made on another of
+    // today's reports survives too. A prior-day closure starts blank: Evening
+    // is per-day, so yesterday's value must not leak into today's report.
     evening_rtpl_status: sourceIsPriorDay(row, currentReportDate)
       ? null
-      : cleanManualValue(row.eveningRtplStatus),
+      : sameDaySourceEvening(row, eveningAuthority),
     rtpl_status: previousFieldValue(row, "rtpl_status") ?? "",
     segment: previousFieldValue(row, "segment") ?? "",
     engineer: previousFieldValue(row, "engineer"),
@@ -295,8 +383,9 @@ function closedComparisonInsight(
 function retainedRowToEnriched(
   row: FinalReportManualCarryForwardRow,
   currentReportDate: string,
+  eveningAuthority?: ReadonlyMap<string, SameDayEveningAuthorityEntry> | null,
 ): EnrichedCallPlanRow {
-  const enriched = closedRowToEnriched(row, currentReportDate);
+  const enriched = closedRowToEnriched(row, currentReportDate, eveningAuthority);
   const sourceMorning = cleanManualValue(row.rtplStatus);
   const sourceEvening = cleanManualValue(row.eveningRtplStatus);
 
@@ -305,7 +394,7 @@ function retainedRowToEnriched(
     enriched.evening_rtpl_status = null;
   } else {
     enriched.rtpl_status = sourceMorning ?? "";
-    enriched.evening_rtpl_status = sourceEvening;
+    enriched.evening_rtpl_status = sameDaySourceEvening(row, eveningAuthority);
   }
 
   return enriched;
@@ -426,14 +515,28 @@ export class ManualFieldCarryForwardService {
           } else {
             // Same-day re-upload: keep the Morning baseline and preserve the
             // Evening work entered earlier today — even when today's files
-            // already supplied the Morning.
+            // already supplied the Morning. The source value goes through the
+            // same-day Evening authority, so an Evening entered on ANOTHER of
+            // today's reports (stale tab, FieldEZ-worker churn, in-flight
+            // generation race) survives even when the LIMIT-1 source report
+            // never saw it.
             if (morningIsBlank && sourceMorning) {
               assignManualField(enriched, "rtpl_status", sourceMorning);
               carriedForwardFields.push("rtpl_status");
             }
             enriched.evening_rtpl_status =
-              cleanManualValue(enriched.evening_rtpl_status) ?? sourceEvening;
+              cleanManualValue(enriched.evening_rtpl_status) ??
+              sameDaySourceEvening(previousRow, input.sameDayEveningAuthority);
           }
+        }
+      } else if (ticketKey && !cleanManualValue(enriched.evening_rtpl_status)) {
+        // No carry-forward source row for this ticket, but a user DID set an
+        // Evening for it on one of today's reports (the LIMIT-1 source can
+        // miss a ticket another same-day report holds). A user-set same-day
+        // Evening must never be blanked by a regeneration.
+        const authorityEntry = input.sameDayEveningAuthority?.get(ticketKey);
+        if (authorityEntry) {
+          enriched.evening_rtpl_status = authorityEntry.eveningRtplStatus;
         }
       }
 
@@ -510,7 +613,11 @@ export class ManualFieldCarryForwardService {
       // that were ALREADY closed still flow through the closed path below so the
       // ledger keeps them and the same-day rules keep applying.
       if (!inScope && previousRow.changeType !== "CLOSED") {
-        const enriched = retainedRowToEnriched(previousRow, input.currentReportDate);
+        const enriched = retainedRowToEnriched(
+          previousRow,
+          input.currentReportDate,
+          input.sameDayEveningAuthority,
+        );
 
         mergedRows.push({
           id: null,
@@ -537,7 +644,11 @@ export class ManualFieldCarryForwardService {
         continue;
       }
 
-      const enriched = closedRowToEnriched(previousRow, input.currentReportDate);
+      const enriched = closedRowToEnriched(
+        previousRow,
+        input.currentReportDate,
+        input.sameDayEveningAuthority,
+      );
       const match = closedSyntheticMatch(enriched);
 
       mergedRows.push({

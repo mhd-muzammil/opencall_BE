@@ -249,6 +249,13 @@ export interface FinalReportManualCarryForwardRow {
   changeType: string | null;
   /** Was this row closed by a same-day re-upload (i.e. still on the Records page)? */
   sameDayClosed: boolean;
+  /**
+   * rows.updated_at of the source row (null = never user-edited). Lets the
+   * same-day Evening rule decide whether the source row itself reflects the
+   * newest user action (incl. an explicit clear) or whether a more recent
+   * user-set Evening on ANOTHER same-day report must win.
+   */
+  rowUpdatedAt: string | null;
   manualValues: Partial<Record<ManualCarryForwardField, string | null>>;
 }
 
@@ -286,6 +293,7 @@ interface FinalReportManualCarryForwardDbRow {
   source_report_date: string | null;
   change_type: string | null;
   same_day_closed: boolean | null;
+  row_updated_at: string | null;
 }
 
 function mapFinalReportManualCarryForwardRow(
@@ -344,6 +352,7 @@ function mapFinalReportManualCarryForwardRow(
     sourceReportDate: row.source_report_date,
     changeType: row.change_type,
     sameDayClosed: row.same_day_closed ?? false,
+    rowUpdatedAt: row.row_updated_at ?? null,
     manualValues,
   };
 }
@@ -642,6 +651,7 @@ export async function findFinalReportRowsForManualCarryForwardBySessionId(
         rows.flex_status_unchanged_days,
         rows.change_type::TEXT AS change_type,
         rows.same_day_closed,
+        rows.updated_at::TEXT AS row_updated_at,
         NULL::text AS source_report_date
       FROM report_history_sessions sessions
       JOIN daily_call_plan_report_rows rows
@@ -854,6 +864,7 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         rows.flex_status_unchanged_days,
         rows.change_type::TEXT AS change_type,
         rows.same_day_closed,
+        rows.updated_at::TEXT AS row_updated_at,
         previous_session.effective_report_date::text AS source_report_date
       FROM previous_session
       JOIN report_history_sessions sessions
@@ -867,6 +878,87 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
   );
 
   return result.rows.map(mapFinalReportManualCarryForwardRow);
+}
+
+/**
+ * One user-set same-day Evening (EOD) status: a report row a user actually
+ * edited (updated_at stamped — generation-written rows never stamp it) whose
+ * Evening is non-blank, from ANY of the given date's reports. Ordered
+ * most-recently-edited first, so the first row per ticket is the user's
+ * newest Evening state for that ticket today.
+ */
+export interface SameDayUserSetEveningRow {
+  ticketId: string;
+  eveningRtplStatus: string | null;
+  /** rows.updated_at (pg text) of the edit holding this value. */
+  updatedAt: string;
+}
+
+/**
+ * Every user-touched, non-blank Evening status across ALL of `reportDate`'s
+ * reports. Multiple reports exist per day (each upload — incl. the FieldEZ
+ * auto-sync worker's — creates one) and users can be typing into a report
+ * that is no longer the newest (stale tab, worker churn, in-flight
+ * generation). Carry-forward sources rows from only ONE report (LIMIT 1), so
+ * without this an Evening entered on any other same-day report silently
+ * vanished from every later report — the "Evening status disappears against
+ * Scheduled cases" wipe. Generation merges these as the same-day Evening
+ * authority: a user-set Evening must survive every later same-day
+ * upload/regeneration, whichever report it was entered on.
+ */
+export async function findSameDayUserSetEveningRows(
+  client: PoolClient,
+  input: { reportDate: string },
+): Promise<SameDayUserSetEveningRow[]> {
+  const result = await client.query<{
+    ticket_id: string;
+    evening_rtpl_status: string | null;
+    updated_at: string;
+  }>(
+    `
+      SELECT
+        rows.ticket_id,
+        rows.evening_rtpl_status,
+        rows.updated_at::TEXT AS updated_at
+      FROM daily_call_plan_report_rows rows
+      JOIN daily_call_plan_reports reports
+        ON reports.id = rows.report_id
+      WHERE reports.report_date = $1::date
+        AND rows.updated_at IS NOT NULL
+        AND NOT rows.is_excluded
+        AND NULLIF(TRIM(COALESCE(rows.evening_rtpl_status, '')), '') IS NOT NULL
+      ORDER BY rows.updated_at DESC, rows.id DESC
+    `,
+    [input.reportDate],
+  );
+
+  return result.rows.map((row) => ({
+    ticketId: row.ticket_id,
+    eveningRtplStatus: row.evening_rtpl_status,
+    updatedAt: row.updated_at,
+  }));
+}
+
+/**
+ * Backfills a blank Evening (EOD) status on a persisted report row from the
+ * same-day Evening authority. Guarded in-SQL so it can never overwrite a
+ * value a user saved concurrently, and deliberately does NOT touch
+ * updated_at: this is a system copy of a user's edit made on another
+ * same-day report, not a user edit on this row.
+ */
+export async function fillReportRowEveningStatusIfBlank(
+  client: PoolClient,
+  payload: { rowId: string; eveningRtplStatus: string },
+): Promise<void> {
+  await client.query(
+    `
+      UPDATE daily_call_plan_report_rows
+      SET evening_rtpl_status = $2
+      WHERE id = $1
+        AND NULLIF(TRIM(COALESCE(evening_rtpl_status, '')), '') IS NULL
+    `,
+    [payload.rowId, payload.eveningRtplStatus],
+  );
 }
 
 /** One ticket's Flex Status within a prior report. */

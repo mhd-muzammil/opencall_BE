@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   matchSourceRecords: vi.fn(),
   findPreviousFinalReportRowsForManualCarryForward: vi.fn(),
   findFlexStatusHistoryForUnchangedDays: vi.fn(),
+  findSameDayUserSetEveningRows: vi.fn(),
+  fillReportRowEveningStatusIfBlank: vi.fn(),
   findDailyCallPlanReportRowMetadataByReportId: vi.fn(),
   backfillMissingDailyCallPlanReportRowCarryForward: vi.fn(),
   overwriteCarriedForwardFieldValues: vi.fn(),
@@ -49,6 +51,8 @@ vi.mock("../../repositories/dailyCallPlanReportRepository.js", () => ({
     mocks.findPreviousFinalReportRowsForManualCarryForward,
   findFlexStatusHistoryForUnchangedDays:
     mocks.findFlexStatusHistoryForUnchangedDays,
+  findSameDayUserSetEveningRows: mocks.findSameDayUserSetEveningRows,
+  fillReportRowEveningStatusIfBlank: mocks.fillReportRowEveningStatusIfBlank,
   insertDailyCallPlanReportRows: mocks.insertDailyCallPlanReportRows,
   findMaxDailyCallPlanReportRowSerialNo:
     mocks.findMaxDailyCallPlanReportRowSerialNo,
@@ -123,6 +127,7 @@ function previousFinalRow(): FinalReportManualCarryForwardRow {
     statusAging: "2",
     changeType: null,
     sameDayClosed: false,
+    rowUpdatedAt: null,
     manualValues: {
       rtpl_status: "Part Pending",
       segment: "Enterprise",
@@ -211,6 +216,9 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findUploadBatchesForValidation.mockResolvedValue([]);
     mocks.findRegionById.mockResolvedValue(null);
     mocks.findMaxDailyCallPlanReportRowSerialNo.mockResolvedValue(0);
+    // Default: no user-set same-day Evening statuses.
+    mocks.findSameDayUserSetEveningRows.mockResolvedValue([]);
+    mocks.fillReportRowEveningStatusIfBlank.mockResolvedValue(undefined);
   });
 
   it("does not let blank persisted RTPL erase previous-final carry-forward on existing reports", async () => {
@@ -349,6 +357,211 @@ describe("generateDailyCallPlanReport", () => {
     expect(
       mocks.backfillMissingDailyCallPlanReportRowCarryForward,
     ).not.toHaveBeenCalled();
+  });
+
+  // Regression for the production "Evening status disappears against Scheduled
+  // cases" wipe, remaining vector (2026-07-29): the FieldEZ auto-sync worker
+  // creates a NEW report every ~15 min, and the Evening a user entered lands on
+  // a report that is no longer the newest (stale tab / worker churn / edits
+  // saved while the next generation was already in flight). The LIMIT-1
+  // carry-forward source never sees that Evening, so every later report was
+  // written with a blank Evening. The same-day Evening authority must recover
+  // it.
+  it("a worker-shaped upload never blanks an Evening set on another same-day report", async () => {
+    const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
+    const client = {} as PoolClient;
+
+    mocks.withTransaction.mockImplementation(async (callback) => callback(client));
+    // The worker uploads a brand-new flex batch each cycle -> a NEW report.
+    mocks.validateReportGenerationTransaction.mockResolvedValue(null);
+    mocks.createDailyCallPlanReport.mockResolvedValue("report-new");
+    mocks.findFlexWipRecordsByBatchId.mockResolvedValue([{ ticketId: "WO-123", rowNumber: 1 }]);
+    mocks.findRenderwaysRecordsByBatchId.mockResolvedValue([]);
+    mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
+    mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
+    mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    // Flex-only upload (no Renderways/call plan): the fresh row's Morning is
+    // blank, exactly what the worker produces.
+    mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
+
+    // LIMIT-1 source: an earlier report from TODAY whose row is Scheduled but
+    // whose Evening column never saw the user's entry.
+    const source = previousFinalRow();
+    source.sourceReportDate = "2026-05-26";
+    source.rtplStatus = "Scheduled";
+    source.eveningRtplStatus = null;
+    source.manualValues = { ...source.manualValues, rtpl_status: "Scheduled" };
+    mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([source]);
+    mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
+
+    // ...but the user DID set an Evening today, on a different same-day report.
+    mocks.findSameDayUserSetEveningRows.mockResolvedValue([
+      {
+        ticketId: "WO-123",
+        eveningRtplStatus: "Attended",
+        updatedAt: "2026-05-26 17:30:00+05:30",
+      },
+    ]);
+
+    mocks.findOrCreateCompletedHistorySessionForReport.mockResolvedValue({
+      id: "session-1",
+    });
+    mocks.findPreviousCompletedComparisonSession.mockResolvedValue(null);
+
+    // Worker request shape: flex batch only, no region, allowCreate.
+    const report = await generateDailyCallPlanReport({
+      reportDate: "2026-05-26",
+      generatedBy: "worker-user",
+      regionId: null,
+      flexUploadBatchId: "batch-flex",
+      allowCreate: true,
+    });
+
+    expect(report.rows[0]?.enriched.rtpl_status).toBe("Scheduled");
+    expect(report.rows[0]?.enriched.evening_rtpl_status).toBe("Attended");
+
+    // And the NEW report is persisted with the Evening intact.
+    const [, , insertedRows] = mocks.insertDailyCallPlanReportRows.mock.calls[0] as [
+      unknown,
+      string,
+      Array<{ enriched: { evening_rtpl_status: string | null } }>,
+    ];
+    expect(insertedRows[0]?.enriched.evening_rtpl_status).toBe("Attended");
+  });
+
+  it("heals a blank persisted Evening on an existing report from the same-day authority", async () => {
+    const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
+    const client = {} as PoolClient;
+
+    mocks.withTransaction.mockImplementation(async (callback) => callback(client));
+    mocks.validateReportGenerationTransaction.mockResolvedValue("report-1");
+    mocks.findFlexWipRecordsByBatchId.mockResolvedValue([{ ticketId: "WO-123", rowNumber: 1 }]);
+    mocks.findRenderwaysRecordsByBatchId.mockResolvedValue([]);
+    mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
+    mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
+    mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
+    mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([]);
+    mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
+    mocks.findSameDayUserSetEveningRows.mockResolvedValue([
+      {
+        ticketId: "WO-123",
+        eveningRtplStatus: "Case-Closed",
+        updatedAt: "2026-05-26 17:30:00+05:30",
+      },
+    ]);
+    // This report's own row was never user-edited and its Evening is blank —
+    // the report was generated before the user's entry on another report.
+    mocks.findDailyCallPlanReportRowMetadataByReportId.mockResolvedValue([
+      {
+        id: "row-1",
+        serialNo: 1,
+        ticketId: "WO-123",
+        caseCreatedTime: null,
+        wipAging: "1",
+        statusAging: null,
+        hpOwnerStatus: null,
+        rtplStatus: "Scheduled",
+        eveningRtplStatus: null,
+        segment: "",
+        engineer: "Priya",
+        location: null,
+        customerMail: null,
+        rca: null,
+        remarks: null,
+        manualNotes: null,
+        carriedForwardFields: [],
+        manualFieldsCompleted: false,
+        manualFieldsMissing: [],
+        updatedAt: null,
+        updatedBy: null,
+        isExcluded: false,
+      },
+    ]);
+    mocks.findOrCreateCompletedHistorySessionForReport.mockResolvedValue({
+      id: "session-1",
+    });
+    mocks.findPreviousCompletedComparisonSession.mockResolvedValue(null);
+
+    const report = await generateDailyCallPlanReport({
+      reportDate: "2026-05-26",
+      generatedBy: "user-1",
+      regionId: null,
+      flexUploadBatchId: "batch-flex",
+      allowCreate: false,
+    });
+
+    expect(report.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
+    expect(mocks.fillReportRowEveningStatusIfBlank).toHaveBeenCalledWith(client, {
+      rowId: "row-1",
+      eveningRtplStatus: "Case-Closed",
+    });
+  });
+
+  it("never heals over a row the user edited after the authority entry (clear stands)", async () => {
+    const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
+    const client = {} as PoolClient;
+
+    mocks.withTransaction.mockImplementation(async (callback) => callback(client));
+    mocks.validateReportGenerationTransaction.mockResolvedValue("report-1");
+    mocks.findFlexWipRecordsByBatchId.mockResolvedValue([{ ticketId: "WO-123", rowNumber: 1 }]);
+    mocks.findRenderwaysRecordsByBatchId.mockResolvedValue([]);
+    mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
+    mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
+    mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
+    mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([]);
+    mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
+    mocks.findSameDayUserSetEveningRows.mockResolvedValue([
+      {
+        ticketId: "WO-123",
+        eveningRtplStatus: "Case-Closed",
+        updatedAt: "2026-05-26 17:00:00+05:30",
+      },
+    ]);
+    // The user edited THIS row after the authority entry (e.g. cleared the
+    // Evening here) — the row speaks for itself.
+    mocks.findDailyCallPlanReportRowMetadataByReportId.mockResolvedValue([
+      {
+        id: "row-1",
+        serialNo: 1,
+        ticketId: "WO-123",
+        caseCreatedTime: null,
+        wipAging: "1",
+        statusAging: null,
+        hpOwnerStatus: null,
+        rtplStatus: "Scheduled",
+        eveningRtplStatus: null,
+        segment: "",
+        engineer: "Priya",
+        location: null,
+        customerMail: null,
+        rca: null,
+        remarks: null,
+        manualNotes: null,
+        carriedForwardFields: [],
+        manualFieldsCompleted: false,
+        manualFieldsMissing: [],
+        updatedAt: "2026-05-26 18:00:00+05:30",
+        updatedBy: "user-1",
+        isExcluded: false,
+      },
+    ]);
+    mocks.findOrCreateCompletedHistorySessionForReport.mockResolvedValue({
+      id: "session-1",
+    });
+    mocks.findPreviousCompletedComparisonSession.mockResolvedValue(null);
+
+    const report = await generateDailyCallPlanReport({
+      reportDate: "2026-05-26",
+      generatedBy: "user-1",
+      regionId: null,
+      flexUploadBatchId: "batch-flex",
+      allowCreate: false,
+    });
+
+    expect(report.rows[0]?.enriched.evening_rtpl_status ?? null).toBeNull();
+    expect(mocks.fillReportRowEveningStatusIfBlank).not.toHaveBeenCalled();
   });
 
   // Regression for the 2026-07-23 mass-close: regenerating an EXISTING report
