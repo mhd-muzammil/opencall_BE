@@ -1,3 +1,4 @@
+import type pg from "pg";
 import { query } from "../config/database.js";
 
 export interface EngineerRow {
@@ -230,11 +231,50 @@ export interface UpdateEngineerInput {
   updatedBy: string;
 }
 
+/**
+ * Finds an engineer in a region whose name matches case-insensitively
+ * (trimmed). Used to detect rename collisions: two distinct engineer records
+ * in the same region must never share a name, because historical call/report
+ * rows reference engineers by NAME string only.
+ */
+export async function findEngineerByNameInRegion(
+  engineerName: string,
+  regionId: string,
+  excludeId?: string,
+): Promise<Engineer | null> {
+  const params: unknown[] = [engineerName, regionId];
+  let excludeClause = "";
+  if (excludeId) {
+    params.push(excludeId);
+    excludeClause = `AND id <> $${params.length}`;
+  }
+
+  const result = await query<EngineerRow>(
+    `
+      SELECT ${ENGINEER_COLUMNS}
+      FROM engineers
+      WHERE lower(trim(engineer_name)) = lower(trim($1))
+        AND region_id = $2
+        ${excludeClause}
+      LIMIT 1
+    `,
+    params,
+  );
+  const row = result.rows[0];
+  return row ? mapEngineer(row) : null;
+}
+
 export async function updateEngineer(
   id: string,
   input: UpdateEngineerInput,
+  client?: pg.PoolClient,
 ): Promise<Engineer | null> {
-  const result = await query<EngineerRow>(
+  const run = client
+    ? <T extends pg.QueryResultRow>(text: string, params: unknown[]) =>
+        client.query<T>(text, params)
+    : <T extends pg.QueryResultRow>(text: string, params: unknown[]) =>
+        query<T>(text, params);
+  const result = await run<EngineerRow>(
     `
       UPDATE engineers
       SET
@@ -269,6 +309,91 @@ export async function updateEngineer(
   );
   const row = result.rows[0];
   return row ? mapEngineer(row) : null;
+}
+
+/** Region scope for a historical engineer-name remap. */
+export interface EngineerRenameScope {
+  /** The engineer's region id (matches report/batch region_id columns). */
+  regionId: string;
+  /**
+   * Every ASP work-location code the region covers (upper-cased), from
+   * aspCodesForRegion(...). Report rows carry ASP codes in work_location; this
+   * is the canonical per-row region signal (reports.region_id can be NULL on
+   * combined reports).
+   */
+  aspCodes: readonly string[];
+}
+
+export interface RenameEngineerHistoryCounts {
+  /** daily_call_plan_report_rows.engineer values rewritten. */
+  reportRows: number;
+  /** call_plan_records.engineer values rewritten. */
+  callPlanRecords: number;
+}
+
+/**
+ * Renaming an engineer cascades to the historical call/report rows that store
+ * the engineer as a NAME string, so filters and reports never show the same
+ * person twice ("JEEVA" vs "JEEVA CH"). Matching is case-insensitive and
+ * trimmed, so casing/whitespace variants of the old name are normalised onto
+ * the new spelling too — and rows that already carry the NEW name in a
+ * different casing are normalised as well, so the rename can never split one
+ * engineer into two casing buckets.
+ *
+ * Region-scoped: only rows attributable to the engineer's region are touched,
+ * so a same-named engineer in another region is never clobbered.
+ *   - report rows match when their work_location ASP code belongs to the
+ *     region OR their parent report is region-scoped to it;
+ *   - call plan records match when their upload batch is region-scoped to it
+ *     (records in region-less batches are left alone — their region is
+ *     unknowable).
+ *
+ * Runs on the caller's transaction client so the engineers-row rename and the
+ * historical remap commit or roll back together. The audit trail
+ * (user_activity_log) and frozen EOD productivity snapshots are deliberately
+ * left untouched.
+ */
+export async function renameEngineerInHistoricalRows(
+  client: pg.PoolClient,
+  oldName: string,
+  newName: string,
+  scope: EngineerRenameScope,
+): Promise<RenameEngineerHistoryCounts> {
+  const aspCodes = scope.aspCodes.map((code) => code.trim().toUpperCase());
+
+  const reportRowsResult = await client.query(
+    `
+      UPDATE daily_call_plan_report_rows rows
+      SET engineer = $2
+      FROM daily_call_plan_reports reports
+      WHERE reports.id = rows.report_id
+        AND lower(trim(rows.engineer)) IN (lower(trim($1)), lower(trim($2)))
+        AND rows.engineer IS DISTINCT FROM $2
+        AND (
+          upper(trim(coalesce(rows.work_location, ''))) = ANY($3::text[])
+          OR reports.region_id = $4::uuid
+        )
+    `,
+    [oldName, newName, aspCodes, scope.regionId],
+  );
+
+  const callPlanRecordsResult = await client.query(
+    `
+      UPDATE call_plan_records records
+      SET engineer = $2
+      FROM source_upload_batches batches
+      WHERE batches.id = records.upload_batch_id
+        AND lower(trim(records.engineer)) IN (lower(trim($1)), lower(trim($2)))
+        AND records.engineer IS DISTINCT FROM $2
+        AND batches.region_id = $3::uuid
+    `,
+    [oldName, newName, scope.regionId],
+  );
+
+  return {
+    reportRows: reportRowsResult.rowCount ?? 0,
+    callPlanRecords: callPlanRecordsResult.rowCount ?? 0,
+  };
 }
 
 export async function setEngineerActive(

@@ -1,18 +1,24 @@
 import type { AuthenticatedUser } from "../../types/auth.js";
+import { withTransaction } from "../../config/database.js";
 import { forbidden, notFound, badRequest } from "../../utils/httpError.js";
 import { insertActivity } from "../../repositories/activityLogRepository.js";
 import {
   findEngineerById,
+  findEngineerByNameInRegion,
   insertEngineer,
   listEngineers,
   listEngineersForDropdown,
+  renameEngineerInHistoricalRows,
   setEngineerActive,
   updateEngineer,
   type Engineer,
   type ListEngineersFilters,
   type ListEngineersResult,
   type DropdownEngineer,
+  type RenameEngineerHistoryCounts,
 } from "../../repositories/engineerRepository.js";
+import { findRegionById } from "../../repositories/regionRepository.js";
+import { aspCodesForRegion } from "../rbac/regionRowAccess.js";
 
 function assertRegionAccess(
   currentUser: AuthenticatedUser,
@@ -111,11 +117,21 @@ export interface UpdateEngineerServiceInput {
   vendorId?: string;
 }
 
+export interface UpdateEngineerServiceResult {
+  engineer: Engineer;
+  /**
+   * How many historical call/report row values were remapped from the old
+   * name to the new one when this update renamed the engineer. Both zero when
+   * nothing was renamed.
+   */
+  remappedHistory: RenameEngineerHistoryCounts;
+}
+
 export async function updateEngineerService(
   currentUser: AuthenticatedUser,
   id: string,
   input: UpdateEngineerServiceInput,
-): Promise<Engineer> {
+): Promise<UpdateEngineerServiceResult> {
   const existing = await findEngineerById(id);
   if (!existing) {
     throw notFound("Engineer not found");
@@ -137,11 +153,63 @@ export async function updateEngineerService(
   if (input.hpId !== undefined) updateData.hpId = input.hpId.trim();
   if (input.vendorId !== undefined) updateData.vendorId = input.vendorId.trim();
 
-  const updated = await updateEngineer(id, updateData);
+  // A rename (any change to the stored name, including casing-only fixes)
+  // must remap the historical call/report rows that store the engineer as a
+  // name string, else filters show the same person twice (old-name cases vs
+  // new-name cases). Scoped to the engineer's CURRENT region — that is where
+  // the historical rows live, and it protects a same-named engineer elsewhere.
+  const isRename =
+    updateData.engineerName !== undefined &&
+    updateData.engineerName !== existing.engineerName;
 
-  if (!updated) {
-    throw notFound("Engineer not found");
+  if (isRename) {
+    if (!updateData.engineerName) {
+      throw badRequest("engineerName cannot be empty");
+    }
+    // Collision guard: if ANOTHER engineer in this region already carries the
+    // new name, remapping would merge two people's case history — refuse.
+    const collision = await findEngineerByNameInRegion(
+      updateData.engineerName,
+      existing.regionId,
+      id,
+    );
+    if (collision) {
+      throw badRequest(
+        `Another engineer named "${collision.engineerName}" already exists in this region. ` +
+          `Renaming would merge their case history — pick a different name or delete the duplicate first.`,
+      );
+    }
   }
+
+  const renameScope = isRename
+    ? await (async () => {
+        const region = await findRegionById(existing.regionId);
+        return {
+          regionId: existing.regionId,
+          aspCodes: region ? [...aspCodesForRegion(region)] : [],
+        };
+      })()
+    : null;
+
+  // One transaction: the engineers-row update and the historical remap
+  // succeed or fail together.
+  const { updated, remappedHistory } = await withTransaction(async (client) => {
+    const updatedRow = await updateEngineer(id, updateData, client);
+    if (!updatedRow) {
+      throw notFound("Engineer not found");
+    }
+
+    let counts: RenameEngineerHistoryCounts = { reportRows: 0, callPlanRecords: 0 };
+    if (isRename && renameScope) {
+      counts = await renameEngineerInHistoricalRows(
+        client,
+        existing.engineerName,
+        updateData.engineerName!,
+        renameScope,
+      );
+    }
+    return { updated: updatedRow, remappedHistory: counts };
+  });
 
   await insertActivity({
     actorUserId: currentUser.id,
@@ -153,11 +221,19 @@ export async function updateEngineerService(
     targetId: id,
     ipAddress: null,
     userAgent: null,
-    metadata: { changes: Object.keys(input) },
+    metadata: isRename
+      ? {
+          changes: Object.keys(input),
+          renamedFrom: existing.engineerName,
+          renamedTo: updateData.engineerName,
+          remappedReportRows: remappedHistory.reportRows,
+          remappedCallPlanRecords: remappedHistory.callPlanRecords,
+        }
+      : { changes: Object.keys(input) },
     status: "SUCCESS",
   });
 
-  return updated;
+  return { engineer: updated, remappedHistory };
 }
 
 export async function setEngineerActiveService(

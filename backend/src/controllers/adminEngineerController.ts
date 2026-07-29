@@ -69,8 +69,12 @@ export const updateAdminEngineerController: RequestHandler = asyncHandler(
       throw badRequest("id is required");
     }
 
-    const engineer = await updateEngineerService(request.currentUser!, id, request.body);
-    response.json({ data: { engineer } });
+    const { engineer, remappedHistory } = await updateEngineerService(
+      request.currentUser!,
+      id,
+      request.body,
+    );
+    response.json({ data: { engineer, remappedHistory } });
   },
 );
 
