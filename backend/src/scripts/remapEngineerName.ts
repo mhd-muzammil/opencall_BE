@@ -36,7 +36,9 @@
  *   node dist/scripts/remapEngineerName.js --old="Jeeva" --new="Jeeva CH" --region=chennai --apply
  *
  * --region accepts the region name or code, case-insensitive ("chennai",
- * "Chennai", or the region's code).
+ * "Chennai", or the region's code) — or the region's UUID, for databases
+ * where duplicate region records make a name ambiguous. An ambiguous name
+ * lists every match (id, code, name, active) so you can rerun with the id.
  */
 import "../config/env.js";
 import { closeDatabasePool, pool } from "../config/database.js";
@@ -77,21 +79,38 @@ async function main(): Promise<void> {
       `"${args.oldName}" -> "${args.newName}" | region=${args.region}`,
   );
 
-  // --- Resolve the region (by name or code, case-insensitive). ---
-  const regionResult = await pool.query<{ id: string; code: string; name: string }>(
-    `
-      SELECT id, code, name
-      FROM regions
-      WHERE lower(trim(name)) = lower(trim($1)) OR lower(trim(code)) = lower(trim($1))
-    `,
+  // --- Resolve the region (by UUID, or by name/code case-insensitive). ---
+  const isUuid =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(args.region);
+  const regionResult = await pool.query<{
+    id: string;
+    code: string;
+    name: string;
+    is_active: boolean;
+  }>(
+    isUuid
+      ? `SELECT id, code, name, is_active FROM regions WHERE id = $1`
+      : `
+          SELECT id, code, name, is_active
+          FROM regions
+          WHERE lower(trim(name)) = lower(trim($1)) OR lower(trim(code)) = lower(trim($1))
+        `,
     [args.region],
   );
   if (regionResult.rows.length !== 1) {
-    console.error(
-      regionResult.rows.length === 0
-        ? `Region "${args.region}" not found.`
-        : `Region "${args.region}" is ambiguous (${regionResult.rows.length} matches).`,
-    );
+    if (regionResult.rows.length === 0) {
+      console.error(`Region "${args.region}" not found.`);
+    } else {
+      console.error(
+        `Region "${args.region}" is ambiguous (${regionResult.rows.length} matches). ` +
+          `Rerun with --region=<id> of the intended region:`,
+      );
+      for (const r of regionResult.rows) {
+        console.error(
+          `  --region=${r.id}  (code=${r.code}, name=${r.name}, active=${r.is_active})`,
+        );
+      }
+    }
     process.exitCode = 1;
     return;
   }
