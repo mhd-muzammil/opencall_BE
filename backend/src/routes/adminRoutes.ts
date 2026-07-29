@@ -25,6 +25,7 @@ import {
 import {
   createAdminEngineerController,
   deactivateAdminEngineerController,
+  deleteAdminEngineerController,
   getEngineersDropdownController,
   listAdminEngineersController,
   reactivateAdminEngineerController,
@@ -161,6 +162,12 @@ adminRouter.post(
   "/engineers/:id/reactivate",
   requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
   reactivateAdminEngineerController,
+);
+
+adminRouter.delete(
+  "/engineers/:id",
+  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
+  deleteAdminEngineerController,
 );
 
 // RTPL statuses — dropdown readable by any admin (used in the operational app);

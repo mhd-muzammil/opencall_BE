@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { updateEngineerService } from "./engineerService.js";
+import { deleteEngineerService, updateEngineerService } from "./engineerService.js";
 import type { AuthenticatedUser } from "../../types/auth.js";
 
 const mocks = vi.hoisted(() => ({
@@ -214,5 +214,53 @@ describe("updateEngineerService — rename remaps historical rows", () => {
 
     expect(mocks.updateEngineer).not.toHaveBeenCalled();
     expect(mocks.renameEngineerInHistoricalRows).not.toHaveBeenCalled();
+  });
+});
+
+describe("deleteEngineerService", () => {
+  it("hard-deletes and logs ENGINEER_DELETED with the engineer's identity", async () => {
+    mocks.findEngineerById.mockResolvedValue(engineer());
+    mocks.deleteEngineer.mockResolvedValue(true);
+
+    await deleteEngineerService(superAdmin, "eng-1");
+
+    expect(mocks.deleteEngineer).toHaveBeenCalledWith("eng-1");
+    expect(mocks.insertActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "ENGINEER_DELETED",
+        targetId: "eng-1",
+        metadata: expect.objectContaining({
+          engineerName: "Jeeva",
+          regionId: CHENNAI_REGION_ID,
+        }),
+      }),
+    );
+  });
+
+  it("404s when the engineer does not exist", async () => {
+    mocks.findEngineerById.mockResolvedValue(null);
+
+    await expect(deleteEngineerService(superAdmin, "missing")).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(mocks.deleteEngineer).not.toHaveBeenCalled();
+  });
+
+  it("forbids a region admin from deleting another region's engineer", async () => {
+    mocks.findEngineerById.mockResolvedValue(engineer({ regionId: OTHER_REGION_ID }));
+
+    await expect(deleteEngineerService(chennaiAdmin, "eng-1")).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(mocks.deleteEngineer).not.toHaveBeenCalled();
+  });
+
+  it("lets a region admin delete an engineer in their own region", async () => {
+    mocks.findEngineerById.mockResolvedValue(engineer());
+    mocks.deleteEngineer.mockResolvedValue(true);
+
+    await deleteEngineerService(chennaiAdmin, "eng-1");
+
+    expect(mocks.deleteEngineer).toHaveBeenCalledWith("eng-1");
   });
 });

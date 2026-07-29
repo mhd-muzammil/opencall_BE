@@ -3,6 +3,7 @@ import { withTransaction } from "../../config/database.js";
 import { forbidden, notFound, badRequest } from "../../utils/httpError.js";
 import { insertActivity } from "../../repositories/activityLogRepository.js";
 import {
+  deleteEngineer,
   findEngineerById,
   findEngineerByNameInRegion,
   insertEngineer,
@@ -272,4 +273,45 @@ export async function setEngineerActiveService(
   });
 
   return updated;
+}
+
+/**
+ * Hard-deletes an engineer record. Safe by schema: no table has a foreign key
+ * to engineers, and historical call/report rows store the engineer as a NAME
+ * string, so past cases keep their engineer attribution after the record is
+ * gone. Region admins can only delete engineers in their own region.
+ */
+export async function deleteEngineerService(
+  currentUser: AuthenticatedUser,
+  id: string,
+): Promise<void> {
+  const existing = await findEngineerById(id);
+  if (!existing) {
+    throw notFound("Engineer not found");
+  }
+
+  assertRegionAccess(currentUser, existing.regionId);
+
+  const deleted = await deleteEngineer(id);
+  if (!deleted) {
+    throw notFound("Engineer not found");
+  }
+
+  await insertActivity({
+    actorUserId: currentUser.id,
+    actorEmail: currentUser.email,
+    actorRole: currentUser.role,
+    regionId: currentUser.regionId,
+    eventType: "ENGINEER_DELETED",
+    targetType: "engineer",
+    targetId: id,
+    ipAddress: null,
+    userAgent: null,
+    metadata: {
+      engineerName: existing.engineerName,
+      engineerCode: existing.engineerCode,
+      regionId: existing.regionId,
+    },
+    status: "SUCCESS",
+  });
 }

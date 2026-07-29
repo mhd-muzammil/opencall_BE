@@ -416,3 +416,13 @@ export async function setEngineerActive(
   const row = result.rows[0];
   return row ? mapEngineer(row) : null;
 }
+
+/**
+ * Hard delete. Safe schema-wise: no other table has a foreign key to
+ * engineers — historical call/report rows reference engineers by NAME string
+ * only, so they are unaffected by deleting the record.
+ */
+export async function deleteEngineer(id: string): Promise<boolean> {
+  const result = await query(`DELETE FROM engineers WHERE id = $1`, [id]);
+  return (result.rowCount ?? 0) > 0;
+}

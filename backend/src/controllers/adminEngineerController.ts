@@ -3,6 +3,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { badRequest } from "../utils/httpError.js";
 import {
   createEngineerService,
+  deleteEngineerService,
   getEngineersDropdownService,
   listEngineersService,
   setEngineerActiveService,
@@ -75,6 +76,18 @@ export const updateAdminEngineerController: RequestHandler = asyncHandler(
       request.body,
     );
     response.json({ data: { engineer, remappedHistory } });
+  },
+);
+
+export const deleteAdminEngineerController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const { id } = request.params;
+    if (!id) {
+      throw badRequest("id is required");
+    }
+
+    await deleteEngineerService(request.currentUser!, id);
+    response.json({ data: { success: true } });
   },
 );
 
