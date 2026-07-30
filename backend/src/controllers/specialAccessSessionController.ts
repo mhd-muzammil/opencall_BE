@@ -12,6 +12,10 @@ import {
   findLatestFlexRawColumnHeaders,
 } from "../repositories/userRecordLayoutRepository.js";
 import { updateReportRowForSpecialAccess } from "../services/specialAccess/specialAccessRowEditService.js";
+import {
+  getEngineersDropdownForSpecialAccess,
+  getRtplStatusesDropdownForSpecialAccess,
+} from "../services/specialAccess/specialAccessDropdownService.js";
 import type { ReportRowEditInput } from "../services/reportRows/reportRowEditService.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
 import { recordLayoutSchema } from "../validators/recordLayoutValidator.js";
@@ -55,6 +59,29 @@ export const getSpecialAccessMeController: RequestHandler = asyncHandler(
     response.json({ data: principal });
   },
 );
+
+/**
+ * Reference data for the Work Order Details & Entry modal. Mirrors the admin dropdown
+ * endpoints, which a special-access token can never reach (they are role-guarded), so the
+ * modal fills its Engineer and RTPL Status pickers exactly like a regular user's does.
+ * Read-only, and engineers are scoped to the credential's granted regions.
+ */
+export const getSpecialAccessEngineersDropdownController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const principal = requireSpecialAccess(request);
+    response.json({
+      data: { engineers: await getEngineersDropdownForSpecialAccess(principal) },
+    });
+  },
+);
+
+export const getSpecialAccessRtplStatusesDropdownController: RequestHandler =
+  asyncHandler(async (request, response) => {
+    requireSpecialAccess(request);
+    response.json({
+      data: { statuses: await getRtplStatusesDropdownForSpecialAccess() },
+    });
+  });
 
 export const getSpecialAccessReportController: RequestHandler = asyncHandler(
   async (request, response) => {

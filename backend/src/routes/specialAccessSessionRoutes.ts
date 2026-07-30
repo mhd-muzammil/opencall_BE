@@ -1,10 +1,12 @@
 import { Router } from "express";
 import {
   deleteSpecialAccessRecordLayoutController,
+  getSpecialAccessEngineersDropdownController,
   getSpecialAccessMeController,
   getSpecialAccessRecordColumnsCatalogController,
   getSpecialAccessRecordLayoutController,
   getSpecialAccessReportController,
+  getSpecialAccessRtplStatusesDropdownController,
   patchSpecialAccessReportRowController,
   putSpecialAccessRecordLayoutController,
 } from "../controllers/specialAccessSessionController.js";
@@ -19,6 +21,18 @@ specialAccessSessionRouter.use(requirePrincipal);
 
 specialAccessSessionRouter.get("/me", getSpecialAccessMeController);
 specialAccessSessionRouter.get("/report", getSpecialAccessReportController);
+
+// Work Order Details & Entry reference data. Mirrors the admin dropdown endpoints, which
+// are role-guarded and therefore unreachable with a special-access token — without these
+// the entry modal opened with an empty Engineer picker and the hard-coded RTPL status list.
+specialAccessSessionRouter.get(
+  "/engineers/dropdown",
+  getSpecialAccessEngineersDropdownController,
+);
+specialAccessSessionRouter.get(
+  "/rtpl-statuses/dropdown",
+  getSpecialAccessRtplStatusesDropdownController,
+);
 
 // Record Format — the credential's own records-grid column layout. Mirrors the
 // user-only /record-layout routes, keyed by special_access.id instead of users.id.
