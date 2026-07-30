@@ -127,7 +127,7 @@ function previousFinalRow(): FinalReportManualCarryForwardRow {
     statusAging: "2",
     changeType: null,
     sameDayClosed: false,
-    rowUpdatedAt: null,
+    eveningUpdatedAt: null,
     manualValues: {
       rtpl_status: "Part Pending",
       segment: "Enterprise",
@@ -399,7 +399,7 @@ describe("generateDailyCallPlanReport", () => {
       {
         ticketId: "WO-123",
         eveningRtplStatus: "Attended",
-        updatedAt: "2026-05-26 17:30:00+05:30",
+        eveningUpdatedAt: "2026-05-26 17:30:00+05:30",
       },
     ]);
 
@@ -447,7 +447,7 @@ describe("generateDailyCallPlanReport", () => {
       {
         ticketId: "WO-123",
         eveningRtplStatus: "Case-Closed",
-        updatedAt: "2026-05-26 17:30:00+05:30",
+        eveningUpdatedAt: "2026-05-26 17:30:00+05:30",
       },
     ]);
     // This report's own row was never user-edited and its Evening is blank —
@@ -474,6 +474,7 @@ describe("generateDailyCallPlanReport", () => {
         manualFieldsCompleted: false,
         manualFieldsMissing: [],
         updatedAt: null,
+        eveningUpdatedAt: null,
         updatedBy: null,
         isExcluded: false,
       },
@@ -498,7 +499,7 @@ describe("generateDailyCallPlanReport", () => {
     });
   });
 
-  it("never heals over a row the user edited after the authority entry (clear stands)", async () => {
+  it("never heals over a row whose EVENING was cleared after the authority entry", async () => {
     const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
     const client = {} as PoolClient;
 
@@ -516,7 +517,7 @@ describe("generateDailyCallPlanReport", () => {
       {
         ticketId: "WO-123",
         eveningRtplStatus: "Case-Closed",
-        updatedAt: "2026-05-26 17:00:00+05:30",
+        eveningUpdatedAt: "2026-05-26 17:00:00+05:30",
       },
     ]);
     // The user edited THIS row after the authority entry (e.g. cleared the
@@ -543,6 +544,7 @@ describe("generateDailyCallPlanReport", () => {
         manualFieldsCompleted: false,
         manualFieldsMissing: [],
         updatedAt: "2026-05-26 18:00:00+05:30",
+        eveningUpdatedAt: "2026-05-26 18:00:00+05:30",
         updatedBy: "user-1",
         isExcluded: false,
       },
@@ -562,6 +564,79 @@ describe("generateDailyCallPlanReport", () => {
 
     expect(report.rows[0]?.enriched.evening_rtpl_status ?? null).toBeNull();
     expect(mocks.fillReportRowEveningStatusIfBlank).not.toHaveBeenCalled();
+  });
+
+  // Regression (prod 2026-07-30): the heal compared rows.updated_at, which
+  // every manual edit stamps, so editing only the Engineer on a row whose
+  // Evening was blank made the row "speak for itself" and the Evening a
+  // colleague had entered on another of today's reports stayed lost.
+  it("still heals a blank Evening when only an unrelated field was edited", async () => {
+    const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
+    const client = {} as PoolClient;
+
+    mocks.withTransaction.mockImplementation(async (callback) => callback(client));
+    mocks.validateReportGenerationTransaction.mockResolvedValue("report-1");
+    mocks.findFlexWipRecordsByBatchId.mockResolvedValue([{ ticketId: "WO-123", rowNumber: 1 }]);
+    mocks.findRenderwaysRecordsByBatchId.mockResolvedValue([]);
+    mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
+    mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
+    mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
+    mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([]);
+    mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
+    mocks.findSameDayUserSetEveningRows.mockResolvedValue([
+      {
+        ticketId: "WO-123",
+        eveningRtplStatus: "Case-Closed",
+        eveningUpdatedAt: "2026-05-26 17:00:00+05:30",
+      },
+    ]);
+    // Engineer edited at 18:00 (so updated_at is 18:00), Evening never touched.
+    mocks.findDailyCallPlanReportRowMetadataByReportId.mockResolvedValue([
+      {
+        id: "row-1",
+        serialNo: 1,
+        ticketId: "WO-123",
+        caseCreatedTime: null,
+        wipAging: "1",
+        statusAging: null,
+        hpOwnerStatus: null,
+        rtplStatus: "Scheduled",
+        eveningRtplStatus: null,
+        segment: "",
+        engineer: "Newly assigned",
+        location: null,
+        customerMail: null,
+        rca: null,
+        remarks: null,
+        manualNotes: null,
+        carriedForwardFields: [],
+        manualFieldsCompleted: false,
+        manualFieldsMissing: [],
+        updatedAt: "2026-05-26 18:00:00+05:30",
+        eveningUpdatedAt: null,
+        updatedBy: "user-1",
+        isExcluded: false,
+      },
+    ]);
+    mocks.findOrCreateCompletedHistorySessionForReport.mockResolvedValue({
+      id: "session-1",
+    });
+    mocks.findPreviousCompletedComparisonSession.mockResolvedValue(null);
+
+    const report = await generateDailyCallPlanReport({
+      reportDate: "2026-05-26",
+      generatedBy: "user-1",
+      regionId: null,
+      flexUploadBatchId: "batch-flex",
+      allowCreate: false,
+    });
+
+    expect(report.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
+    expect(mocks.fillReportRowEveningStatusIfBlank).toHaveBeenCalledWith(client, {
+      rowId: "row-1",
+      eveningRtplStatus: "Case-Closed",
+    });
   });
 
   // Regression for the 2026-07-23 mass-close: regenerating an EXISTING report

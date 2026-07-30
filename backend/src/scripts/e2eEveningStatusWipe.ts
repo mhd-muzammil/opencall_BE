@@ -10,14 +10,24 @@
  * Carry-forward sources rows from ONE report (LIMIT 1), so an Evening entered on
  * any other same-day report used to vanish from every later report.
  *
+ * The second vector (2026-07-30) is the tie-break that guards that recovery: it
+ * compared rows.updated_at, a WHOLE-ROW timestamp stamped by every manual edit.
+ * So editing an unrelated field (Engineer, Morning, Remarks) on a row whose
+ * Evening was blank was byte-identical in the DB to "the user just cleared the
+ * Evening", and the recovery refused to run. Migration 040 gives the Evening its
+ * own edit timestamp; this script exercises both readings of a blank Evening.
+ *
  * Timeline (worker-shaped: flex-only batches, unscoped, new batch per upload):
  *   Day 1 u1: rows A B         -> user schedules both, sets Evening on A
  *   Day 1 u2 (worker)          -> new report carries Morning + A's Evening
  *   user sets Evening on B ON THE OLD u1 REPORT (stale tab)
  *   Day 1 u3 (worker)          -> B's Evening must SURVIVE (the old wipe)
  *   regen of u2's report       -> its blank B Evening must be HEALED in the DB
+ *   user edits only B's ENGINEER on the newest report
+ *   Day 1 u4 (worker)          -> B's Evening must SURVIVE: an unrelated field
+ *                                 edit is not a deliberate Evening clear
  *   user CLEARS A's Evening on the newest report
- *   Day 1 u4 (worker)          -> the clear must stand (no resurrection)
+ *   Day 1 u5 (worker)          -> the clear must stand (no resurrection)
  *   Day 2 u1                   -> day boundary: Evening promotes to Morning,
  *                                 Evenings start blank
  *
@@ -194,6 +204,11 @@ async function userEdit(
   if (fields.evening !== undefined) {
     params.push(fields.evening);
     sets.push(`evening_rtpl_status = $${params.length}`);
+    // Only an edit that carries the Evening stamps the Evening's own time —
+    // exactly what updateDailyCallPlanReportRowManualFields does. Editing
+    // rtpl_status/engineer alone must leave it untouched, or this script
+    // cannot reproduce the wipe it exists to catch.
+    sets.push("evening_rtpl_status_updated_at = clock_timestamp()");
   }
   const result = await query(
     `UPDATE daily_call_plan_report_rows SET ${sets.join(", ")}
@@ -316,20 +331,35 @@ async function run(): Promise<void> {
     check("report 2 persisted B Evening healed", await persistedEvening(r2.reportId, "B"), "Case-Closed");
     check("report 2 A Evening untouched", await persistedEvening(r2.reportId, "A"), "Attended");
 
-    console.log("\nUser CLEARS A's Evening on the NEWEST report — the clear must stand");
-    await userEdit(r3.reportId, "A", { evening: null });
+    console.log(
+      "\nUser edits only the ENGINEER on the NEWEST report — must not read as an Evening clear",
+    );
+    // The 2026-07-30 vector: rows.updated_at is a WHOLE-ROW timestamp, so this
+    // edit made the newest report's row (Evening blank, never Evening-edited)
+    // look like a deliberate clear made after B's 'Case-Closed' entry — and the
+    // next worker cycle dropped B's Evening.
+    await userEdit(r3.reportId, "B", { engineer: "E2E Engineer 2" });
 
-    console.log("\nDay 1, upload 4 (worker) — no resurrection of the cleared Evening");
+    console.log("\nDay 1, upload 4 (worker) — an unrelated edit must not wipe the Evening");
     const r4 = await workerCycle(DAY1, "e2e-evw-u4.xlsx");
-    check("A Evening stays cleared", reportEvening(r4, "A"), null);
-    check("B Evening still Case-Closed", reportEvening(r4, "B"), "Case-Closed");
+    check("B Evening survives an unrelated field edit", reportEvening(r4, "B"), "Case-Closed");
+    check("B Morning still Scheduled", reportMorning(r4, "B"), "Scheduled");
+    check("A Evening still Attended", reportEvening(r4, "A"), "Attended");
+
+    console.log("\nUser CLEARS A's Evening on the NEWEST report — the clear must stand");
+    await userEdit(r4.reportId, "A", { evening: null });
+
+    console.log("\nDay 1, upload 5 (worker) — no resurrection of the cleared Evening");
+    const r5 = await workerCycle(DAY1, "e2e-evw-u5.xlsx");
+    check("A Evening stays cleared", reportEvening(r5, "A"), null);
+    check("B Evening still Case-Closed", reportEvening(r5, "B"), "Case-Closed");
 
     console.log("\nDay 2, upload 1 — day boundary: Evening promotes to Morning, Evenings blank");
-    const r5 = await workerCycle(DAY2, "e2e-evw-d2u1.xlsx");
-    check("B Morning promoted from Evening", reportMorning(r5, "B"), "Case-Closed");
-    check("A Morning promoted from its Morning (Evening was cleared)", reportMorning(r5, "A"), "Scheduled");
-    check("A Evening blank on the new day", reportEvening(r5, "A"), null);
-    check("B Evening blank on the new day", reportEvening(r5, "B"), null);
+    const r6 = await workerCycle(DAY2, "e2e-evw-d2u1.xlsx");
+    check("B Morning promoted from Evening", reportMorning(r6, "B"), "Case-Closed");
+    check("A Morning promoted from its Morning (Evening was cleared)", reportMorning(r6, "A"), "Scheduled");
+    check("A Evening blank on the new day", reportEvening(r6, "A"), null);
+    check("B Evening blank on the new day", reportEvening(r6, "B"), null);
 
     console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}`);
     if (failures > 0) process.exitCode = 1;

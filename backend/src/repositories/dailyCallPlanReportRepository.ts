@@ -42,6 +42,13 @@ export interface PersistedReportRowSnapshot extends PersistedReportRowMetadata {
   carriedForwardFields: ManualCarryForwardField[];
   manualFieldsCompleted: boolean;
   manualFieldsMissing: ManualCarryForwardField[];
+  /**
+   * When the EVENING status itself was last edited; null = never user-set on
+   * this row. updated_at is stamped by every field edit, so it cannot tell a
+   * deliberate Evening clear from an unrelated Engineer/Morning/Remarks edit —
+   * the same-day Evening rules need this one.
+   */
+  eveningUpdatedAt: string | null;
   isExcluded: boolean;
 }
 
@@ -66,6 +73,7 @@ interface PersistedReportRowSnapshotDbRow {
   manual_fields_completed: boolean;
   manual_fields_missing: ManualCarryForwardField[];
   updated_at: string | null;
+  evening_updated_at: string | null;
   updated_by: string | null;
   is_excluded: boolean;
 }
@@ -74,6 +82,16 @@ export interface ReportRowEditPayload {
   engineer?: string | null;
   rtplStatus?: string | null;
   eveningRtplStatus?: string | null;
+  /**
+   * Did the PATCH actually carry an Evening value? Only then is the Evening's
+   * own edit timestamp stamped. Every other field edit still stamps updated_at
+   * (a whole-row timestamp), which is why it cannot stand in for this: an
+   * Engineer edit on a row with a blank Evening used to be indistinguishable
+   * from a deliberate Evening clear, and the same-day Evening authority then
+   * refused to restore the Evening a user had typed on another of today's
+   * reports.
+   */
+  eveningRtplStatusEdited?: boolean;
   customerMail?: string | null;
   rca?: string | null;
   remarks?: string | null;
@@ -250,12 +268,15 @@ export interface FinalReportManualCarryForwardRow {
   /** Was this row closed by a same-day re-upload (i.e. still on the Records page)? */
   sameDayClosed: boolean;
   /**
-   * rows.updated_at of the source row (null = never user-edited). Lets the
-   * same-day Evening rule decide whether the source row itself reflects the
-   * newest user action (incl. an explicit clear) or whether a more recent
-   * user-set Evening on ANOTHER same-day report must win.
+   * When the source row's EVENING was last edited; null = never user-set on
+   * this row. Lets the same-day Evening rule decide whether the source row
+   * itself reflects the newest user action on the Evening (incl. an explicit
+   * clear) or whether a more recent user-set Evening on ANOTHER same-day
+   * report must win. Deliberately NOT rows.updated_at: that is stamped by
+   * every field edit, so an Engineer or Remarks edit read as an Evening clear
+   * and wiped the value.
    */
-  rowUpdatedAt: string | null;
+  eveningUpdatedAt: string | null;
   manualValues: Partial<Record<ManualCarryForwardField, string | null>>;
 }
 
@@ -293,7 +314,7 @@ interface FinalReportManualCarryForwardDbRow {
   source_report_date: string | null;
   change_type: string | null;
   same_day_closed: boolean | null;
-  row_updated_at: string | null;
+  evening_updated_at: string | null;
 }
 
 function mapFinalReportManualCarryForwardRow(
@@ -352,7 +373,7 @@ function mapFinalReportManualCarryForwardRow(
     sourceReportDate: row.source_report_date,
     changeType: row.change_type,
     sameDayClosed: row.same_day_closed ?? false,
-    rowUpdatedAt: row.row_updated_at ?? null,
+    eveningUpdatedAt: row.evening_updated_at ?? null,
     manualValues,
   };
 }
@@ -415,6 +436,7 @@ function mapPersistedReportRowMetadata(
     manualFieldsCompleted: row.manual_fields_completed,
     manualFieldsMissing: row.manual_fields_missing,
     updatedAt: row.updated_at,
+    eveningUpdatedAt: row.evening_updated_at ?? null,
     updatedBy: row.updated_by,
     isExcluded: row.is_excluded,
   };
@@ -612,62 +634,6 @@ export async function insertDailyCallPlanReportRows(
   }
 }
 
-export async function findFinalReportRowsForManualCarryForwardBySessionId(
-  client: PoolClient,
-  sessionId: string,
-): Promise<FinalReportManualCarryForwardRow[]> {
-  const result = await client.query<FinalReportManualCarryForwardDbRow>(
-    `
-      SELECT
-        rows.serial_no,
-        rows.ticket_id,
-        rows.case_id,
-        rows.case_created_time::TEXT AS case_created_time,
-        rows.wip_aging,
-        rows.status_aging,
-        rows.rtpl_status,
-        rows.evening_rtpl_status,
-        rows.segment,
-        rows.engineer,
-        rows.product,
-        rows.product_line_name,
-        rows.work_location,
-        rows.flex_status,
-        rows.hp_owner_status,
-        rows.wo_otc_code,
-        rows.account_name,
-        rows.customer_name,
-        rows.customer_type,
-        rows.product_serial_no,
-        rows.location,
-        rows.contact,
-        rows.part,
-        rows.wip_aging_category,
-        rows.tat::TEXT AS tat,
-        rows.customer_mail,
-        rows.rca,
-        rows.remarks,
-        rows.manual_notes,
-        rows.flex_status_unchanged_days,
-        rows.change_type::TEXT AS change_type,
-        rows.same_day_closed,
-        rows.updated_at::TEXT AS row_updated_at,
-        NULL::text AS source_report_date
-      FROM report_history_sessions sessions
-      JOIN daily_call_plan_report_rows rows
-        ON rows.report_id = sessions.daily_call_plan_report_id
-      WHERE sessions.id = $1
-        AND sessions.status = 'COMPLETED'
-        AND sessions.daily_call_plan_report_id IS NOT NULL
-        AND NOT rows.is_excluded
-      ORDER BY rows.serial_no ASC, rows.id ASC
-    `,
-    [sessionId],
-  );
-
-  return result.rows.map(mapFinalReportManualCarryForwardRow);
-}
-
 export async function findDailyCallPlanReportRowMetadataByReportId(
   client: PoolClient,
   reportId: string,
@@ -695,6 +661,9 @@ export async function findDailyCallPlanReportRowMetadataByReportId(
         manual_fields_completed,
         manual_fields_missing,
         updated_at::TEXT AS updated_at,
+        -- NOT COALESCEd onto updated_at: see the same column in
+        -- findPreviousFinalReportRowsForManualCarryForward.
+        evening_rtpl_status_updated_at::TEXT AS evening_updated_at,
         updated_by::TEXT AS updated_by,
         is_excluded
       FROM daily_call_plan_report_rows
@@ -864,7 +833,11 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         rows.flex_status_unchanged_days,
         rows.change_type::TEXT AS change_type,
         rows.same_day_closed,
-        rows.updated_at::TEXT AS row_updated_at,
+        -- NOT COALESCEd onto updated_at: a source row whose Evening was never
+        -- user-set must NOT out-vote the same-day authority just because some
+        -- other field on it was edited. Migration 040 backfilled the existing
+        -- rows, so historical rows still compare on the timestamp they do today.
+        rows.evening_rtpl_status_updated_at::TEXT AS evening_updated_at,
         previous_session.effective_report_date::text AS source_report_date
       FROM previous_session
       JOIN report_history_sessions sessions
@@ -890,8 +863,8 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
 export interface SameDayUserSetEveningRow {
   ticketId: string;
   eveningRtplStatus: string | null;
-  /** rows.updated_at (pg text) of the edit holding this value. */
-  updatedAt: string;
+  /** When the Evening holding this value was last edited (pg text). */
+  eveningUpdatedAt: string;
 }
 
 /**
@@ -913,13 +886,19 @@ export async function findSameDayUserSetEveningRows(
   const result = await client.query<{
     ticket_id: string;
     evening_rtpl_status: string | null;
-    updated_at: string;
+    evening_updated_at: string;
   }>(
     `
       SELECT
         rows.ticket_id,
         rows.evening_rtpl_status,
-        rows.updated_at::TEXT AS updated_at
+        -- COALESCEd here (unlike the carry-forward source query): every row
+        -- this query returns already holds a non-blank Evening, so the
+        -- whole-row timestamp is a safe estimate of when it was set, and the
+        -- authority keeps working for rows written before migration 040 even
+        -- if the backfill were ever skipped.
+        COALESCE(rows.evening_rtpl_status_updated_at, rows.updated_at)::TEXT
+          AS evening_updated_at
       FROM daily_call_plan_report_rows rows
       JOIN daily_call_plan_reports reports
         ON reports.id = rows.report_id
@@ -927,7 +906,12 @@ export async function findSameDayUserSetEveningRows(
         AND rows.updated_at IS NOT NULL
         AND NOT rows.is_excluded
         AND NULLIF(TRIM(COALESCE(rows.evening_rtpl_status, '')), '') IS NOT NULL
-      ORDER BY rows.updated_at DESC, rows.id DESC
+      -- Newest EVENING edit first, on the same clock the carry-forward rules
+      -- compare against: ordering by the whole-row updated_at let an unrelated
+      -- edit on one report promote its older Evening over a newer one entered
+      -- elsewhere today.
+      ORDER BY COALESCE(rows.evening_rtpl_status_updated_at, rows.updated_at) DESC,
+               rows.id DESC
     `,
     [input.reportDate],
   );
@@ -935,7 +919,7 @@ export async function findSameDayUserSetEveningRows(
   return result.rows.map((row) => ({
     ticketId: row.ticket_id,
     eveningRtplStatus: row.evening_rtpl_status,
-    updatedAt: row.updated_at,
+    eveningUpdatedAt: row.evening_updated_at,
   }));
 }
 
@@ -1101,6 +1085,14 @@ export async function updateDailyCallPlanReportRowManualFields(
         hp_owner_status = $13,
         part = $14,
         evening_rtpl_status = $19,
+        -- Stamped ONLY by an edit that actually carried an Evening value, so a
+        -- deliberate clear is distinguishable from an Engineer/Morning/Remarks
+        -- edit on a row whose Evening happens to be blank. updated_at below is
+        -- still stamped by every edit — other logic depends on that.
+        evening_rtpl_status_updated_at = CASE
+          WHEN $22::bool THEN NOW()
+          ELSE rows.evening_rtpl_status_updated_at
+        END,
         carried_forward_fields = COALESCE(
           (
             SELECT jsonb_agg(field)
@@ -1169,6 +1161,7 @@ export async function updateDailyCallPlanReportRowManualFields(
       edit.eveningRtplStatus,
       edit.updatedBySpecialAccess ?? null,
       edit.updatedByVendorAccess ?? null,
+      edit.eveningRtplStatusEdited ?? false,
     ],
   );
 

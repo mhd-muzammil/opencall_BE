@@ -127,7 +127,7 @@ function previousFinalRow(
     statusAging: "2",
     changeType: null,
     sameDayClosed: false,
-    rowUpdatedAt: null,
+    eveningUpdatedAt: null,
     manualValues: {
       rtpl_status: "Pending customer",
       segment: "Enterprise",
@@ -574,10 +574,10 @@ describe("ManualFieldCarryForwardService", () => {
   describe("same-day Evening authority", () => {
     const authorityFor = (
       eveningRtplStatus: string,
-      updatedAt = "2026-03-28 17:30:00+05:30",
+      eveningUpdatedAt = "2026-03-28 17:30:00+05:30",
     ) =>
       buildSameDayEveningAuthority([
-        { ticketId: "WO-000123", eveningRtplStatus, updatedAt },
+        { ticketId: "WO-000123", eveningRtplStatus, eveningUpdatedAt },
       ]);
 
     // FieldEZ-worker path: flex-only upload, so the fresh row arrives with a
@@ -634,7 +634,7 @@ describe("ManualFieldCarryForwardService", () => {
             rtplStatus: "Scheduled",
             eveningRtplStatus: "Attended",
             sourceReportDate: "2026-03-28",
-            rowUpdatedAt: "2026-03-28 17:00:00+05:30",
+            eveningUpdatedAt: "2026-03-28 17:00:00+05:30",
           }),
         ],
         sameDayEveningAuthority: authorityFor(
@@ -646,17 +646,18 @@ describe("ManualFieldCarryForwardService", () => {
       expect(result.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
     });
 
-    it("lets a source row edited AFTER the authority speak for itself (explicit clear survives)", () => {
+    it("lets a source row whose EVENING was cleared after the authority speak for itself", () => {
       const result = service.apply({
         currentReportDate: "2026-03-28",
         currentRows: [generatedRow({ segment: "Print" })],
         previousFinalRows: [
           previousFinalRow({
             rtplStatus: "Scheduled",
-            // The user deliberately cleared the Evening on the newest report.
+            // The user deliberately cleared the Evening on the newest report,
+            // which stamps the Evening's own edit timestamp.
             eveningRtplStatus: null,
             sourceReportDate: "2026-03-28",
-            rowUpdatedAt: "2026-03-28 18:00:00+05:30",
+            eveningUpdatedAt: "2026-03-28 18:00:00+05:30",
           }),
         ],
         sameDayEveningAuthority: authorityFor(
@@ -677,12 +678,42 @@ describe("ManualFieldCarryForwardService", () => {
             rtplStatus: "Scheduled",
             eveningRtplStatus: "Attended",
             sourceReportDate: "2026-03-28",
-            rowUpdatedAt: "2026-03-28 18:00:00+05:30",
+            eveningUpdatedAt: "2026-03-28 18:00:00+05:30",
           }),
         ],
         sameDayEveningAuthority: authorityFor(
           "Case-Closed",
           "2026-03-28 17:00:00+05:30",
+        ),
+      });
+
+      expect(result.rows[0]?.enriched.evening_rtpl_status).toBe("Attended");
+    });
+
+    // Regression (prod 2026-07-30): the rule compared rows.updated_at, a
+    // WHOLE-ROW timestamp stamped by every manual edit. Changing only the
+    // Engineer on a row whose Evening was blank therefore looked exactly like
+    // "the user just cleared the Evening", and out-voted the Evening a
+    // colleague had typed on another of today's reports minutes earlier — so
+    // the Evening vanished on the next worker cycle.
+    it("does not let an unrelated field edit pass as an Evening clear", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [generatedRow({ segment: "Print" })],
+        previousFinalRows: [
+          previousFinalRow({
+            rtplStatus: "Scheduled",
+            // Engineer edited at 19:03 (so rows.updated_at is 19:03), Evening
+            // never touched on this row.
+            engineer: "Newly assigned",
+            eveningRtplStatus: null,
+            sourceReportDate: "2026-03-28",
+            eveningUpdatedAt: null,
+          }),
+        ],
+        sameDayEveningAuthority: authorityFor(
+          "Attended",
+          "2026-03-28 19:01:00+05:30",
         ),
       });
 
@@ -705,6 +736,52 @@ describe("ManualFieldCarryForwardService", () => {
 
       expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(true);
       expect(result.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
+    });
+
+    // The closed-synthetic path consults the same authority, so it inherits
+    // the same false "the user cleared it" signal.
+    it("keeps an unrelated edit from wiping the Evening on a same-day closed row", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            changeType: "CARRIED",
+            engineer: "Newly assigned",
+            eveningRtplStatus: null,
+            eveningUpdatedAt: null,
+          }),
+        ],
+        sameDayEveningAuthority: authorityFor(
+          "Case-Closed",
+          "2026-03-28 19:01:00+05:30",
+        ),
+      });
+
+      expect(result.rows[0]?.carryForward.sameDayClosedRow).toBe(true);
+      expect(result.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
+    });
+
+    it("keeps a deliberate Evening clear on a same-day closed row", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            changeType: "CARRIED",
+            eveningRtplStatus: null,
+            eveningUpdatedAt: "2026-03-28 19:05:00+05:30",
+          }),
+        ],
+        sameDayEveningAuthority: authorityFor(
+          "Case-Closed",
+          "2026-03-28 19:01:00+05:30",
+        ),
+      });
+
+      expect(result.rows[0]?.enriched.evening_rtpl_status ?? null).toBeNull();
     });
 
     // Evening is per-day: a prior-day source (the day's first upload) starts
@@ -751,6 +828,61 @@ describe("ManualFieldCarryForwardService", () => {
       expect(row?.enriched.evening_rtpl_status).toBe("Attended");
     });
 
+    // The region-retained path consults the same authority as the matched and
+    // closed paths, so it inherits the same false "the user cleared it" signal.
+    it("keeps an unrelated edit from wiping the Evening on a retained row", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            workLocation: "ASPS01463",
+            changeType: "CARRIED",
+            rtplStatus: "Scheduled",
+            engineer: "Newly assigned",
+            eveningRtplStatus: null,
+            eveningUpdatedAt: null,
+          }),
+        ],
+        allowedWorkLocations: new Set(["ASPS01461"]),
+        sameDayEveningAuthority: authorityFor(
+          "Attended",
+          "2026-03-28 19:01:00+05:30",
+        ),
+      });
+
+      const [row] = result.rows;
+      expect(row?.carryForward.regionScopeRetainedRow).toBe(true);
+      expect(row?.enriched.evening_rtpl_status).toBe("Attended");
+    });
+
+    it("keeps a deliberate Evening clear on a retained row", () => {
+      const result = service.apply({
+        currentReportDate: "2026-03-28",
+        currentRows: [],
+        previousFinalRows: [
+          previousFinalRow({
+            sourceReportDate: "2026-03-28",
+            workLocation: "ASPS01463",
+            changeType: "CARRIED",
+            rtplStatus: "Scheduled",
+            eveningRtplStatus: null,
+            eveningUpdatedAt: "2026-03-28 19:05:00+05:30",
+          }),
+        ],
+        allowedWorkLocations: new Set(["ASPS01461"]),
+        sameDayEveningAuthority: authorityFor(
+          "Attended",
+          "2026-03-28 19:01:00+05:30",
+        ),
+      });
+
+      const [row] = result.rows;
+      expect(row?.carryForward.regionScopeRetainedRow).toBe(true);
+      expect(row?.enriched.evening_rtpl_status ?? null).toBeNull();
+    });
+
     it("applies a user-set same-day Evening even when the source report misses the ticket", () => {
       const result = service.apply({
         currentReportDate: "2026-03-28",
@@ -769,17 +901,17 @@ describe("ManualFieldCarryForwardService", () => {
         {
           ticketId: "WO-000123",
           eveningRtplStatus: "Case-Closed",
-          updatedAt: "2026-03-28 18:00:00+05:30",
+          eveningUpdatedAt: "2026-03-28 18:00:00+05:30",
         },
         {
           ticketId: "123",
           eveningRtplStatus: "Attended",
-          updatedAt: "2026-03-28 17:00:00+05:30",
+          eveningUpdatedAt: "2026-03-28 17:00:00+05:30",
         },
         {
           ticketId: "WO-777",
           eveningRtplStatus: "N/A",
-          updatedAt: "2026-03-28 16:00:00+05:30",
+          eveningUpdatedAt: "2026-03-28 16:00:00+05:30",
         },
       ]);
 
@@ -787,7 +919,7 @@ describe("ManualFieldCarryForwardService", () => {
       expect(authority.size).toBe(1);
       const [entry] = authority.values();
       expect(entry?.eveningRtplStatus).toBe("Case-Closed");
-      expect(entry?.updatedAt).toBe("2026-03-28 18:00:00+05:30");
+      expect(entry?.eveningUpdatedAt).toBe("2026-03-28 18:00:00+05:30");
     });
   });
 

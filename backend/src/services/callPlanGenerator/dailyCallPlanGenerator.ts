@@ -614,16 +614,19 @@ async function applyPersistedRowMetadata(
     // FieldEZ-worker churn) after this row was last touched. Adopt it and
     // persist it (guarded fill-if-blank), so the report everyone reads — and
     // the EOD productivity freeze, which reads persisted rows — shows the
-    // user's entry instead of a wiped blank. A row edited at-or-after the
-    // authority entry keeps its own state, so an explicit clear made on THIS
-    // report is never resurrected.
+    // user's entry instead of a wiped blank. A row whose EVENING was edited
+    // at-or-after the authority entry keeps its own state, so an explicit clear
+    // made on THIS report is never resurrected. Both sides compare Evening edit
+    // times, never the whole-row updated_at: that is stamped by every field
+    // edit, so an Engineer or Remarks edit read as a deliberate clear and left
+    // the blank standing.
     if (!cleanManualValue(persisted.eveningRtplStatus)) {
       const ticketAuthorityKey = getNormalizedTicketKey(row.enriched.ticket_id);
       const authorityEntry = ticketAuthorityKey
         ? sameDayEveningAuthority.get(ticketAuthorityKey)
         : undefined;
-      const persistedEditedAt = parseDbTimestamp(persisted.updatedAt);
-      const authorityEditedAt = parseDbTimestamp(authorityEntry?.updatedAt);
+      const persistedEditedAt = parseDbTimestamp(persisted.eveningUpdatedAt);
+      const authorityEditedAt = parseDbTimestamp(authorityEntry?.eveningUpdatedAt);
       const rowSpeaksForItself =
         persistedEditedAt !== null &&
         authorityEditedAt !== null &&

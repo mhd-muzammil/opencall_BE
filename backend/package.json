@@ -33,6 +33,7 @@
     "migrate:flex-raw-month": "tsx src/scripts/applyFlexRawMonthMigration.ts",
     "migrate:vendor-access": "tsx src/scripts/applyVendorAccessMigration.ts",
     "migrate:engineer-deleted-event": "tsx src/scripts/applyEngineerDeletedEventMigration.ts",
+    "migrate:evening-status-edited-at": "tsx src/scripts/applyEveningStatusEditTimestampMigration.ts",
     "engineer:remap-name": "tsx src/scripts/remapEngineerName.ts",
     "migrate:renewal-leads": "tsx src/scripts/applyRenewalLeadsMigration.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",

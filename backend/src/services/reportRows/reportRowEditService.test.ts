@@ -129,6 +129,45 @@ describe("updateReportRowManualFields", () => {
     });
     expect(engineerOnlyResult.rtplStatusChange).toBeNull();
   });
+
+  // Regression (prod 2026-07-30): the same-day Evening rules used to compare
+  // rows.updated_at, which every edit stamps, so an Engineer edit on a row
+  // with a blank Evening was indistinguishable from a deliberate clear and
+  // wiped the Evening a colleague had just entered on another report. Only an
+  // edit that actually carries the Evening may stamp the Evening's own time.
+  it("flags the Evening as edited only when the PATCH supplies it", async () => {
+    const current = editedRow();
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(current);
+    mocks.updateDailyCallPlanReportRowManualFields.mockResolvedValue(current);
+
+    function lastPayload(): ReportRowEditPayload {
+      const [, payload] = mocks.updateDailyCallPlanReportRowManualFields.mock
+        .calls.at(-1) as [string, ReportRowEditPayload];
+      return payload;
+    }
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { engineer: "Mike" },
+    });
+    expect(lastPayload().eveningRtplStatusEdited).toBe(false);
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { eveningRtplStatus: "Attended" },
+    });
+    expect(lastPayload().eveningRtplStatusEdited).toBe(true);
+
+    // A clear counts: it is what lets a deliberate blank stand.
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { eveningRtplStatus: null },
+    });
+    expect(lastPayload().eveningRtplStatusEdited).toBe(true);
+  });
 });
 
 describe("Feature A — scheduling requires an engineer + auto remark", () => {

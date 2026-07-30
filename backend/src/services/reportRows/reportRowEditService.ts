@@ -325,6 +325,11 @@ export async function applyReportRowManualFieldEdit(input: {
     engineer: merged.engineer,
     rtplStatus: merged.rtplStatus,
     eveningRtplStatus: merged.eveningRtplStatus,
+    // Only an edit that actually supplied an Evening stamps the Evening's own
+    // timestamp — the one the same-day Evening authority compares against. A
+    // clear counts (the key is `eveningRtplStatus` being present in the PATCH,
+    // not its value); an Engineer/Morning/Remarks edit does not.
+    eveningRtplStatusEdited: hasEditedField(values, "eveningRtplStatus"),
     customerMail: merged.customerMail,
     rca: merged.rca,
     remarks: merged.remarks,

@@ -69,8 +69,8 @@ export interface ApplyManualFieldCarryForwardInput {
 export interface SameDayEveningAuthorityEntry {
   /** Cleaned, non-blank Evening value (never null). */
   eveningRtplStatus: string;
-  /** rows.updated_at (pg text) of the user edit that holds this value. */
-  updatedAt: string;
+  /** When the Evening edit holding this value was made (pg text). */
+  eveningUpdatedAt: string;
 }
 
 /**
@@ -91,7 +91,7 @@ export function buildSameDayEveningAuthority(
     }
     authority.set(ticketKey, {
       eveningRtplStatus: evening,
-      updatedAt: row.updatedAt,
+      eveningUpdatedAt: row.eveningUpdatedAt,
     });
   }
 
@@ -110,9 +110,14 @@ function parseDbTimestamp(value: string | null | undefined): number | null {
  * The effective same-day Evening for a source row: the row's own value,
  * unless the same-day authority holds a NEWER user-set Evening for the
  * ticket (entered on another of today's reports that the LIMIT-1 source
- * missed). A source row edited at-or-after the authority entry speaks for
- * itself — including an explicit clear — so a deliberately blanked Evening
- * is never resurrected from an older report.
+ * missed). A source row whose EVENING was edited at-or-after the authority
+ * entry speaks for itself — including an explicit clear — so a deliberately
+ * blanked Evening is never resurrected from an older report.
+ *
+ * Both sides compare Evening edit times, never the whole-row updated_at: that
+ * is stamped by every field edit, so changing only the Engineer on a row whose
+ * Evening was blank looked exactly like a deliberate clear and wiped the
+ * Evening a colleague had just typed on another of today's reports.
  */
 function sameDaySourceEvening(
   previousRow: FinalReportManualCarryForwardRow,
@@ -125,8 +130,8 @@ function sameDaySourceEvening(
     return sourceEvening;
   }
 
-  const sourceEditedAt = parseDbTimestamp(previousRow.rowUpdatedAt);
-  const authorityEditedAt = parseDbTimestamp(entry.updatedAt);
+  const sourceEditedAt = parseDbTimestamp(previousRow.eveningUpdatedAt);
+  const authorityEditedAt = parseDbTimestamp(entry.eveningUpdatedAt);
   if (
     sourceEditedAt !== null &&
     authorityEditedAt !== null &&

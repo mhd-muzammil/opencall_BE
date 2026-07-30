@@ -294,7 +294,13 @@ describe("insertDailyCallPlanReportRows", () => {
     expect(values[1]).toBeNull();
   });
 
-  it("exposes the source row's own updated_at for the same-day Evening rules", async () => {
+  it("exposes the source row's own Evening edit time for the same-day Evening rules", async () => {
+    // Regression (prod 2026-07-30): this used to expose rows.updated_at, a
+    // WHOLE-ROW timestamp every manual edit stamps. A source row whose Evening
+    // was never touched then out-voted the same-day authority the moment
+    // anyone edited its Engineer, and the Evening was wiped. It must NOT fall
+    // back to updated_at: a NULL here means "the Evening was never user-set on
+    // this row", which is exactly what must not win.
     const query = vi.fn().mockResolvedValue({ rows: [] });
     const client = { query } as unknown as PoolClient;
 
@@ -303,7 +309,25 @@ describe("insertDailyCallPlanReportRows", () => {
     });
 
     const [sql] = query.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain("rows.updated_at::TEXT AS row_updated_at");
+    expect(sql).toContain(
+      "rows.evening_rtpl_status_updated_at::TEXT AS evening_updated_at",
+    );
+    expect(sql).not.toContain("AS row_updated_at");
+  });
+
+  it("exposes the persisted row's Evening edit time, never the whole-row one", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const client = { query } as unknown as PoolClient;
+
+    await findDailyCallPlanReportRowMetadataByReportId(client, "report-1");
+
+    const [sql] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain(
+      "evening_rtpl_status_updated_at::TEXT AS evening_updated_at",
+    );
+    expect(sql).not.toContain(
+      "COALESCE(evening_rtpl_status_updated_at, updated_at)",
+    );
   });
 
   it("finds only user-touched, non-blank Evenings for the given date, newest first", async () => {
@@ -316,7 +340,7 @@ describe("insertDailyCallPlanReportRows", () => {
         {
           ticket_id: "WO-123",
           evening_rtpl_status: "Attended",
-          updated_at: "2026-07-29 17:30:00+05:30",
+          evening_updated_at: "2026-07-29 17:30:00+05:30",
         },
       ],
     });
@@ -333,13 +357,18 @@ describe("insertDailyCallPlanReportRows", () => {
     expect(sql).toContain(
       "NULLIF(TRIM(COALESCE(rows.evening_rtpl_status, '')), '') IS NOT NULL",
     );
-    expect(sql).toContain("ORDER BY rows.updated_at DESC, rows.id DESC");
+    // Every row here already holds a non-blank Evening, so falling back to the
+    // whole-row timestamp is a safe estimate of when it was set — and it keeps
+    // the authority working for rows written before migration 040.
+    expect(sql).toContain(
+      "COALESCE(rows.evening_rtpl_status_updated_at, rows.updated_at)",
+    );
     expect(values).toEqual(["2026-07-29"]);
     expect(rows).toEqual([
       {
         ticketId: "WO-123",
         eveningRtplStatus: "Attended",
-        updatedAt: "2026-07-29 17:30:00+05:30",
+        eveningUpdatedAt: "2026-07-29 17:30:00+05:30",
       },
     ]);
   });
@@ -418,5 +447,32 @@ describe("insertDailyCallPlanReportRows", () => {
     expect(sql).not.toContain("daily_call_plan_reports SET");
     expect(values[0]).toBe("row-1");
     expect(values[11]).toBe("4");
+    // No Evening in this PATCH, so the Evening's own timestamp is left alone
+    // while updated_at is still stamped as it always was.
+    expect(sql).toContain("updated_at = NOW()");
+    expect(values[21]).toBe(false);
+  });
+
+  it("stamps the Evening's own timestamp only when the edit carries an Evening", async () => {
+    mocks.query.mockResolvedValue({ rows: [] });
+
+    await updateDailyCallPlanReportRowManualFields("row-1", {
+      // A CLEAR still counts as an Evening edit — that is the whole point: it
+      // is what lets a deliberate blank out-vote the same-day authority.
+      eveningRtplStatus: null,
+      eveningRtplStatusEdited: true,
+      manualFieldsCompleted: true,
+      manualFieldsMissing: [],
+      updatedBy: "user-1",
+    });
+
+    // mocks.query is shared across this file's tests and never reset, so read
+    // the call this test just made rather than the first one recorded.
+    const [sql, values] = mocks.query.mock.calls.at(-1) as [string, unknown[]];
+
+    expect(sql).toContain("evening_rtpl_status_updated_at = CASE");
+    expect(sql).toContain("WHEN $22::bool THEN NOW()");
+    expect(sql).toContain("ELSE rows.evening_rtpl_status_updated_at");
+    expect(values[21]).toBe(true);
   });
 });
