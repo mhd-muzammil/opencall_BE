@@ -29,6 +29,7 @@ export const USER_SECTIONS: readonly UserSectionOption[] = [
   { key: "records", label: "Records Table", group: "Data & Operations" },
   { key: "record-format", label: "Record Format", group: "Data & Operations" },
   { key: "warranty", label: "Warranty Lookup", group: "Data & Operations" },
+  { key: "renewal-pipeline", label: "Renewal Pipeline", group: "Data & Operations" },
   { key: "productivity", label: "Engineer Productivity", group: "Dashboards" },
 ];
 

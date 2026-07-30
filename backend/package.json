@@ -34,6 +34,7 @@
     "migrate:vendor-access": "tsx src/scripts/applyVendorAccessMigration.ts",
     "migrate:engineer-deleted-event": "tsx src/scripts/applyEngineerDeletedEventMigration.ts",
     "engineer:remap-name": "tsx src/scripts/remapEngineerName.ts",
+    "migrate:renewal-leads": "tsx src/scripts/applyRenewalLeadsMigration.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "fieldez:worker": "tsx src/worker/fieldezSyncWorker.ts",
     "build": "tsc -p tsconfig.json",

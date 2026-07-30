@@ -15,3 +15,4 @@ export * from "./utils/rcaText.js";
 export * from "./types/reportComparison.js";
 export * from "./types/report.js";
 export * from "./types/warranty.js";
+export * from "./types/renewal.js";
