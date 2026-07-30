@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addCalendarDays,
   formatOrdinalDate,
+  istCalendarDateOf,
   parseFlexibleDate,
 } from "./dates.js";
 import {
@@ -299,6 +300,83 @@ describe("buildAutoRca — byte-exact templates (§3)", () => {
     expect(buildAutoRca({ ...base, partShipmentStatus: "Awaiting Vendor" })).toBe(
       "Case Received on 19th July - with part - (Motherboard) ETA: Awaiting Vendor",
     );
+  });
+});
+
+// Regression (prod 2026-07-30): `case_created_time` reaches these helpers as a
+// UTC ISO string — matchingEngine stores `parseCustomDate(...).toISOString()` —
+// so the leading "YYYY-MM-DD" is the UTC day, not the IST day. IST is UTC+05:30,
+// so every case created before 05:30 AM IST reported the PREVIOUS date: a case
+// created 30-07-2026 04:00:21 AM IST is stored "2026-07-29T22:30:21.000Z" and
+// the RCA read "Case Received on 29th July". Cases from 06:09 AM onwards were
+// fine, which is what pinned the boundary to 05:30.
+describe("IST calendar day of an absolute instant (UTC-rollback regression)", () => {
+  // 30-07-2026 04:00:21 AM IST, exactly as matchingEngine persists it.
+  const EARLY_MORNING_UTC = "2026-07-29T22:30:21.000Z";
+
+  it("parseFlexibleDate resolves a UTC instant in Asia/Kolkata, not UTC", () => {
+    expect(parseFlexibleDate(EARLY_MORNING_UTC)).toEqual({
+      year: 2026,
+      month: 7,
+      day: 30,
+    });
+  });
+
+  it("formatOrdinalDate keeps the IST calendar day across the 05:30 boundary", () => {
+    // Just before the boundary — the values that were reported wrong.
+    expect(formatOrdinalDate("2026-07-29T22:30:21.000Z")).toBe("30th July"); // 04:00:21 IST
+    expect(formatOrdinalDate("2026-07-29T22:07:06.000Z")).toBe("30th July"); // 03:37:06 IST
+    expect(formatOrdinalDate("2026-07-29T18:30:00.000Z")).toBe("30th July"); // 00:00:00 IST
+    // Just after — these were always correct and must stay correct.
+    expect(formatOrdinalDate("2026-07-30T00:39:12.000Z")).toBe("30th July"); // 06:09:12 IST
+    expect(formatOrdinalDate("2026-07-30T03:54:00.000Z")).toBe("30th July"); // 09:24:00 IST
+    // The last instant of the IST day still belongs to that day.
+    expect(formatOrdinalDate("2026-07-30T18:29:59.000Z")).toBe("30th July"); // 23:59:59 IST
+    // …and one second later is genuinely the next day.
+    expect(formatOrdinalDate("2026-07-30T18:30:00.000Z")).toBe("31st July"); // 00:00:00 IST
+  });
+
+  it("buildAutoRca labels a 04:00 AM IST case with its own calendar day", () => {
+    expect(
+      buildAutoRca({
+        caseCreatedTime: EARLY_MORNING_UTC,
+        isPartCase: false,
+        partText: "",
+        partShipmentStatus: null,
+        engineer: "",
+        todayIso: "2026-07-30",
+      }),
+    ).toBe("Case Received on 30th July - active case");
+  });
+
+  it("accepts the Postgres timestamptz::text rendering too", () => {
+    // `case_created_time::TEXT` with an IST session TimeZone.
+    expect(formatOrdinalDate("2026-07-30 04:00:21+05:30")).toBe("30th July");
+    // …and with a UTC session TimeZone, which must resolve to the same IST day.
+    expect(formatOrdinalDate("2026-07-29 22:30:21+00")).toBe("30th July");
+  });
+
+  it("part ETAs are offset from the IST day, not the UTC day", () => {
+    // Shipped/Locked = created + 1 day, Ordered = created + 2, POD = same day.
+    expect(resolveShipmentEta("POD", EARLY_MORNING_UTC)).toBe("30th July");
+    expect(resolveShipmentEta("Shipped", EARLY_MORNING_UTC)).toBe("31st July");
+    expect(resolveShipmentEta("Ordered", EARLY_MORNING_UTC)).toBe("1st August");
+    expect(addCalendarDays(EARLY_MORNING_UTC, 1)).toBe("2026-07-31");
+  });
+
+  it("leaves wall-clock strings on the pure string path (no zone shift)", () => {
+    // No "Z"/offset: these are already IST wall-clock and must not be converted.
+    expect(formatOrdinalDate("30-07-2026 04:00:21 AM")).toBe("30th July");
+    expect(formatOrdinalDate("2026-07-30")).toBe("30th July");
+    expect(formatOrdinalDate("2026-07-30T04:00:21")).toBe("30th July");
+  });
+});
+
+describe("istCalendarDateOf", () => {
+  it("reports the Asia/Kolkata day regardless of the host timezone", () => {
+    expect(istCalendarDateOf(new Date("2026-07-29T22:30:21.000Z"))).toBe("2026-07-30");
+    expect(istCalendarDateOf(new Date("2026-07-29T18:29:59.000Z"))).toBe("2026-07-29");
+    expect(istCalendarDateOf(new Date("2026-07-29T18:30:00.000Z"))).toBe("2026-07-30");
   });
 });
 

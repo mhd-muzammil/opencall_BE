@@ -1013,6 +1013,53 @@ describe("ManualFieldCarryForwardService", () => {
       expect(result.rows[0]?.enriched.rca).toBe("Existing RCA from Renderways");
     });
 
+    // Regression (prod 2026-07-30): matchingEngine stores case_created_time as
+    // `parseCustomDate(...).toISOString()`, i.e. UTC. IST is UTC+05:30, so a
+    // case created in the early hours IST lands on the PREVIOUS UTC date and the
+    // RCA read "Case Received on 29th July" for a 30-07-2026 04:00 AM case —
+    // while the grid's own CASE CREATED TIME column (Asia/Kolkata) said 30th.
+    // Cases from 06:09 AM onwards were unaffected, pinning it to the 05:30 line.
+    it("labels an early-morning IST case with its own IST calendar day", () => {
+      // 30-07-2026 04:00:21 AM IST, exactly as it is persisted.
+      const result = service.apply({
+        currentReportDate: "2026-07-30",
+        currentRows: [
+          generatedRow({
+            ticket_id: "WO-NEW-IST",
+            case_created_time: "2026-07-29T22:30:21.000Z",
+            rca: null,
+            part: null,
+            engineer: null,
+          }),
+        ],
+        previousFinalRows: [],
+      });
+      expect(result.rows[0]?.enriched.rca).toBe(
+        "Case Received on 30th July - active case",
+      );
+    });
+
+    it("derives a part ETA from the IST creation day, not the UTC one", () => {
+      // Same 04:00:21 AM IST instant; "Shipped" is created + 1 day => 31st July.
+      const result = service.apply({
+        currentReportDate: "2026-07-30",
+        currentRows: [
+          generatedRow({
+            ticket_id: "WO-NEW-IST-PART",
+            case_created_time: "2026-07-29T22:30:21.000Z",
+            rca: null,
+            part: "Motherboard",
+            part_shipment_status: "Shipped",
+            engineer: null,
+          }),
+        ],
+        previousFinalRows: [],
+      });
+      expect(result.rows[0]?.enriched.rca).toBe(
+        "Case Received on 30th July - with part - (Motherboard) ETA: 31st July",
+      );
+    });
+
     it("does not auto-RCA a CARRIED row (only fresh NEW calls)", () => {
       // Default ticket keys match (WO-000123 <-> 123), so this row is CARRIED.
       const result = service.apply({
