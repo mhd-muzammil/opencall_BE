@@ -1,7 +1,11 @@
 import type { RequestHandler } from "express";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { badRequest } from "../utils/httpError.js";
+import { badRequest, forbidden } from "../utils/httpError.js";
 import { requireCurrentUser } from "../services/rbac/regionAccessService.js";
+import {
+  allowedAspCodesForRequest,
+  aspScopeToArray,
+} from "../services/rbac/principalAspScope.js";
 import {
   isFlexRawSyncConfigured,
   syncFlexRawDataFromApi,
@@ -52,13 +56,33 @@ export const syncFlexRawDataController: RequestHandler = asyncHandler(
 
 /**
  * Per-ASP, per-month closed counts from the imported raw data, for the Closed Calls
- * region cards. Readable by any authenticated principal — it is the same aggregate the
- * cards show.
+ * region cards. Readable by any authenticated principal, but scoped to the regions
+ * that principal is granted — it previously returned every region's aggregate to a
+ * two-region special-access credential.
  */
 export const getFlexRawSummaryController: RequestHandler = asyncHandler(
-  async (_request, response) => {
+  async (request, response) => {
     const summary = await summarizeFlexRawRecords();
-    response.json({ data: summary });
+    const allowed = await allowedAspCodesForRequest(request);
+
+    if (allowed === null) {
+      response.json({ data: summary });
+      return;
+    }
+
+    const inScope = (aspCode: string) => allowed.has(aspCode.trim().toUpperCase());
+    const byAsp = summary.byAsp.filter((entry) => inScope(entry.aspCode));
+    response.json({
+      data: {
+        ...summary,
+        byAsp,
+        byAspMonth: summary.byAspMonth.filter((entry) => inScope(entry.aspCode)),
+        // Roll the headline totals up from the in-scope rows only, so they agree
+        // with the cards rather than reporting the whole state's numbers.
+        total: byAsp.reduce((sum, e) => sum + e.total, 0),
+        closed: byAsp.reduce((sum, e) => sum + e.closed, 0),
+      },
+    });
   },
 );
 
@@ -77,11 +101,21 @@ export const listFlexRawRecordsController: RequestHandler = asyncHandler(
     const statusGroup =
       statusRaw === undefined ? "closed" : String(statusRaw).trim().toLowerCase();
 
+    // `asp` is caller-supplied and was previously passed straight to SQL, so any
+    // principal could read any region's closed cases by changing it. Reject an
+    // out-of-scope code outright, and pass the scope down so `asp=''` ("every
+    // region") stays bounded to what this principal may see.
+    const allowed = await allowedAspCodesForRequest(request);
+    if (allowed !== null && asp !== "" && !allowed.has(asp)) {
+      throw forbidden("You do not have access to this region's raw data");
+    }
+
     const result = await listFlexRawRecords({
       aspCode: asp,
       monthFrom: from,
       monthTo: to,
       statusGroup,
+      allowedAspCodes: aspScopeToArray(allowed),
     });
     response.json({ data: result });
   },

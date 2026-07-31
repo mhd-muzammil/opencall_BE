@@ -209,6 +209,12 @@ export async function listFlexRawRecords(filter: {
   monthFrom: string;
   monthTo: string;
   statusGroup: string;
+  /**
+   * ASP codes the caller may read, or `null` for unrestricted. Enforced here as well
+   * as in the controller so an empty `aspCode` ("every region") can never widen a
+   * region-scoped principal's view.
+   */
+  allowedAspCodes?: string[] | null;
 }): Promise<FlexRawRecordList> {
   const result = await query<{
     ticket_no: string;
@@ -223,6 +229,7 @@ export async function listFlexRawRecords(filter: {
        FROM flex_raw_records
       WHERE ($1 = '' OR status_group = $1)
         AND ($2 = '' OR work_location = $2)
+        AND ($5::text[] IS NULL OR work_location = ANY($5::text[]))
         AND (
           ($3 = '' AND $4 = '')
           OR (source_month <> ''
@@ -231,7 +238,13 @@ export async function listFlexRawRecords(filter: {
         )
       ORDER BY source_month DESC, ticket_no
       LIMIT ${RECORD_LIST_LIMIT}`,
-    [filter.statusGroup, filter.aspCode, filter.monthFrom, filter.monthTo],
+    [
+      filter.statusGroup,
+      filter.aspCode,
+      filter.monthFrom,
+      filter.monthTo,
+      filter.allowedAspCodes ?? null,
+    ],
   );
 
   return {

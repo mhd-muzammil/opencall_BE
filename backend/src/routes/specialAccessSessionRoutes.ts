@@ -1,7 +1,9 @@
 import { Router } from "express";
 import {
+  closeSpecialAccessRegionEodController,
   deleteSpecialAccessRecordLayoutController,
   getSpecialAccessEngineersDropdownController,
+  getSpecialAccessEodStateController,
   getSpecialAccessMeController,
   getSpecialAccessRecordColumnsCatalogController,
   getSpecialAccessRecordLayoutController,
@@ -52,4 +54,14 @@ specialAccessSessionRouter.delete(
 specialAccessSessionRouter.patch(
   "/report-rows/:id",
   patchSpecialAccessReportRowController,
+);
+
+// Final EOD. Mirrors GET /reports/:date/eod-state and POST /regions/:id/eod/close,
+// which are role-guarded and so unreachable with a special-access token. The read is
+// filtered to granted regions; the close additionally requires `edit` permission and
+// the `productivity` grant (enforced in the service, not here).
+specialAccessSessionRouter.get("/eod-state/:date", getSpecialAccessEodStateController);
+specialAccessSessionRouter.post(
+  "/regions/:regionId/eod/close",
+  closeSpecialAccessRegionEodController,
 );

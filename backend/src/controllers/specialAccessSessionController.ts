@@ -1,7 +1,12 @@
 import type { Request, RequestHandler } from "express";
+import { z } from "zod";
 import { DAILY_CALL_PLAN_COLUMNS } from "@opencall/shared";
 import type { SpecialAccessPrincipal } from "../types/auth.js";
 import { loadScopedReportForPrincipal } from "../services/specialAccess/specialAccessReportService.js";
+import {
+  closeRegionEodForSpecialAccess,
+  getRegionEodStateForSpecialAccess,
+} from "../services/specialAccess/specialAccessEodService.js";
 import {
   deleteSpecialAccessRecordLayout,
   findSpecialAccessRecordLayout,
@@ -87,6 +92,66 @@ export const getSpecialAccessReportController: RequestHandler = asyncHandler(
   async (request, response) => {
     const principal = requireSpecialAccess(request);
     const result = await loadScopedReportForPrincipal(principal);
+    response.json({ data: result });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Final EOD. GET /reports/:date/eod-state and POST /regions/:id/eod/close are
+// role-guarded, so a special-access credential could neither see which regions were
+// frozen nor close its own regions' days — an employee running two regions had to
+// ask someone else every evening. These are the scoped equivalents: the read is
+// filtered to granted regions, and the close requires `edit` permission plus the
+// `productivity` grant and goes through the same hardened freeze path.
+// ---------------------------------------------------------------------------
+
+const workingDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const eodRegionIdSchema = z.string().uuid();
+const eodCloseBodySchema = z.object({ workingDate: workingDateSchema });
+
+export const getSpecialAccessEodStateController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const principal = requireSpecialAccess(request);
+    const workingDate = workingDateSchema.parse(request.params.date);
+    response.json({
+      data: await getRegionEodStateForSpecialAccess(principal, workingDate),
+    });
+  },
+);
+
+export const closeSpecialAccessRegionEodController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const principal = requireSpecialAccess(request);
+    const regionId = eodRegionIdSchema.parse(request.params.regionId);
+    const { workingDate } = eodCloseBodySchema.parse(request.body);
+
+    const result = await closeRegionEodForSpecialAccess(
+      principal,
+      regionId,
+      workingDate,
+    );
+
+    // Only a close that actually froze the day is audit-worthy. As elsewhere for
+    // special access, actor_user_id / actor_role stay null (not a `users` row) and
+    // the credential is identified by the email fallback plus metadata.
+    if (result.frozenNow) {
+      recordActivity({
+        eventType: "REGION_EOD_CLOSED",
+        actorEmailFallback: `special-access:${principal.username}`,
+        regionId,
+        targetType: "region_eod",
+        targetId: result.state.id,
+        metadata: {
+          workingDate,
+          specialAccessId: principal.id,
+          specialAccessUsername: principal.username,
+          engineerCount: result.snapshot.list.length,
+          totalAttended: result.snapshot.totalAttended,
+        },
+        request,
+      });
+    }
+
     response.json({ data: result });
   },
 );

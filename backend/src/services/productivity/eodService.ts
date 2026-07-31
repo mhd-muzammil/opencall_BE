@@ -155,6 +155,26 @@ export async function closeRegionEod(
 ): Promise<CloseRegionEodResult> {
   assertValidWorkingDate(workingDate);
   const region = await authorizeRegionDayAccess(user, regionId);
+  return freezeRegionDay(region, workingDate, user.id);
+}
+
+/**
+ * Freezes an ALREADY-AUTHORIZED region's day. The caller is responsible for proving
+ * the principal may close this region — everything downstream of that check lives
+ * here so the idempotency and first-close-wins guarantees (added after the
+ * 2026-07-23 mass-close incident) exist in exactly one place, shared by the regular
+ * user route and the special-access route.
+ *
+ * `closedBy` is a `users.id`, or null for a special-access credential: those are not
+ * `users` rows and `region_eod_state.closed_by` is an FK to `users(id)`.
+ */
+export async function freezeRegionDay(
+  region: Region,
+  workingDate: string,
+  closedBy: string | null,
+): Promise<CloseRegionEodResult> {
+  assertValidWorkingDate(workingDate);
+  const regionId = region.id;
 
   // Idempotency pre-check: a second click must NOT recompute — the frozen
   // numbers of the first close stand.
@@ -185,7 +205,7 @@ export async function closeRegionEod(
     }
 
     await upsertProductivitySnapshot(client, regionId, workingDate, productivity);
-    const state = await markRegionEodClosed(client, regionId, workingDate, user.id);
+    const state = await markRegionEodClosed(client, regionId, workingDate, closedBy);
     return { state, snapshot: productivity, frozenNow: true };
   });
 }

@@ -91,7 +91,12 @@ export async function markRegionEodClosed(
   client: PoolClient,
   regionId: string,
   workingDate: string,
-  closedBy: string,
+  /**
+   * `users.id` of the closer, or null for a special-access credential — those are
+   * not `users` rows and this column is an FK to `users(id)`. The credential is
+   * identified in the activity log instead.
+   */
+  closedBy: string | null,
 ): Promise<RegionEodStateRecord> {
   const result = await client.query<Omit<RegionEodStateRow, "closed_by_display">>(
     `
