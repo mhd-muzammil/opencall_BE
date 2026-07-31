@@ -364,13 +364,18 @@ describe("classifyProductivityStatus (shared classifier)", () => {
     );
   });
 
-  it("keeps the longer 'Elevation ...' statuses in their existing class", () => {
+  // Reversed 2026-07-31: the longer "Elevation ..." statuses used to fall
+  // through to ATTENDED_OTHER, so an elevated call was Attended but appeared in
+  // no named column. The whole family now shares the bucket the column is
+  // already named after ("Under Observation/Elevation").
+  it("maps every 'Elevation ...' status to UNDER_OBSERVATION", () => {
     expect(classifyProductivityStatus("Elevation HP Pending")).toBe(
-      "ATTENDED_OTHER",
+      "UNDER_OBSERVATION",
     );
     expect(classifyProductivityStatus("Elevation Part Pending")).toBe(
-      "ATTENDED_OTHER",
+      "UNDER_OBSERVATION",
     );
+    expect(classifyProductivityStatus("HP Pending")).toBe("UNDER_OBSERVATION");
   });
 
   it("freezes an Elevation evening into the underObservation snapshot column", async () => {
@@ -384,9 +389,9 @@ describe("classifyProductivityStatus (shared classifier)", () => {
     const result = await closeRegionEod(superAdmin, chennai.id, WORKING_DATE);
     // The snapshot payload keys stay the stable camelCase fields — stored
     // frozen snapshots must keep deserializing unchanged.
-    expect(result.snapshot.list[0]?.underObservation).toBe(1);
-    expect(result.snapshot.list[0]?.underObservationTickets).toEqual(["E1"]);
-    // Both are attended work; only the bare "Elevation" is under-observation.
+    expect(result.snapshot.list[0]?.underObservation).toBe(2);
+    expect(result.snapshot.list[0]?.underObservationTickets).toEqual(["E1", "E2"]);
+    // Both are attended work, and both now land in the named column.
     expect(result.snapshot.list[0]?.attended).toBe(2);
   });
 });

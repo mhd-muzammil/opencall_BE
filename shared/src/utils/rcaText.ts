@@ -6,6 +6,7 @@
 import {
   PART_SHIPMENT_ETA,
   PART_SHIPMENT_STATUS_PRECEDENCE,
+  SSC_PENDING_ETA_OFFSET_DAYS,
 } from "../constants/scheduling.js";
 import { addCalendarDays, formatOrdinalDate } from "./dates.js";
 
@@ -120,6 +121,37 @@ export function buildAutoRca(input: AutoRcaInput): string {
 /** "Scheduled on {today}" e.g. "Scheduled on 20th July". */
 export function buildScheduledRemark(todayIso: string): string {
   return `Scheduled on ${formatOrdinalDate(todayIso)}`;
+}
+
+/**
+ * "ETA {case created + SSC_PENDING_ETA_OFFSET_DAYS}", e.g. "ETA 2nd August" —
+ * the Current Remarks line written when a status column moves to SSC Pending.
+ *
+ * Derived purely from case_created_time, exactly like the RCA's part ETA
+ * (`resolveShipmentEta`), so the remark and the RCA can never disagree about
+ * what "created + N" means. Returns "" when case_created_time is missing or
+ * unparseable, so the caller leaves the remark alone rather than writing a
+ * half-built "ETA " line.
+ */
+export function buildSscPendingRemark(
+  caseCreatedTime: string | null | undefined,
+): string {
+  const formatted = formatOrdinalDate(
+    addCalendarDays(caseCreatedTime, SSC_PENDING_ETA_OFFSET_DAYS),
+  );
+  return formatted ? `ETA ${formatted}` : "";
+}
+
+/**
+ * Byte-shape of buildSscPendingRemark output. Lets the edit surfaces recognise a
+ * previously AUTO-generated ETA (possibly stale) so it may be refreshed, while
+ * human-typed text never matches and is never replaced.
+ */
+export const AUTO_SSC_ETA_REMARK_PATTERN =
+  /^ETA \d{1,2}(st|nd|rd|th) [A-Z][a-z]+$/;
+
+export function isAutoSscEtaRemark(value: string | null | undefined): boolean {
+  return AUTO_SSC_ETA_REMARK_PATTERN.test(String(value ?? "").trim());
 }
 
 /** The customer-informed marker the Customer-Pending rule appends to the RCA. */

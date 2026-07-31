@@ -17,8 +17,10 @@ import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
 import {
   appendCustomerPendingKci,
   buildScheduledRemark,
+  buildSscPendingRemark,
   isCustomerPendingStatus,
   isScheduledStatus,
+  isSscPendingStatus,
   istTodayIso,
 } from "@opencall/shared";
 
@@ -291,6 +293,35 @@ export async function applyReportRowManualFieldEdit(input: {
     }
     if (!clearedCarryForwardFields.includes("remarks")) {
       clearedCarryForwardFields.push("remarks");
+    }
+  }
+
+  // Feature — SSC part ETA: when THIS edit moves a status column (Morning or
+  // Evening) to SSC Pending, Current Remarks gets "ETA <case created + 2 days>"
+  // so the team sees when the part is due without opening the RCA. Same shape
+  // as the scheduling rule above — transition-only (the column was not already
+  // SSC Pending), and a remark supplied by this edit always wins, because the
+  // records page previews the line in the box before save and the user may
+  // adjust it. A row with no usable Case Created Time yields "" and is left
+  // alone rather than getting a half-built "ETA " line.
+  const movedToSscPending =
+    (hasEditedField(values, "rtplStatus") &&
+      isSscPendingStatus(merged.rtplStatus) &&
+      !isSscPendingStatus(cleanEditableValue(current.rtplStatus))) ||
+    (hasEditedField(values, "eveningRtplStatus") &&
+      isSscPendingStatus(merged.eveningRtplStatus) &&
+      !isSscPendingStatus(cleanEditableValue(current.eveningRtplStatus)));
+
+  if (movedToSscPending) {
+    const etaRemark = buildSscPendingRemark(merged.caseCreatedTime);
+    if (
+      etaRemark &&
+      (!hasEditedField(values, "remarks") || !isCarryForwardValue(merged.remarks))
+    ) {
+      merged.remarks = etaRemark;
+      if (!clearedCarryForwardFields.includes("remarks")) {
+        clearedCarryForwardFields.push("remarks");
+      }
     }
   }
 

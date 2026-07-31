@@ -27,7 +27,7 @@
 //   Scheduled / To be Scheduled / Engg Assigned -> SCHEDULED (booked only)
 //   Case-Closed / WO Closed (or closed today)   -> CLOSED
 //   SSC Pending / Part Order / Additional Part  -> PART_ORDER
-//   Under Observation / bare "Elevation"        -> UNDER_OBSERVATION
+//   Under Observation / any "Elevation *"       -> UNDER_OBSERVATION
 //   CX Pending / CX Reschedule                  -> CX_RESCHEDULE
 //   Engineer Delay                              -> ENGINEER_DELAY
 //   any other status                            -> ATTENDED_OTHER
@@ -133,12 +133,19 @@ export function classifyProductivityStatus(
     return "PART_ORDER";
   }
 
-  // "Under Observation" plus the bare "Elevation" status share one bucket
-  // (displayed as "Under Observation/Elevation"). "elevation" is an EXACT
-  // match on the normalized status, NOT a substring: the longer distinct
-  // statuses ("Elevation HP Pending", "Elevation Part Pending") must keep
-  // their existing ATTENDED_OTHER classification.
-  if (normalized.includes("observation") || normalized === "elevation") {
+  // "Under Observation" plus the whole Elevation family share one bucket, which
+  // is what the column is already called: "Under Observation/Elevation".
+  //
+  // "Elevation HP Pending" and "Elevation Part Pending" used to be deliberately
+  // excluded here and fell through to ATTENDED_OTHER, so an elevated call was
+  // Attended but appeared in no named column. Every status that starts with
+  // "elevation" now lands here (team decision 2026-07-31), plus the bare
+  // "HP Pending" spelling.
+  if (
+    normalized.includes("observation") ||
+    normalized.startsWith("elevation") ||
+    normalized === "hp pending"
+  ) {
     return "UNDER_OBSERVATION";
   }
 
