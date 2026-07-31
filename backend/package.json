@@ -23,6 +23,7 @@
     "pincodes:import": "tsx src/scripts/importPincodeAreaMappings.ts",
     "migrate:user-sections": "tsx src/scripts/applyUserSectionsMigration.ts",
     "migrate:closure-dates": "tsx src/scripts/applyCaseClosureDatesMigration.ts",
+    "migrate:closure-status": "tsx src/scripts/applyClosureReportStatusMigration.ts",
     "migrate:customer-feedback": "tsx src/scripts/applyCustomerFeedbackMigration.ts",
     "migrate:customer-feedback-v2": "tsx src/scripts/applyCustomerFeedbackStructuredMigration.ts",
     "migrate:parts-catalog": "tsx src/scripts/applyPartsCatalogMigration.ts",

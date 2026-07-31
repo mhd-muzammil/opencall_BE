@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Closure Sync — Workflow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#ffffff; --page:#fbfcfd; --line:#e5e9f0; --line2:#eef1f6;
+  --ink:#0f172a; --mute:#64748b; --mute2:#94a3b8;
+  --indigo:#4f46e5; --indigo-d:#4338ca; --indigo-s:#eef2ff;
+  --green:#16a34a; --green-s:#ecfdf5; --green-b:#86efac;
+  --orange:#ea580c; --purple:#7c3aed;
+  --red:#dc2626; --red-s:#fef2f2;
+  --amber:#b45309; --amber-s:#fffbeb;
+  --grid:#2ba9e0;
+  --brand:#c0272d;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--page);color:var(--ink);font-family:'Plus Jakarta Sans',Inter,ui-sans-serif,system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
+.app{display:flex;min-height:100vh}
+
+/* ---------- sidebar ---------- */
+.side{width:252px;flex:0 0 252px;background:#fff;border-right:1px solid var(--line);padding:18px 14px;position:sticky;top:0;height:100vh;overflow:auto}
+.side::-webkit-scrollbar{width:6px}.side::-webkit-scrollbar-thumb{background:#e2e8f0;border-radius:9px}
+.logo{display:flex;align-items:center;gap:11px;padding:2px 8px 20px}
+.logo .m{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#e11d48,#c0272d);color:#fff;display:grid;place-items:center;font-weight:800;font-size:17px;font-style:italic}
+.logo .n{font-weight:800;font-size:17px;letter-spacing:-.4px}
+.sec{font-size:10px;font-weight:800;letter-spacing:.1em;color:var(--mute2);padding:16px 10px 7px}
+.ni{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;color:#475569;font-weight:600;font-size:13.5px;margin-bottom:2px;cursor:default}
+.ni i{width:15px;height:15px;border:1.6px solid currentColor;border-radius:4px;opacity:.45;flex:0 0 15px}
+.ni .b{margin-left:auto;font-size:10.5px;font-weight:800;color:var(--green);background:var(--green-s);padding:2px 7px;border-radius:99px}
+.ni.on{background:#f5f7ff;border:1px solid #c7d2fe;color:var(--indigo-d);padding:8px 10px}
+.ni.on i{opacity:1;background:var(--indigo);border-color:var(--indigo)}
+.ni.on .b{color:#fff;background:var(--indigo)}
+
+/* ---------- main ---------- */
+.main{flex:1;min-width:0}
+.top{background:#fff;border-bottom:1px solid var(--line);padding:16px 26px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;position:sticky;top:0;z-index:30}
+.crumb{font-size:10.5px;font-weight:800;letter-spacing:.09em;color:var(--mute2)}
+.title{font-size:22px;font-weight:800;letter-spacing:-.6px;margin-top:2px}
+.sp{flex:1}
+.btn{border:0;border-radius:9px;background:var(--indigo);color:#fff;font:inherit;font-weight:700;font-size:13px;padding:10px 18px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.btn:hover{background:var(--indigo-d)}
+.btn.g{background:#fff;color:#334155;border:1px solid var(--line)}
+.btn.g:hover{background:#f8fafc}
+.av{width:34px;height:34px;border-radius:9px;border:1px solid var(--line);display:grid;place-items:center;color:var(--brand);font-weight:800;font-style:italic;background:#fff}
+
+.wrap{padding:22px 26px 60px;max-width:1560px}
+.h3{font-size:16px;font-weight:800;letter-spacing:-.3px;margin:0 0 3px}
+.h3s{font-size:12.5px;color:var(--mute);margin:0 0 14px}
+.sec-gap{margin-top:26px}
+
+.pill{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;font-size:11.5px;font-weight:700;white-space:nowrap}
+.pill .led{width:6px;height:6px;border-radius:50%;background:currentColor}
+.p-g{background:var(--green-s);color:var(--green)}
+.p-i{background:var(--indigo-s);color:var(--indigo-d)}
+.p-a{background:var(--amber-s);color:var(--amber)}
+.p-r{background:var(--red-s);color:var(--red)}
+.p-m{background:#f1f5f9;color:var(--mute)}
+
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.card+.card{margin-top:16px}
+.ch{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ch h4{margin:0;font-size:14.5px;font-weight:800;letter-spacing:-.2px}
+.ch .s{font-size:12px;color:var(--mute)}
+.cb{padding:18px}
+.cb.flush{padding:0}
+
+/* KPI tiles */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+.tile{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.tile .l{font-size:10.5px;font-weight:800;letter-spacing:.08em;color:var(--mute2)}
+.tile .v{font-size:32px;font-weight:800;letter-spacing:-1.4px;margin:6px 0 3px;font-variant-numeric:tabular-nums}
+.tile .h{font-size:11.5px;color:var(--mute);line-height:1.4}
+.v-g{color:var(--green)}.v-o{color:var(--orange)}.v-p{color:var(--purple)}.v-i{color:var(--indigo)}.v-r{color:var(--red)}
+
+/* pipeline */
+.pipe{display:grid;grid-template-columns:repeat(6,1fr);gap:0;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.st{padding:16px 14px;border-right:1px solid var(--line2);position:relative}
+.st:last-child{border-right:0}
+.st .no{font-size:10px;font-weight:800;color:var(--mute2);letter-spacing:.08em}
+.st .nm{font-size:13px;font-weight:800;margin:5px 0 6px;line-height:1.3}
+.st .num{font-size:25px;font-weight:800;letter-spacing:-1px;font-variant-numeric:tabular-nums;line-height:1}
+.st .un{font-size:11px;color:var(--mute);font-weight:600;margin-top:3px}
+.st .dt{font-size:11px;color:var(--mute);line-height:1.45;margin-top:9px;border-top:1px dashed var(--line2);padding-top:8px}
+.st code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;background:#f1f5f9;padding:1px 4px;border-radius:4px;color:#334155}
+.st.auto{background:#fcfdff}
+.st.serve{background:#fbfffc}
+.badgerow{display:flex;gap:8px;padding:10px 18px;background:#f8fafc;border:1px solid var(--line);border-top:0;border-radius:0 0 12px 12px;font-size:11.5px;font-weight:700;color:var(--mute);flex-wrap:wrap}
+
+/* region cards */
+.regs{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+.reg{background:#fff;border:1px solid var(--line);border-radius:12px;padding:15px 17px}
+.reg.sel{background:var(--green-s);border-color:var(--green-b)}
+.reg .rn{font-size:11px;font-weight:800;letter-spacing:.07em;color:#334155}
+.reg .rv{font-size:29px;font-weight:800;color:var(--green);letter-spacing:-1.2px;margin:2px 0 1px;font-variant-numeric:tabular-nums}
+.reg .rs{font-size:11px;color:var(--mute2);font-weight:600}
+.reg .rr{display:flex;align-items:center;gap:8px;font-size:12.5px;color:#475569;margin-top:11px;font-weight:600}
+.reg .rr .n{margin-left:auto;font-weight:800;text-decoration:underline;text-underline-offset:3px;font-variant-numeric:tabular-nums}
+.reg .rr .n.i{color:var(--indigo)}
+.reg .rr .n.o{color:var(--orange)}
+.reg .delta{font-size:10.5px;font-weight:800;color:var(--green);margin-left:6px}
+
+/* grid */
+.gridwrap{overflow:auto;max-height:640px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+thead th{background:var(--grid);color:#fff;text-align:left;font-size:10.5px;font-weight:800;letter-spacing:.05em;padding:11px 12px;white-space:nowrap;position:sticky;top:0;z-index:2;border-right:1px solid rgba(255,255,255,.22)}
+thead th:last-child{border-right:0}
+thead th .f{opacity:.65;margin-left:6px;font-size:9px}
+tbody td{padding:10px 12px;border-bottom:1px solid var(--line2);vertical-align:middle;white-space:nowrap}
+tbody tr:hover{background:#f8fbff}
+tbody tr.b2{background:#fffdf5}tbody tr.b2:hover{background:#fffaeb}
+tbody tr.b3{background:#fff8f8}tbody tr.b3:hover{background:#fef2f2}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px}
+.tid{color:var(--indigo);font-weight:700;text-decoration:underline;text-underline-offset:2px}
+.tg{display:inline-block;padding:3px 8px;border-radius:6px;font-size:10.5px;font-weight:800}
+.tg-c{background:var(--green-s);color:var(--green)}
+.tg-x{background:var(--amber-s);color:var(--amber)}
+.tg-o{background:var(--indigo-s);color:var(--indigo-d)}
+.tg-n{background:#f1f5f9;color:var(--mute)}
+.tg-r{background:var(--red-s);color:var(--red)}
+.was{color:var(--mute2);text-decoration:line-through;font-size:11.5px}
+.up{color:var(--green);font-weight:800;margin-left:5px}
+
+/* buckets */
+.bks{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.bk{border:1px solid var(--line);border-radius:12px;background:#fff;padding:16px 18px;border-top:3px solid}
+.bk.a{border-top-color:var(--green)}.bk.b{border-top-color:#f59e0b}.bk.c{border-top-color:var(--red)}
+.bk .n{font-size:30px;font-weight:800;letter-spacing:-1.3px;font-variant-numeric:tabular-nums;line-height:1}
+.bk.a .n{color:var(--green)}.bk.b .n{color:var(--amber)}.bk.c .n{color:var(--red)}
+.bk .t{font-size:13px;font-weight:800;margin:7px 0 5px}
+.bk .d{font-size:12px;color:var(--mute);line-height:1.5}
+.bk .who{margin-top:11px;padding-top:10px;border-top:1px dashed var(--line2);font-size:11.5px;font-weight:700;color:#334155}
+
+/* chips */
+.chips{display:flex;gap:7px;flex-wrap:wrap}
+.chip{font:inherit;font-size:11.5px;font-weight:700;padding:6px 13px;border-radius:99px;border:1px solid var(--line);background:#fff;color:var(--mute);cursor:pointer}
+.chip:hover{color:var(--ink);border-color:#c7d2fe}
+.chip.on{background:var(--indigo);border-color:var(--indigo);color:#fff}
+.chip .n{opacity:.75;margin-left:5px;font-weight:800}
+
+/* note */
+.note{border:1px solid var(--line);border-left:3px solid var(--indigo);background:#f8faff;border-radius:0 10px 10px 0;padding:13px 16px;font-size:12.5px;line-height:1.6}
+.note.w{border-left-color:#f59e0b;background:#fffdf5}
+.note.r{border-left-color:var(--red);background:var(--red-s)}
+.note b{font-weight:800}
+.note code,.mono-i{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;background:rgba(15,23,42,.05);padding:1px 5px;border-radius:4px}
+
+/* timeline */
+.tl{position:relative;padding-left:24px}
+.tl::before{content:'';position:absolute;left:6px;top:5px;bottom:5px;width:2px;background:var(--line)}
+.ti{position:relative;padding-bottom:16px}
+.ti::before{content:'';position:absolute;left:-22px;top:4px;width:10px;height:10px;border-radius:50%;background:var(--indigo);box-shadow:0 0 0 3px var(--indigo-s)}
+.ti.m::before{background:#cbd5e1;box-shadow:0 0 0 3px #f1f5f9}
+.ti.r::before{background:var(--red);box-shadow:0 0 0 3px var(--red-s)}
+.ti.g::before{background:var(--green);box-shadow:0 0 0 3px var(--green-s)}
+.ti .t{font-weight:800;font-size:12.5px;font-variant-numeric:tabular-nums}
+.ti .d{font-size:12px;color:var(--mute);line-height:1.55;margin-top:2px}
+.ti .d code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;background:#f1f5f9;padding:1px 5px;border-radius:4px;color:#334155}
+
+.two{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}
+.foot{padding:0 26px 46px;max-width:1560px;color:var(--mute2);font-size:11.5px;line-height:1.65}
+@media(max-width:1180px){.pipe{grid-template-columns:repeat(3,1fr)}.st{border-bottom:1px solid var(--line2)}.two{grid-template-columns:1fr}}
+@media(max-width:900px){.side{display:none}.wrap,.top,.foot{padding-left:14px;padding-right:14px}.pipe{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+
+<aside class="side">
+  <div class="logo"><div class="m">R</div><div class="n">Renderways</div></div>
+  <div class="sec">DASHBOARDS</div>
+  <div class="ni"><i></i>Overview</div>
+  <div class="ni"><i></i>Closed Calls<span class="b">1852</span></div>
+  <div class="ni"><i></i>RTPL Dashboard</div>
+  <div class="ni"><i></i>BOD &amp; EOD Status</div>
+  <div class="ni"><i></i>SLA TaT</div>
+  <div class="ni"><i></i>RTPL pivot</div>
+  <div class="ni"><i></i>TN VIEW Status</div>
+  <div class="ni"><i></i>Flex Dashboard</div>
+  <div class="ni"><i></i>Flex EOD &amp; BOD</div>
+  <div class="sec">DATA &amp; OPERATIONS</div>
+  <div class="ni"><i></i>Open Call Report<span class="b">915</span></div>
+  <div class="ni on"><i></i>Closure Sync<span class="b">NEW</span></div>
+  <div class="ni"><i></i>Parts Catalog</div>
+  <div class="ni"><i></i>Quotations</div>
+  <div class="ni"><i></i>Engineer Productivity</div>
+  <div class="ni"><i></i>Add Engineers</div>
+  <div class="ni"><i></i>Warranty Lookup</div>
+  <div class="ni"><i></i>Renewal Pipeline</div>
+  <div class="ni"><i></i>RTPL Statuses</div>
+</aside>
+
+<main class="main">
+  <div class="top">
+    <div>
+      <div class="crumb">HOME / DATA &amp; OPERATIONS / CLOSURE SYNC</div>
+      <div class="title">Closure Sync</div>
+    </div>
+    <div class="sp"></div>
+    <span class="pill p-g"><span class="led"></span>Auto-sync healthy · last 16:01 IST</span>
+    <span class="pill p-m">next run 17:00</span>
+    <button class="btn">▶ Run now</button>
+    <button class="btn g">⤓ Export</button>
+    <div class="av">R</div>
+  </div>
+
+  <div class="wrap">
+
+    <div class="note" style="margin-bottom:20px">
+      <b>What this page does.</b> Every hour it downloads today's <span class="mono-i">Flex Closure ASP Report</span> from FieldEZ,
+      imports it exactly as the <b>Import Closure Dates</b> button on Closed Calls does, then matches those closures against the
+      calls your team marked <b>Case-Closed</b> on the Open Call Report — and rewrites the <b>Flex Status</b> cell on every row that matches.
+      <div style="margin-top:8px;color:var(--mute)">
+        Numbers are your live figures from 31-07-2026 (327 active rows · 25 Case-Closed reconstructed from the Records
+        Workspace screenshot · 52 closure records already imported) combined with the real rows in the two closure workbooks.
+        Where a row's closure record exists in those files it is verbatim; the assignment of which rows your team marked
+        Case-Closed is reconstructed, since the database isn't reachable from here.
+      </div>
+    </div>
+
+    <!-- ================= PIPELINE ================= -->
+    <h3 class="h3">The hourly workflow</h3>
+    <p class="h3s">Stages 1–4 run unattended in the worker. Stages 5–6 run on every page load — nothing is written to the report rows.</p>
+    <div class="pipe">
+      <div class="st auto">
+        <div class="no">STAGE 1 · WORKER</div>
+        <div class="nm">Download from FieldEZ</div>
+        <div class="num v-i">14</div><div class="un">rows in today's file</div>
+        <div class="dt">Warm session, no login. Report <code>Flex Closure ASP Report</code>, date&nbsp;=&nbsp;today (IST), format XLSX. Hash vs <code>last-closure.hash</code> — unchanged means stop here.</div>
+      </div>
+      <div class="st auto">
+        <div class="no">STAGE 2 · WORKER</div>
+        <div class="nm">Parse &amp; collapse</div>
+        <div class="num v-i">13</div><div class="un">work orders</div>
+        <div class="dt">Reads <code>Ticket No</code>, <code>Case Id</code>, <code>Status</code> (col&nbsp;AF), <code>Status Remarks</code> (AG), <code>Closure Date</code>, <code>Work Location</code>. One record per WO, not per part order.</div>
+      </div>
+      <div class="st auto">
+        <div class="no">STAGE 3 · WORKER</div>
+        <div class="nm">Import — merge</div>
+        <div class="num v-i">52</div><div class="un">closure records stored</div>
+        <div class="dt"><code>POST /closure-dates/import?mode=merge</code>. Same endpoint as the Import Closure Dates button, but only the incoming keys are touched — yesterday survives.</div>
+      </div>
+      <div class="st auto">
+        <div class="no">STAGE 4 · CLOSED CALLS</div>
+        <div class="nm">Ledger refreshes</div>
+        <div class="num v-g">1852</div><div class="un">records in the ledger</div>
+        <div class="dt">Region cards' <b>FieldEZ data closure</b> counts move. Nothing else on the Closed Calls page changes.</div>
+      </div>
+      <div class="st serve">
+        <div class="no">STAGE 5 · ON PAGE LOAD</div>
+        <div class="nm">Pick the closed set</div>
+        <div class="num v-p">25</div><div class="un">Case-Closed today</div>
+        <div class="dt">From today's 327 rows, those whose evening-first RTPL status is <code>Case-Closed</code> — the same rule the RTPL Hours tile uses.</div>
+      </div>
+      <div class="st serve">
+        <div class="no">STAGE 6 · ON PAGE LOAD</div>
+        <div class="nm">Overlay Flex Status</div>
+        <div class="num v-g">10</div><div class="un">rows rewritten</div>
+        <div class="dt">Match on <code>ticket_id</code>, then <code>case_id</code>. Matched rows serve the closure Status; the vendor value moves to <b>Flex Status (WIP)</b>.</div>
+      </div>
+    </div>
+    <div class="badgerow">
+      <span class="pill p-i"><span class="led"></span>stages 1–4 write to <span class="mono">case_closure_dates</span> only</span>
+      <span class="pill p-g"><span class="led"></span>stages 5–6 write nothing — <span class="mono">daily_call_plan_report_rows.flex_status</span> untouched</span>
+      <span class="pill p-m">no report regeneration anywhere in the loop</span>
+    </div>
+
+    <!-- ================= REGION CARDS ================= -->
+    <div class="sec-gap"></div>
+    <h3 class="h3">Regional closed ledger cards — after the 16:00 sync</h3>
+    <p class="h3s">The only figure the sync moves is <b>FieldEZ data closure</b>. Closed-call totals and Raw data closures are untouched.</p>
+    <div class="regs" id="regs"></div>
+
+    <!-- ================= GRID ================= -->
+    <div class="sec-gap"></div>
+    <div class="card">
+      <div class="ch">
+        <h4>Open Call Report — Case-Closed today</h4>
+        <span class="s">activity date 31-07-2026 · <span id="shownCount"></span> of 327 rows</span>
+        <div class="sp"></div>
+        <div class="chips" id="bkChips"></div>
+        <button class="chip on" id="ovBtn">Overlay: ON</button>
+      </div>
+      <div class="gridwrap"><table id="grid"></table></div>
+    </div>
+
+    <!-- ================= BUCKETS ================= -->
+    <div class="sec-gap"></div>
+    <h3 class="h3">What the match leaves behind</h3>
+    <p class="h3s">Three outcomes, three different jobs. Nothing is closed automatically — you chose report-only.</p>
+    <div class="bks" id="bks"></div>
+
+    <!-- ================= TIMELINE + RULES ================= -->
+    <div class="sec-gap"></div>
+    <div class="two">
+      <div class="card">
+        <div class="ch"><h4>One hour, step by step</h4><span class="s">the 16:00 cycle, with the WIP job colliding at :00</span></div>
+        <div class="cb"><div class="tl" id="tl"></div></div>
+      </div>
+      <div>
+        <div class="card">
+          <div class="ch"><h4>The matching rules</h4></div>
+          <div class="cb flush"><table id="rules"></table></div>
+        </div>
+        <div class="card">
+          <div class="ch"><h4>Open question before this is built</h4></div>
+          <div class="cb">
+            <div class="note w" style="border-radius:10px;border-left-width:3px">
+              <b>Which RTPL statuses count as closed?</b> Your tile shows <span class="mono-i">Case-Closed</span> at 31.
+              But <span class="mono-i">020_rtpl_statuses.sql</span> also seeds <span class="mono-i">WO-closed</span>,
+              <span class="mono-i">Need to Close</span> and <span class="mono-i">Closed-cancellation</span> — and
+              <b>Under Cancellation (12)</b> and <b>Need to Cancel (1)</b> are sitting right beside it on the same screen.
+              The closure report's <span class="mono-i">Closed - Canceled</span> rows pair naturally with those, not with
+              <span class="mono-i">Case-Closed</span>. Confirm the list and the match set is settled.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="foot">
+    Flex-side values — Status, Status Remarks, Closure Date, Work Location — are verbatim from
+    <span class="mono">Flex_Closure_ASP_Report 2.xlsx</span> (30-Jul, 60 rows / 48 work orders) and
+    <span class="mono">Flex_Closure_ASP_Report 3.xlsx</span> (31-Jul, 14 rows / 13 work orders).
+    Ticket IDs, engineers and Flex statuses in the “closed here, not in Flex” group are the real rows visible in your
+    Records Workspace screenshot. Which rows your team marked Case-Closed is reconstructed — the application database
+    is not reachable from this session.
+  </div>
+</main>
+</div>
+
+<script>
+/* ---------------- data ---------------- */
+/* b:1 matched · 2 closed here not in Flex · 3 closed in Flex, not in our set  */
+const ROWS = [
+ /* ---- 1. MATCHED — closure records verbatim from the 31-Jul workbook ---- */
+ {n:1, wo:"WO-035297995", cs:"5162655132", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Vijayananth M", wip:"OTP Validate",       st:"WO Closed",         sr:"", cd:"31-07-2026", asp:"Hosur",       loc:"ASPS01511", b:1},
+ {n:2, wo:"WO-035239736", cs:"5162467711", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Santhosh Kumar S", wip:"Problem Resolution", st:"WO Closed",      sr:"", cd:"31-07-2026", asp:"Vellore",     loc:"ASPS01463", b:1},
+ {n:3, wo:"WO-035307902", cs:"5162701066", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Santhosh Kumar S", wip:"OTP Validate",       st:"WO Closed",      sr:"", cd:"31-07-2026", asp:"Vellore",     loc:"ASPS01463", b:1},
+ {n:4, wo:"WO-035315681", cs:"5162416811", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Santhosh Kumar S", wip:"OTP Validate",       st:"WO Closed",      sr:"", cd:"31-07-2026", asp:"Vellore",     loc:"ASPS01463", b:1},
+ {n:5, wo:"WO-035340494", cs:"5162827109", ev:"Case-Closed", rem:"Assigning case for installation", eng:"Sarwana N", wip:"Engineer Assignment", st:"WO Closed", sr:"Installation", cd:"31-07-2026", asp:"Vellore", loc:"ASPS01463", b:1},
+ {n:6, wo:"WO-035311580", cs:"5162718808", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Vijayananth M", wip:"OTP Validate",       st:"WO Closed",         sr:"", cd:"31-07-2026", asp:"Hosur",       loc:"ASPS01511", b:1},
+ {n:7, wo:"WO-035338478", cs:"5162808991", ev:"Case-Closed", rem:"Assigning case for installation", eng:"Sarwana N", wip:"Engineer Assignment", st:"WO Closed", sr:"Installation", cd:"31-07-2026", asp:"Vellore", loc:"ASPS01463", b:1},
+ {n:8, wo:"WO-035344575", cs:"5162835075", ev:"Case-Closed", rem:"Assigning case for installation", eng:"Santhosh Kumar S", wip:"Partner Parts Hold", st:"WO Closed", sr:"Installation", cd:"31-07-2026", asp:"Vellore", loc:"ASPS01463", b:1},
+ {n:9, wo:"WO-035331598", cs:"5162803149", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Vijayananth M", wip:"Problem Resolution", st:"WO Closed",         sr:"", cd:"31-07-2026", asp:"Hosur",       loc:"ASPS01511", b:1},
+ {n:10,wo:"WO-035323151", cs:"5162771246", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Vijayananth M", wip:"OTP Validate",       st:"WO Closed",         sr:"", cd:"31-07-2026", asp:"Hosur",       loc:"ASPS01511", b:1},
+ /* ---- 2. CLOSED HERE, NOT IN FLEX — real rows from your Records Workspace ---- */
+ {n:11,wo:"WO-035308958", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July · Carried", eng:"Rilwan",              wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Hosur",       loc:"ASPS01511", b:2, age:"2h"},
+ {n:12,wo:"WO-035286196", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July · Carried", eng:"Vijayakumar",         wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Kanchipuram", loc:"ASPS01489", b:2, age:"2h"},
+ {n:13,wo:"WO-035236857", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July · Carried", eng:"Vijayakumar",         wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Kanchipuram", loc:"ASPS01489", b:2, age:"3h"},
+ {n:14,wo:"WO-035230001", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July · Carried", eng:"Vijayakumar",         wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Kanchipuram", loc:"ASPS01489", b:2, age:"3h"},
+ {n:15,wo:"WO-035188967", cs:"—", ev:"Case-Closed", rem:"Scheduled on 30th July · Carried", eng:"Vijayakumar",         wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Kanchipuram", loc:"ASPS01489", b:2, age:"29h"},
+ {n:16,wo:"WO-035127183", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July · Carried", eng:"Vijayakumar Arakonam",wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Kanchipuram", loc:"ASPS01489", b:2, age:"4h"},
+ {n:17,wo:"WO-035350610", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Vishnu",                        wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Chennai",     loc:"ASPS01461", b:2, age:"1h"},
+ {n:18,wo:"WO-035342270", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Praveen",                       wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Chennai",     loc:"ASPS01461", b:2, age:"1h"},
+ {n:19,wo:"WO-035339603", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Vijayakumar",                   wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Kanchipuram", loc:"ASPS01489", b:2, age:"1h"},
+ {n:20,wo:"WO-035338913", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Praveen",                       wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Chennai",     loc:"ASPS01461", b:2, age:"2h"},
+ {n:21,wo:"WO-035331761", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Vijayakumar",                   wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Kanchipuram", loc:"ASPS01489", b:2, age:"2h"},
+ {n:22,wo:"WO-035329124", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Vijayakumar",                   wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Kanchipuram", loc:"ASPS01489", b:2, age:"2h"},
+ {n:23,wo:"WO-035326326", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Vijayakumar Arakonam",          wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Kanchipuram", loc:"ASPS01489", b:2, age:"3h"},
+ {n:24,wo:"WO-035305309", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Praveen",                       wip:"OTP Validate", st:null, sr:"", cd:null, asp:"Chennai",     loc:"ASPS01461", b:2, age:"3h"},
+ {n:25,wo:"WO-035277026", cs:"—", ev:"Case-Closed", rem:"Scheduled on 31st July", eng:"Vijay Anand",                   wip:"Problem Resolution", st:null, sr:"", cd:null, asp:"Salem", loc:"ASPS01465", b:2, age:"5h"},
+ /* ---- 3. CLOSED IN FLEX, NOT IN OUR SET — closure records verbatim ---- */
+ {n:26,wo:"WO-035338956", cs:"5162814699", ev:"Customer Pending", rem:"Awaiting customer confirmation", eng:"M.Kausar Badshah", wip:"OTP Validate", st:"WO Closed",        sr:"",             cd:"31-07-2026", asp:"Hosur",       loc:"ASPS01511", b:3},
+ {n:27,wo:"WO-035325103", cs:"5162774781", ev:"Under Cancellation", rem:"Assigning case for installation", eng:"—",            wip:"Engineer Assignment", st:"Closed - Canceled", sr:"On the way", cd:null,       asp:"Kanchipuram", loc:"ASPS01489", b:3},
+ {n:28,wo:"WO-035293383", cs:"5162643082", ev:"Under Cancellation", rem:"Customer not reachable", eng:"—",                     wip:"Problem Resolution",  st:"Closed - Canceled", sr:"",           cd:null,       asp:"Chennai",     loc:"ASPS01461", b:3},
+];
+
+const REGS = [
+ {n:"ALL REGIONS", code:"", today:25, all:"1,852 all time · 553 active WIP", fez:52, raw:"9,401", d:13, sel:true},
+ {n:"CHENNAI",     code:"ASPS01461 | 191 WIP", today:556, all:"", fez:5,  raw:"1,800", d:1},
+ {n:"SALEM",       code:"ASPS01465 | 106 WIP", today:457, all:"", fez:11, raw:"3,176", d:0},
+ {n:"VELLORE",     code:"ASPS01463 | 103 WIP", today:292, all:"", fez:14, raw:"2,059", d:6},
+ {n:"HOSUR",       code:"ASPS01511 | 54 WIP",  today:289, all:"", fez:18, raw:"353",   d:5},
+ {n:"KANCHIPURAM", code:"ASPS01489 | 99 WIP",  today:258, all:"", fez:4,  raw:"450",   d:1},
+];
+
+const BKS = [
+ {b:1,cls:"a",t:"Matched",                   d:"We marked it Case-Closed and the closure report agrees. The Flex Status cell is rewritten on the grid and the closure date fills in.", who:"Nobody. This is the healthy path."},
+ {b:2,cls:"b",t:"Closed here, not in Flex",  d:"Your engineer closed it in OpenCall; Flex hasn't processed it yet. Normal for an hour or two. Past 24h it usually means a wrong WO number.", who:"CCO chase list — sort by age, act on anything over 24h."},
+ {b:3,cls:"c",t:"Closed in Flex, open here", d:"Flex is done; our row still carries another RTPL status. The overlay flips the Flex Status cell immediately so it is visible, but the RTPL status still needs setting.", who:"Region team — set the RTPL status, stop calling the customer."},
+];
+
+const TL = [
+ {t:"15:45",c:"m",d:"WIP job runs on its 15-minute cadence. Closure job not due."},
+ {t:"16:00:00",c:"",d:"<b>Both jobs due.</b> WIP runs first — they share one Playwright <code>Page</code> and never overlap."},
+ {t:"16:00:44",c:"",d:"<b>Closure job starts.</b> Warm FieldEZ session reused. Sets date = today (IST), format XLSX, downloads <code>Flex Closure ASP Report</code>."},
+ {t:"16:01:05",c:"",d:"14 rows read → collapsed to 13 work orders. 11 <code>WO Closed</code>, 2 <code>Closed - Canceled</code> with no closure date."},
+ {t:"16:01:20",c:"",d:"Hash differs from <code>last-closure.hash</code> → <code>POST /api/v1/closure-dates/import?mode=merge</code>."},
+ {t:"16:01:23",c:"r",d:"<b>401 — admin token expired.</b> <code>getToken(force)</code> re-logs in, the POST is retried once."},
+ {t:"16:01:25",c:"g",d:"201 Created. Merge touches only the 13 incoming keys — the other 39 closure records survive. Audit row written with the tallies."},
+ {t:"16:01:25",c:"m",d:"No report regeneration. <code>last-closure.hash</code> written; job sleeps until 17:00."},
+ {t:"16:04",c:"g",d:"A CCO opens the Open Call Report. The enricher matches 10 of the 25 Case-Closed rows and rewrites their Flex Status cells on the way out. Nothing is written to the database."},
+];
+
+const RULES = [
+ ["Which rows we test","today's report rows whose evening-first RTPL status is <span class='mono'>Case-Closed</span>"],
+ ["Primary key","<span class='mono'>ticket_id</span> ↔ <span class='mono'>Ticket No</span>, trimmed + upper-cased"],
+ ["Fallback key","<span class='mono'>case_id</span> ↔ <span class='mono'>Case Id</span>, same normalisation"],
+ ["What is overlaid","Flex Status, Status Remarks, Case Closed Date"],
+ ["What is preserved","the vendor value moves to <b>Flex Status (WIP)</b>"],
+ ["What is never written","<span class='mono'>daily_call_plan_report_rows</span> — the overlay is serve-time only"],
+ ["Cancelled rows","<span class='mono'>Closed - Canceled</span> classified CANCEL-first, never counted as a completion"],
+ ["No closure date","stored anyway, day-bucketed on Activity Time"],
+];
+
+/* ---------------- render ---------------- */
+const $=s=>document.querySelector(s);
+let overlay=true, fB="all";
+
+$("#regs").innerHTML = REGS.map(r=>`
+ <div class="reg${r.sel?' sel':''}">
+   <div class="rn">${r.n}</div>
+   <div class="rv">${r.today}</div>
+   <div class="rs">${r.all||r.code}</div>
+   ${r.all?`<div class="rs" style="margin-top:1px">&nbsp;</div>`:''}
+   <div class="rr">FieldEZ data closure <span class="n i">${r.fez}${r.d?`<span class="delta">▲${r.d}</span>`:''}</span></div>
+   <div class="rr">Raw data closures <span class="n o">${r.raw}</span></div>
+ </div>`).join("");
+
+function stTag(s){
+  if(!s) return `<span class="tg tg-n">—</span>`;
+  if(/CANCEL/i.test(s)) return `<span class="tg tg-x">${s}</span>`;
+  if(/CLOSED/i.test(s)) return `<span class="tg tg-c">${s}</span>`;
+  return `<span class="tg tg-o">${s}</span>`;
+}
+function evTag(s){
+  if(s==="Case-Closed") return `<span class="tg tg-c">${s}</span>`;
+  if(/Cancel/i.test(s)) return `<span class="tg tg-x">${s}</span>`;
+  return `<span class="tg tg-o">${s}</span>`;
+}
+
+$("#bkChips").innerHTML = `<button class="chip on" data-b="all">All<span class="n">${ROWS.length}</span></button>` +
+  BKS.map(b=>`<button class="chip" data-b="${b.b}">${b.t}<span class="n">${ROWS.filter(r=>r.b===b.b).length}</span></button>`).join("");
+
+function renderGrid(){
+  const list = ROWS.filter(r=> fB==="all" || r.b===Number(fB));
+  $("#shownCount").textContent = `${list.length} shown`;
+  $("#grid").innerHTML = `
+  <thead><tr>
+    <th>S.NO</th><th>TICKET ID <span class="f">▼</span></th><th>CASE ID</th><th>ASP / REGION <span class="f">▼</span></th>
+    <th>EVENING STATUS <span class="f">▼</span></th><th>CURRENT REMARKS</th><th>ENGINEER <span class="f">▼</span></th>
+    <th>FLEX STATUS <span class="f">▼</span></th><th>FLEX STATUS (WIP)</th><th>STATUS REMARKS</th><th>CASE CLOSED DATE</th><th>OUTCOME</th>
+  </tr></thead>
+  <tbody>${list.map(r=>{
+    const shown = (overlay && r.st) ? r.st : r.wip;
+    const flipped = overlay && r.st && r.st!==r.wip;
+    const bTag = r.b===1?`<span class="tg tg-c">Matched</span>`
+               : r.b===2?`<span class="tg tg-x">Closed here, not in Flex${r.age?` · ${r.age}`:''}</span>`
+               :         `<span class="tg tg-r">Closed in Flex, open here</span>`;
+    return `<tr class="${r.b===2?'b2':r.b===3?'b3':''}">
+      <td class="mono">${r.n}</td>
+      <td class="mono tid">${r.wo}</td>
+      <td class="mono">${r.cs}</td>
+      <td>${r.asp}<div class="mono" style="color:var(--mute2);font-size:10px">${r.loc}</div></td>
+      <td>${evTag(r.ev)}</td>
+      <td style="white-space:normal;max-width:230px;color:#475569">${r.rem}</td>
+      <td>${r.eng}</td>
+      <td>${stTag(shown)}${flipped?'<span class="up">▲</span>':''}</td>
+      <td>${overlay&&r.st?`<span class="was">${r.wip}</span>`:'<span style="color:var(--mute2)">—</span>'}</td>
+      <td>${overlay&&r.sr?`<span class="tg tg-o">${r.sr}</span>`:'<span style="color:var(--mute2)">—</span>'}</td>
+      <td class="mono">${overlay&&r.cd?r.cd:(r.st&&overlay?'<span style="color:var(--red);font-weight:700">NULL</span>':'<span style="color:var(--mute2)">—</span>')}</td>
+      <td>${bTag}</td>
+    </tr>`;}).join("")}</tbody>`;
+}
+$("#bkChips").addEventListener("click",e=>{const b=e.target.closest(".chip");if(!b)return;
+  fB=b.dataset.b;document.querySelectorAll("#bkChips .chip").forEach(c=>c.classList.toggle("on",c===b));renderGrid();});
+$("#ovBtn").addEventListener("click",()=>{overlay=!overlay;
+  $("#ovBtn").textContent=`Overlay: ${overlay?"ON":"OFF"}`;$("#ovBtn").classList.toggle("on",overlay);renderGrid();});
+renderGrid();
+
+$("#bks").innerHTML = BKS.map(b=>{
+  const rows = ROWS.filter(r=>r.b===b.b);
+  const canc = rows.filter(r=>r.st&&/CANCEL/i.test(r.st)).length;
+  const old  = rows.filter(r=>r.age&&parseInt(r.age)>24).length;
+  return `<div class="bk ${b.cls}">
+    <div class="n">${rows.length}</div>
+    <div class="t">${b.t}</div>
+    <div class="d">${b.d}</div>
+    ${canc?`<div style="margin-top:9px"><span class="pill p-a"><span class="led"></span>${canc} cancelled — no closure date, dropped by today's parser</span></div>`:''}
+    ${old?`<div style="margin-top:9px"><span class="pill p-r"><span class="led"></span>${old} older than 24h — chase</span></div>`:''}
+    <div class="who">→ ${b.who}</div>
+  </div>`;
+}).join("");
+
+$("#tl").innerHTML = TL.map(i=>`<div class="ti ${i.c}"><div class="t">${i.t}</div><div class="d">${i.d}</div></div>`).join("");
+
+$("#rules").innerHTML = `<tbody>${RULES.map(r=>`
+ <tr><td style="width:170px;font-weight:800;font-size:11px;letter-spacing:.03em;color:var(--mute);white-space:normal;vertical-align:top">${r[0].toUpperCase()}</td>
+ <td style="white-space:normal;color:#334155;line-height:1.5">${r[1]}</td></tr>`).join("")}</tbody>`;
+$("#rules").querySelectorAll("thead").forEach(t=>t.remove());
+</script>
+</body>
+</html>

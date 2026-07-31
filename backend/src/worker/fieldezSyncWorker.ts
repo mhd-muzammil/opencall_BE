@@ -1,18 +1,25 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
 
 /**
- * Standalone worker that mirrors the manual "download Flex WIP Report ASP from FieldEZ →
- * upload to OpenCall" step, on a timer.
+ * Standalone worker that mirrors the manual "download a report from FieldEZ → send it to
+ * OpenCall" steps, on a timer. It runs TWO jobs:
  *
- * Every cycle it: keeps a warm FieldEZ session (logs in only when the session has lapsed),
- * downloads the report as XLSX, and — only if the file changed since last time — POSTs it to
- * OpenCall's /uploads endpoint so a fresh report is generated. Nothing else is touched.
+ *   wip      every 15 min — Flex WIP Report ASP     → POST /uploads, then generate
+ *   closure  every 60 min — Flex Closure ASP Report → POST /closure-dates/import (merge)
  *
- * Like the warranty worker, this is the ONLY process that drives a browser; it runs on its
- * own (see the `fieldez:worker` npm script). All secrets come from env — never hard-coded.
+ * ONE process, ONE browser, ONE profile. `chromium.launchPersistentContext` takes an
+ * exclusive lock on its user-data directory, so a second container sharing the profile
+ * volume would crash-loop — and giving it its own profile would mean a second concurrent
+ * FieldEZ login. The jobs therefore run strictly sequentially on the same `Page`.
+ *
+ * Each job keeps its own hash file: a shared one would make the two clobber each other
+ * and each would re-upload every cycle.
+ *
+ * Like the warranty worker, this is the ONLY process that drives a browser; it runs on
+ * its own (see the `fieldez:worker` npm script). All secrets come from env.
  */
 
 function str(name: string, fallback = ""): string {
@@ -32,6 +39,11 @@ const config = {
   format: str("FIELDEZ_FORMAT", "XLSX"),
   profileDir: str("FIELDEZ_PROFILE_DIR", path.resolve(".fieldez-profile")),
   intervalMs: num("FIELDEZ_SYNC_INTERVAL_MS", 15 * 60 * 1000), // 15 min default
+  // Closure report. Blank report name ⇒ the closure job is never scheduled, so a deploy
+  // that does not set these behaves exactly as before.
+  closureReportName: str("FIELDEZ_CLOSURE_REPORT_NAME"),
+  closureIntervalMs: num("FIELDEZ_CLOSURE_INTERVAL_MS", 60 * 60 * 1000), // 1 h default
+  closureDateMode: str("FIELDEZ_CLOSURE_DATE_MODE", "today"),
   // OpenCall target
   apiUrl: str("OPENCALL_API_URL", "http://localhost:4000").replace(/\/$/, ""),
   token: str("OPENCALL_TOKEN"),
@@ -60,6 +72,16 @@ function interruptibleSleep(ms: number): Promise<void> {
     }, ms);
     shutdown.signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/** Today (IST) as YYYY-MM-DD — the report date the generate step stamps. */
+function istTodayIso(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
 // ------------------------------------------------------------------ FieldEZ
@@ -91,22 +113,96 @@ async function ensureReportsPage(page: Page): Promise<void> {
   }
 }
 
-/** Download the configured report as the configured format; returns the saved file path. */
-async function downloadReport(page: Page): Promise<string> {
-  const row = page.locator("tr", { hasText: config.reportName }).first();
+/**
+ * The Download Report modal's format picker. Scoped by its own options rather than by
+ * position: it happens to be the only <select> today, but if FieldEZ ever adds a
+ * parameter dropdown, `select.first()` would silently start driving the wrong control.
+ */
+async function findFormatSelect(page: Page): Promise<Locator> {
+  const selects = page.locator("select");
+  await selects.first().waitFor({ state: "visible", timeout: 15000 });
+  const count = await selects.count();
+  for (let index = 0; index < count; index += 1) {
+    const candidate = selects.nth(index);
+    const options = await candidate.locator("option").allTextContents();
+    if (options.some((text) => /choose format|xlsx|xls\b|pdf|csv/i.test(text))) {
+      return candidate;
+    }
+  }
+  return selects.first();
+}
+
+/**
+ * Fills the modal's From/To date fields when the caller supplied dates AND the dialog
+ * actually has them. The WIP report takes no parameters; the closure report requires
+ * both (red asterisks). They are plain text inputs with a `yyyy-mm-dd` placeholder, so
+ * they are typed into directly — the calendar pickers are never opened.
+ *
+ * Returns how many fields were filled, so a required-date dialog that we failed to
+ * populate fails loudly instead of downloading the wrong range.
+ */
+async function fillDateRange(
+  page: Page,
+  fromDate: string,
+  toDate: string,
+): Promise<number> {
+  if (!fromDate && !toDate) return 0;
+
+  const dateInputs = page.locator('input[placeholder*="yyyy-mm-dd" i]');
+  const count = await dateInputs.count();
+  if (count === 0) return 0;
+
+  const values = [fromDate, toDate];
+  let filled = 0;
+  for (let index = 0; index < Math.min(count, values.length); index += 1) {
+    const value = values[index];
+    if (!value) continue;
+    const input = dateInputs.nth(index);
+    await input.fill(value, { timeout: 10000 });
+    // Blur rather than pressing Escape: a focused field can leave the calendar overlay
+    // covering the Download button, and Escape would close the whole modal.
+    await input.evaluate((el) => (el as HTMLElement).blur());
+    filled += 1;
+  }
+  return filled;
+}
+
+export interface DownloadOptions {
+  reportName: string;
+  format: string;
+  /** YYYY-MM-DD; both blank for a report whose dialog has no date fields. */
+  fromDate?: string;
+  toDate?: string;
+  /** Base file name (no extension) so two jobs never overwrite each other's download. */
+  destBaseName: string;
+}
+
+/** Download one report; returns the saved file path. */
+async function downloadReport(page: Page, options: DownloadOptions): Promise<string> {
+  const row = page.locator("tr", { hasText: options.reportName }).first();
   await row.waitFor({ state: "visible", timeout: 30000 });
   await row.locator("i.fa-download").first().click({ timeout: 10000 });
   await page.waitForTimeout(1200);
 
-  const select = page.locator("select").first();
-  await select.waitFor({ state: "visible", timeout: 15000 });
-  await select.selectOption({ label: config.format });
+  const wantsDates = Boolean(options.fromDate || options.toDate);
+  const filled = await fillDateRange(page, options.fromDate ?? "", options.toDate ?? "");
+  if (wantsDates && filled === 0) {
+    throw new Error(
+      `"${options.reportName}" needs a date range but its dialog exposed no yyyy-mm-dd fields`,
+    );
+  }
+
+  const select = await findFormatSelect(page);
+  await select.selectOption({ label: options.format });
 
   const [download] = await Promise.all([
     page.waitForEvent("download", { timeout: 120000 }),
     page.getByRole("button", { name: /^download$/i }).first().click({ timeout: 10000 }),
   ]);
-  const dest = path.join(config.profileDir, `flexwip-latest.${config.format.toLowerCase()}`);
+  const dest = path.join(
+    config.profileDir,
+    `${options.destBaseName}.${options.format.toLowerCase()}`,
+  );
   await download.saveAs(dest);
   return dest;
 }
@@ -133,6 +229,15 @@ async function getToken(force = false): Promise<string> {
   return cachedToken;
 }
 
+/** POST with the cached token, refreshing it once if the API says it expired. */
+async function postWithToken(
+  send: (token: string) => Promise<Response>,
+): Promise<Response> {
+  const res = await send(await getToken());
+  if (res.status !== 401) return res;
+  return send(await getToken(true));
+}
+
 interface UploadOutcome {
   status: number;
   batchStatus?: string | undefined;
@@ -143,7 +248,7 @@ interface UploadOutcome {
 
 async function uploadToOpenCall(filePath: string): Promise<UploadOutcome> {
   const buf = readFileSync(filePath);
-  const doPost = async (token: string): Promise<Response> => {
+  const res = await postWithToken((token) => {
     const fd = new FormData();
     fd.append("flexWipReport", new Blob([buf]), path.basename(filePath));
     if (config.regionId) fd.append("regionId", config.regionId);
@@ -152,12 +257,8 @@ async function uploadToOpenCall(filePath: string): Promise<UploadOutcome> {
       headers: { Authorization: `Bearer ${token}` },
       body: fd,
     });
-  };
+  });
 
-  let res = await doPost(await getToken());
-  if (res.status === 401) {
-    res = await doPost(await getToken(true)); // token expired — refresh once
-  }
   const body = (await res.json().catch(() => null)) as
     | { data?: { batches?: Array<{ id?: string; sourceType?: string; status?: string; rowCount?: number; errorCount?: number }> } }
     | null;
@@ -173,21 +274,57 @@ async function uploadToOpenCall(filePath: string): Promise<UploadOutcome> {
   };
 }
 
-/** Today (IST) as YYYY-MM-DD — the report date the generate step stamps. */
-function istTodayIso(): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
+interface ClosureImportOutcome {
+  status: number;
+  totalRows?: number | undefined;
+  workOrders?: number | undefined;
+  imported?: number | undefined;
+  withoutClosureDate?: number | undefined;
+}
+
+/**
+ * Send the closure workbook to the merge import. `mode=merge` is what stops a today-only
+ * download from wiping every earlier day — the default `replace` runs an unconditional
+ * DELETE of the whole table.
+ */
+async function importClosureToOpenCall(filePath: string): Promise<ClosureImportOutcome> {
+  const buf = readFileSync(filePath);
+  const res = await postWithToken((token) => {
+    const fd = new FormData();
+    fd.append("mode", "merge");
+    fd.append("source", "AUTO");
+    fd.append("closureReport", new Blob([buf]), path.basename(filePath));
+    return fetch(`${config.apiUrl}/api/v1/closure-dates/import`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+  });
+
+  const body = (await res.json().catch(() => null)) as
+    | {
+        data?: {
+          totalRows?: number;
+          workOrders?: number;
+          imported?: number;
+          withoutClosureDate?: number;
+        };
+      }
+    | null;
+  return {
+    status: res.status,
+    totalRows: body?.data?.totalRows,
+    workOrders: body?.data?.workOrders,
+    imported: body?.data?.imported,
+    withoutClosureDate: body?.data?.withoutClosureDate,
+  };
 }
 
 /** Generate the daily call plan report from the freshly-uploaded Flex WIP batch. */
 async function generateReport(
   flexBatchId: string,
 ): Promise<{ status: number; totalRows?: number | undefined }> {
-  const doPost = (token: string): Promise<Response> => {
+  const res = await postWithToken((token) => {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
@@ -203,9 +340,7 @@ async function generateReport(
         callPlanUploadBatchId: null,
       }),
     });
-  };
-  let res = await doPost(await getToken());
-  if (res.status === 401) res = await doPost(await getToken(true));
+  });
   const body = (await res.json().catch(() => null)) as { data?: { totalRows?: number } } | null;
   return { status: res.status, totalRows: body?.data?.totalRows };
 }
@@ -216,51 +351,131 @@ function hashFile(filePath: string): string {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
 
-const lastHashPath = () => path.join(config.profileDir, "last-uploaded.hash");
-function readLastHash(): string {
-  try {
-    return existsSync(lastHashPath()) ? readFileSync(lastHashPath(), "utf8").trim() : "";
-  } catch {
-    return "";
+const hashPath = (jobKey: string) => path.join(config.profileDir, `last-${jobKey}.hash`);
+
+/** The pre-two-job hash file. Read once so the first cycle after deploy is a no-op. */
+const LEGACY_WIP_HASH_PATH = () => path.join(config.profileDir, "last-uploaded.hash");
+
+function readLastHash(jobKey: string): string {
+  const candidates =
+    jobKey === "wip" ? [hashPath(jobKey), LEGACY_WIP_HASH_PATH()] : [hashPath(jobKey)];
+  for (const file of candidates) {
+    try {
+      if (existsSync(file)) return readFileSync(file, "utf8").trim();
+    } catch {
+      /* fall through to the next candidate */
+    }
   }
+  return "";
 }
-function writeLastHash(h: string): void {
+
+function writeLastHash(jobKey: string, hash: string): void {
   try {
-    writeFileSync(lastHashPath(), h, "utf8");
+    writeFileSync(hashPath(jobKey), hash, "utf8");
   } catch {
     /* best effort */
   }
 }
 
-async function runCycle(page: Page): Promise<void> {
-  await ensureReportsPage(page);
-  const file = await downloadReport(page);
+async function syncWip(page: Page): Promise<void> {
+  const file = await downloadReport(page, {
+    reportName: config.reportName,
+    format: config.format,
+    destBaseName: "flexwip-latest",
+  });
   const hash = hashFile(file);
 
-  if (hash === readLastHash()) {
-    log("report unchanged since last upload — skipping.");
+  if (hash === readLastHash("wip")) {
+    log("[wip] report unchanged since last upload — skipping.");
     return;
   }
 
-  log("report changed — uploading to OpenCall…");
+  log("[wip] report changed — uploading to OpenCall…");
   const out = await uploadToOpenCall(file);
   if (out.status !== 201 && out.status !== 200) {
-    log(`⚠️ upload returned ${out.status} (${out.batchStatus ?? "?"}, errors=${out.errorCount ?? "?"}) — will retry next cycle`);
+    log(`[wip] ⚠️ upload returned ${out.status} (${out.batchStatus ?? "?"}, errors=${out.errorCount ?? "?"}) — will retry next cycle`);
     return;
   }
-  log(`uploaded (${out.batchStatus}, ${out.rowCount} rows, ${out.errorCount} errors) — generating report…`);
+  log(`[wip] uploaded (${out.batchStatus}, ${out.rowCount} rows, ${out.errorCount} errors) — generating report…`);
 
   if (!out.flexBatchId) {
-    log("⚠️ no flex batch id in upload response — cannot generate; will retry next cycle");
+    log("[wip] ⚠️ no flex batch id in upload response — cannot generate; will retry next cycle");
     return;
   }
   const gen = await generateReport(out.flexBatchId);
   if (gen.status === 201 || gen.status === 200) {
-    writeLastHash(hash); // only mark done once the report is actually generated
-    log(`✅ report generated (${gen.totalRows ?? "?"} rows)`);
+    writeLastHash("wip", hash); // only mark done once the report is actually generated
+    log(`[wip] ✅ report generated (${gen.totalRows ?? "?"} rows)`);
   } else {
-    log(`⚠️ generate returned ${gen.status} — will retry next cycle`);
+    log(`[wip] ⚠️ generate returned ${gen.status} — will retry next cycle`);
   }
+}
+
+async function syncClosure(page: Page): Promise<void> {
+  // Only "today" is supported; the setting exists so a future range mode has a home.
+  if (config.closureDateMode !== "today") {
+    log(`[closure] unknown FIELDEZ_CLOSURE_DATE_MODE="${config.closureDateMode}" — using today`);
+  }
+  const today = istTodayIso();
+
+  const file = await downloadReport(page, {
+    reportName: config.closureReportName,
+    format: config.format,
+    fromDate: today,
+    toDate: today,
+    destBaseName: "flexclosure-latest",
+  });
+  const hash = hashFile(file);
+
+  if (hash === readLastHash("closure")) {
+    log("[closure] report unchanged since last import — skipping.");
+    return;
+  }
+
+  log(`[closure] report changed (${today}) — importing to OpenCall…`);
+  const out = await importClosureToOpenCall(file);
+  if (out.status !== 201 && out.status !== 200) {
+    log(`[closure] ⚠️ import returned ${out.status} — will retry next cycle`);
+    return;
+  }
+
+  writeLastHash("closure", hash);
+  log(
+    `[closure] ✅ imported ${out.imported ?? "?"} work orders ` +
+      `from ${out.totalRows ?? "?"} file rows ` +
+      `(${out.withoutClosureDate ?? 0} with no closure date). ` +
+      `No report generation — the overlay applies at serve time.`,
+  );
+}
+
+interface Job {
+  key: string;
+  reportName: string;
+  intervalMs: number;
+  run: (page: Page) => Promise<void>;
+  nextRunAt: number;
+}
+
+function buildJobs(): Job[] {
+  const jobs: Job[] = [
+    {
+      key: "wip",
+      reportName: config.reportName,
+      intervalMs: config.intervalMs,
+      run: syncWip,
+      nextRunAt: 0,
+    },
+  ];
+  if (config.closureReportName) {
+    jobs.push({
+      key: "closure",
+      reportName: config.closureReportName,
+      intervalMs: config.closureIntervalMs,
+      run: syncClosure,
+      nextRunAt: 0,
+    });
+  }
+  return jobs;
 }
 
 async function main(): Promise<void> {
@@ -268,11 +483,17 @@ async function main(): Promise<void> {
     throw new Error("Set FIELDEZ_USERNAME and FIELDEZ_PASSWORD.");
   }
   mkdirSync(config.profileDir, { recursive: true });
+
+  const jobs = buildJobs();
   log(
-    `starting — report="${config.reportName}" format=${config.format} interval=${Math.round(
-      config.intervalMs / 60000,
-    )}min api=${config.apiUrl}`,
+    `starting — api=${config.apiUrl} format=${config.format}; jobs: ` +
+      jobs
+        .map((j) => `${j.key}="${j.reportName}" every ${Math.round(j.intervalMs / 60000)}min`)
+        .join(", "),
   );
+  if (!config.closureReportName) {
+    log("closure job disabled (FIELDEZ_CLOSURE_REPORT_NAME is blank)");
+  }
 
   const context: BrowserContext = await chromium.launchPersistentContext(config.profileDir, {
     headless: true,
@@ -284,18 +505,38 @@ async function main(): Promise<void> {
 
   try {
     while (!isShuttingDown) {
-      const started = Date.now();
-      try {
-        await runCycle(page);
-      } catch (error) {
-        log(`cycle failed: ${error instanceof Error ? error.message : String(error)}`);
+      const now = Date.now();
+      const due = jobs.filter((job) => job.nextRunAt <= now);
+
+      if (due.length > 0) {
+        // One Page, one FieldEZ session: the jobs MUST NOT overlap.
+        await ensureReportsPage(page).catch((error: unknown) => {
+          log(`could not reach the reports page: ${error instanceof Error ? error.message : String(error)}`);
+        });
+        for (const job of due) {
+          if (isShuttingDown) break;
+          try {
+            await job.run(page);
+          } catch (error) {
+            log(`[${job.key}] cycle failed: ${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            // Schedule off completion, so a slow cycle never queues up behind itself.
+            job.nextRunAt = Date.now() + job.intervalMs;
+          }
+          // A failed job may have left a modal open; go back to a known-good page
+          // before the next job touches it.
+          if (due.length > 1) {
+            await ensureReportsPage(page).catch(() => {});
+          }
+        }
       }
-      const elapsed = Date.now() - started;
-      const wait = Math.max(0, config.intervalMs - elapsed);
-      if (!isShuttingDown) {
-        log(`next cycle in ${Math.round(wait / 60000)} min`);
-        await interruptibleSleep(wait);
-      }
+
+      if (isShuttingDown) break;
+      const nextAt = Math.min(...jobs.map((job) => job.nextRunAt));
+      const wait = Math.max(1000, nextAt - Date.now());
+      const nextJob = jobs.find((job) => job.nextRunAt === nextAt);
+      log(`next job (${nextJob?.key ?? "?"}) in ${Math.round(wait / 60000)} min`);
+      await interruptibleSleep(wait);
     }
   } finally {
     await context.close().catch(() => {});

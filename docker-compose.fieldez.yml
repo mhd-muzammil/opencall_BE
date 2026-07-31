@@ -22,3 +22,10 @@ services:
       # --- OpenCall (target) — admin login for upload token — REQUIRED ---
       OPENCALL_USERNAME: ${OPENCALL_USERNAME:?set OPENCALL_USERNAME}
       OPENCALL_PASSWORD: ${OPENCALL_PASSWORD:?set OPENCALL_PASSWORD}
+      # --- Closure report job — OPTIONAL ---
+      # Second job in the same worker process (same browser, same profile). Blank
+      # report name ⇒ never scheduled, so this overlay stays backwards-compatible.
+      FIELDEZ_CLOSURE_REPORT_NAME: ${FIELDEZ_CLOSURE_REPORT_NAME:-}
+      FIELDEZ_CLOSURE_INTERVAL_MS: ${FIELDEZ_CLOSURE_INTERVAL_MS:-3600000}
+      FIELDEZ_CLOSURE_DATE_MODE: ${FIELDEZ_CLOSURE_DATE_MODE:-today}
+      TZ: ${TZ:-Asia/Kolkata}

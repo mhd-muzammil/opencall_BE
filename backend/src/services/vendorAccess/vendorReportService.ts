@@ -4,6 +4,7 @@ import { generateDailyCallPlanReport } from "../callPlanGenerator/dailyCallPlanG
 import { findLatestCompletedReportSession } from "../../repositories/historyRepository.js";
 import { getNormalizedTicketKey } from "../normalization/dedupeRowsByTicket.js";
 import { loadAssignedKeysForVendor } from "../../repositories/vendorCaseAssignmentRepository.js";
+import { enrichReportWithClosureDates } from "../closureDates/closureDateEnricher.js";
 
 export interface VendorScopedReportResult {
   report: GeneratedDailyCallPlanReport | null;
@@ -54,15 +55,17 @@ export async function loadAssignedReportForVendor(
     filteredRows.map((r) => String(r.enriched.work_location ?? "").trim().toUpperCase()),
   );
 
+  // Same serve-time enrichment the admin report gets, so a vendor and an admin never
+  // disagree on a case's Flex Status or Case Closed Date.
   return {
-    report: {
+    report: await enrichReportWithClosureDates({
       ...report,
       rows: filteredRows,
       totalRows: filteredRows.length,
       regionBreakdown: report.regionBreakdown.filter((entry) =>
         presentCodes.has(entry.aspCode.toUpperCase()),
       ),
-    },
+    }),
     ...base,
   };
 }

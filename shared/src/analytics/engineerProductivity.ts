@@ -337,6 +337,11 @@ export function isProductivityVisibleRow(row: ProductivityReportRow): boolean {
   return (
     recordsVisible &&
     !isRequestToCancelValue(row.output["Flex Status"]) &&
+    // The closure overlay rewrites "Flex Status" with Flex's own closure status and
+    // parks the vendor's WIP value here. Without this check a Request-to-Cancel row
+    // that Flex has since closed would stop being recognised and would re-enter the
+    // productivity set the moment the closure import ran.
+    !isRequestToCancelValue(row.output["Flex Status (WIP)"]) &&
     !isRequestToCancelValue(row.comparison?.previousFlexStatus)
   );
 }

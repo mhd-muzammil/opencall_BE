@@ -4,6 +4,7 @@ import { generateDailyCallPlanReport } from "../callPlanGenerator/dailyCallPlanG
 import { findLatestCompletedReportSession } from "../../repositories/historyRepository.js";
 import { findRegionById } from "../../repositories/regionRepository.js";
 import { aspCodesForRegion } from "../rbac/regionRowAccess.js";
+import { enrichReportWithClosureDates } from "../closureDates/closureDateEnricher.js";
 
 // --- warranty / trade classification (mirrors the frontend caseClassification.ts) ---
 
@@ -125,13 +126,16 @@ export async function loadScopedReportForPrincipal(
       )
     : report.regionBreakdown;
 
+  // Same serve-time enrichment the admin report gets (Case Closed Date, the Flex Status
+  // closure overlay, customer feedback). Without it a special-access login and an admin
+  // looking at the same work order would disagree on its Flex Status.
   return {
-    report: {
+    report: await enrichReportWithClosureDates({
       ...report,
       rows: filteredRows,
       totalRows: filteredRows.length,
       regionBreakdown: filteredRegionBreakdown,
-    },
+    }),
     ...base,
   };
 }

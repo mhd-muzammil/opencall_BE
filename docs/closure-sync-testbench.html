@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Closure Auto-Sync — Test Bench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --background:#f8fafc; --surface:#ffffff; --surface-subtle:#eef2ff;
+  --border:#dbe3f1; --text:#0f172a; --muted:#64748b;
+  --accent:#4f46e5; --accent-strong:#4338ca; --accent-soft:#eef2ff;
+  --accent-tint:rgba(79,70,229,.08); --accent-ring:rgba(79,70,229,.18);
+  --warning:#a15c00; --warning-soft:#fef3c7; --danger:#b3261e; --danger-soft:#fee2e2;
+  --ok:#047857; --ok-soft:#d1fae5;
+  --shadow:0 16px 40px rgba(15,23,42,.08);
+  --shadow-sm:0 1px 2px rgba(15,23,42,.06);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--background); color:var(--text);
+  font-family:'Plus Jakarta Sans',Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+.app{display:flex;min-height:100vh}
+
+/* ---------------- sidebar ---------------- */
+.side{
+  width:236px;flex:0 0 236px;background:var(--surface);
+  border-right:1px solid var(--border);padding:18px 14px;
+  position:sticky;top:0;height:100vh;overflow:auto;
+}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 8px 18px}
+.brand-mark{
+  width:32px;height:32px;border-radius:8px;background:var(--accent);
+  color:#fff;display:grid;place-items:center;font-weight:800;font-size:13px;letter-spacing:-.5px;
+}
+.brand-name{font-weight:800;font-size:15px;letter-spacing:-.2px}
+.brand-sub{font-size:11px;color:var(--muted);font-weight:500}
+.nav-label{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:14px 8px 6px}
+.nav-item{
+  display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;
+  color:var(--muted);font-weight:600;font-size:13px;cursor:default;margin-bottom:1px;
+}
+.nav-item .dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.45;flex:0 0 6px}
+.nav-item.on{background:var(--accent-soft);color:var(--accent-strong)}
+.nav-item.on .dot{opacity:1}
+.nav-item.new::after{content:'NEW';margin-left:auto;font-size:9px;font-weight:800;letter-spacing:.06em;background:var(--accent);color:#fff;padding:2px 5px;border-radius:4px}
+
+/* ---------------- main ---------------- */
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{
+  background:var(--surface);border-bottom:1px solid var(--border);
+  padding:16px 28px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  position:sticky;top:0;z-index:20;
+}
+.topbar h1{margin:0;font-size:19px;font-weight:800;letter-spacing:-.3px}
+.topbar .crumb{font-size:12px;color:var(--muted);font-weight:600}
+.pill{
+  display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;
+  font-size:11.5px;font-weight:700;letter-spacing:.01em;border:1px solid transparent;white-space:nowrap;
+}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.warn{background:var(--warning-soft);color:var(--warning)}
+.pill.bad{background:var(--danger-soft);color:var(--danger)}
+.pill.ind{background:var(--accent-soft);color:var(--accent-strong)}
+.pill.mute{background:#f1f5f9;color:var(--muted)}
+.pill .led{width:6px;height:6px;border-radius:50%;background:currentColor}
+.spacer{flex:1}
+
+.tabs{display:flex;gap:2px;padding:0 28px;background:var(--surface);border-bottom:1px solid var(--border);overflow-x:auto;position:sticky;top:69px;z-index:19}
+.tab{
+  appearance:none;border:0;background:none;font:inherit;font-weight:700;font-size:13px;
+  color:var(--muted);padding:12px 14px;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;
+}
+.tab:hover{color:var(--text)}
+.tab.on{color:var(--accent-strong);border-bottom-color:var(--accent)}
+.tab .cnt{font-size:10.5px;background:#f1f5f9;color:var(--muted);border-radius:999px;padding:1px 6px;margin-left:6px;font-weight:800}
+.tab.on .cnt{background:var(--accent-soft);color:var(--accent-strong)}
+
+.wrap{padding:22px 28px 60px;max-width:1500px;width:100%}
+.panel{display:none}
+.panel.on{display:block}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow-sm);margin-bottom:18px;overflow:hidden}
+.card-h{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.card-h h2{margin:0;font-size:14.5px;font-weight:800;letter-spacing:-.2px}
+.card-h .sub{font-size:12px;color:var(--muted);font-weight:500}
+.card-b{padding:18px}
+.card-b.flush{padding:0}
+
+.grid{display:grid;gap:14px}
+.g4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.g2{grid-template-columns:repeat(auto-fit,minmax(400px,1fr))}
+
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:15px 17px;box-shadow:var(--shadow-sm)}
+.kpi .lab{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.kpi .val{font-size:29px;font-weight:800;letter-spacing:-1px;margin:5px 0 2px;font-variant-numeric:tabular-nums}
+.kpi .hint{font-size:11.5px;color:var(--muted);font-weight:500;line-height:1.35}
+.kpi.danger .val{color:var(--danger)}
+.kpi.accent .val{color:var(--accent)}
+.kpi.warn .val{color:var(--warning)}
+.kpi.ok .val{color:var(--ok)}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+thead th{
+  text-align:left;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);padding:9px 12px;background:#fbfcfe;border-bottom:1px solid var(--border);white-space:nowrap;position:sticky;top:0;
+}
+tbody td{padding:9px 12px;border-bottom:1px solid #eef2f7;vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+tbody tr.z:hover{background:#fafbff}
+.mono{font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace;font-size:11.5px}
+.nowrap{white-space:nowrap}
+.tblscroll{max-height:560px;overflow:auto}
+
+.tag{display:inline-block;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:700;letter-spacing:.01em;white-space:nowrap}
+.t-closed{background:var(--ok-soft);color:var(--ok)}
+.t-cancel{background:var(--warning-soft);color:var(--warning)}
+.t-open{background:var(--accent-soft);color:var(--accent-strong)}
+.t-none{background:#f1f5f9;color:var(--muted)}
+.t-crit{background:var(--danger-soft);color:var(--danger)}
+.t-high{background:#ffedd5;color:#9a3412}
+.t-med{background:#f1f5f9;color:#475569}
+
+.chips{display:flex;gap:7px;flex-wrap:wrap}
+.chip{
+  appearance:none;font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;
+  padding:5px 11px;border-radius:999px;border:1px solid var(--border);
+  background:var(--surface);color:var(--muted);
+}
+.chip:hover{border-color:var(--accent-ring);color:var(--text)}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.chip .n{opacity:.7;margin-left:5px;font-weight:800}
+
+.tc{border-bottom:1px solid #eef2f7}
+.tc:last-child{border-bottom:0}
+.tc-h{display:grid;grid-template-columns:74px 1fr auto;gap:12px;align-items:start;padding:12px 18px;cursor:pointer}
+.tc-h:hover{background:#fafbff}
+.tc-id{font-weight:800;font-size:11.5px;color:var(--accent-strong);font-family:ui-monospace,monospace;padding-top:2px}
+.tc-t{font-weight:700;font-size:13px;line-height:1.35}
+.tc-g{font-size:11px;color:var(--muted);font-weight:600;margin-top:3px}
+.tc-m{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.tc-b{display:none;padding:0 18px 16px 104px}
+.tc.open .tc-b{display:block}
+.tc.open .tc-h{background:#fafbff}
+.tc-row{display:grid;grid-template-columns:132px 1fr;gap:10px;padding:7px 0;border-top:1px dashed #e6ebf5;font-size:12.5px}
+.tc-row .k{font-weight:800;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding-top:2px}
+.tc-row .v{line-height:1.55}
+.ev{background:#0f172a;color:#e2e8f0;border-radius:7px;padding:10px 12px;font-family:ui-monospace,monospace;font-size:11.5px;line-height:1.65;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+.ev .hl{color:#fbbf24}
+.ev .ok{color:#6ee7b7}
+.ev .no{color:#fca5a5}
+.ev .dim{color:#94a3b8}
+
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);font-weight:600}
+.legend span b{color:var(--text)}
+
+.note{
+  border-left:3px solid var(--accent);background:var(--accent-tint);
+  padding:11px 14px;border-radius:0 7px 7px 0;font-size:12.5px;line-height:1.55;margin-bottom:16px;
+}
+.note.warn{border-left-color:var(--warning);background:#fffbeb}
+.note.bad{border-left-color:var(--danger);background:#fef2f2}
+.note b{font-weight:800}
+
+/* overlay diff */
+.diffwrap{display:grid;grid-template-columns:1fr 34px 1fr;gap:0;align-items:center}
+.diffarrow{display:grid;place-items:center;color:var(--muted);font-size:18px;font-weight:800}
+.was{color:var(--muted);text-decoration:line-through;text-decoration-thickness:1.5px}
+.now{color:var(--ok);font-weight:800}
+
+/* timeline */
+.tl{position:relative;padding-left:26px}
+.tl::before{content:'';position:absolute;left:7px;top:6px;bottom:6px;width:2px;background:var(--border)}
+.tl-i{position:relative;padding:0 0 18px}
+.tl-i::before{content:'';position:absolute;left:-23px;top:4px;width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.tl-i.mute::before{background:#cbd5e1;box-shadow:0 0 0 3px #f1f5f9}
+.tl-i.bad::before{background:var(--danger);box-shadow:0 0 0 3px var(--danger-soft)}
+.tl-t{font-weight:800;font-size:12.5px;font-variant-numeric:tabular-nums}
+.tl-d{font-size:12px;color:var(--muted);line-height:1.5;margin-top:2px}
+
+.bucket{border-radius:10px;border:1px solid var(--border);overflow:hidden;background:var(--surface)}
+.bucket-h{padding:14px 16px}
+.bucket-h .n{font-size:26px;font-weight:800;letter-spacing:-1px;font-variant-numeric:tabular-nums}
+.bucket-h .l{font-size:12px;font-weight:800;letter-spacing:.02em}
+.bucket-h .d{font-size:11.5px;color:var(--muted);font-weight:500;margin-top:3px;line-height:1.4}
+.bucket.ok .bucket-h{background:#f0fdf4}.bucket.ok .n{color:var(--ok)}
+.bucket.warn .bucket-h{background:#fffbeb}.bucket.warn .n{color:var(--warning)}
+.bucket.bad .bucket-h{background:#fef2f2}.bucket.bad .n{color:var(--danger)}
+
+.cover{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px dashed #e6ebf5;font-size:12.5px}
+.cover:last-child{border-bottom:0}
+.cover .bar{flex:0 0 92px;height:7px;border-radius:99px;background:#eef2f7;overflow:hidden}
+.cover .bar i{display:block;height:100%;background:var(--accent)}
+.cover .r{margin-left:auto;font-weight:800;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+.foot{padding:16px 28px 40px;color:var(--muted);font-size:11.5px;line-height:1.6;max-width:1500px}
+@media(max-width:940px){
+  .side{display:none}
+  .wrap,.topbar,.tabs{padding-left:16px;padding-right:16px}
+  .tc-h{grid-template-columns:60px 1fr}
+  .tc-m{grid-column:1/-1;justify-content:flex-start}
+  .tc-b{padding-left:18px}
+  .diffwrap{grid-template-columns:1fr}
+  .diffarrow{transform:rotate(90deg);padding:6px 0}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="side">
+    <div class="brand">
+      <div class="brand-mark">OC</div>
+      <div>
+        <div class="brand-name">OpenCall</div>
+        <div class="brand-sub">Renderways Technology</div>
+      </div>
+    </div>
+    <div class="nav-label">Workspace</div>
+    <div class="nav-item"><span class="dot"></span>Overview</div>
+    <div class="nav-item"><span class="dot"></span>Open Call Report</div>
+    <div class="nav-item"><span class="dot"></span>Closed Calls</div>
+    <div class="nav-item"><span class="dot"></span>Parts &amp; Inventory</div>
+    <div class="nav-item"><span class="dot"></span>Engineers</div>
+    <div class="nav-label">Automation</div>
+    <div class="nav-item"><span class="dot"></span>FieldEZ WIP Sync</div>
+    <div class="nav-item on new"><span class="dot"></span>Closure Sync</div>
+    <div class="nav-item"><span class="dot"></span>Warranty Worker</div>
+    <div class="nav-label">Admin</div>
+    <div class="nav-item"><span class="dot"></span>Users &amp; Regions</div>
+    <div class="nav-item"><span class="dot"></span>RTPL Statuses</div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <div class="crumb">Automation / Closure Sync</div>
+        <h1>Closure Report Auto-Sync — Test Bench</h1>
+      </div>
+      <div class="spacer"></div>
+      <span class="pill ind"><span class="led"></span>every 60 min · date = today (IST)</span>
+      <span class="pill mute">source: 2 real workbooks · 74 rows · 61 work orders</span>
+    </header>
+
+    <nav class="tabs" id="tabs"></nav>
+
+    <div class="wrap">
+
+      <!-- ===================== OVERVIEW ===================== -->
+      <section class="panel on" data-p="overview">
+        <div class="note">
+          <b>What this is.</b> A test bench for the hourly closure-report sync, built from the two
+          <span class="mono">Flex_Closure_ASP_Report</span> workbooks you attached — 74 source rows, 61 distinct work
+          orders, 5 ASP regions, 2 report days (30 &amp; 31 Jul 2026). Every test case below cites a real row.
+          The Flex side of every screen is real data; the OpenCall side (which rows our report had open) is
+          simulated, because the app database isn't reachable from here.
+        </div>
+
+        <div class="grid g4" style="margin-bottom:18px">
+          <div class="kpi"><div class="lab">Source rows</div><div class="val">74</div><div class="hint">60 on 30-Jul + 14 on 31-Jul</div></div>
+          <div class="kpi accent"><div class="lab">Distinct work orders</div><div class="val">61</div><div class="hint">48 + 13 · zero overlap between the two files</div></div>
+          <div class="kpi warn"><div class="lab">Rows with no closure date</div><div class="val">9</div><div class="hint">all <span class="mono">Closed - Canceled</span> — dropped by today's parser</div></div>
+          <div class="kpi danger"><div class="lab">Cases failing on today's code</div><div class="val" id="kFail">—</div><div class="hint">of <span id="kTotal">—</span> total cases</div></div>
+        </div>
+
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-h"><h2>Risk → test coverage</h2><span class="sub">every risk in the plan has cases behind it</span></div>
+            <div class="card-b" id="coverBox"></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h2>What the real data proved</h2><span class="sub">findings that changed the plan</span></div>
+            <div class="card-b" style="font-size:12.5px;line-height:1.7">
+              <p style="margin:0 0 10px"><b>1. Cancelled work orders carry no closure date.</b> 9 of 74 rows are
+              <span class="mono">Closed - Canceled</span> with <span class="mono">Closure Date = NULL</span>. The current parser
+              counts them as <span class="mono">skippedNoDate</span> and throws them away — but Flex considers them closed. The column
+              <span class="mono">closure_date DATE <b>NOT NULL</b></span> in migration 029 physically cannot store them.
+              <b>This is a schema change the plan did not have.</b></p>
+              <p style="margin:0 0 10px"><b>2. The status string contains both words.</b>
+              <span class="mono">"Closed - Canceled"</span> matches <span class="mono">CLOSED</span> <i>and</i> <span class="mono">CANCEL</span>.
+              Check order is load-bearing — <span class="mono">classifyRawStatus</span> already tests CANCEL first, so copy that
+              order rather than writing a fresh matcher.</p>
+              <p style="margin:0 0 10px"><b>3. Zero WO overlap between 30-Jul and 31-Jul.</b> Which makes the
+              delete-everything import maximally destructive: importing 31-Jul over 30-Jul takes the table from
+              48 rows to 13 and loses <i>every</i> previous closure.</p>
+              <p style="margin:0"><b>4. Closure day always equals activity day</b> across all 74 rows — so a
+              "today" filter on activity does return today's closures. Worth asserting, because the whole hourly
+              design rests on it.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h2>Region spread in the sample</h2><span class="sub">work-order counts after de-duplication, not raw row counts</span></div>
+          <div class="card-b flush"><div class="tblscroll"><table id="regionTable"></table></div></div>
+        </div>
+      </section>
+
+      <!-- ===================== TEST MATRIX ===================== -->
+      <section class="panel" data-p="matrix">
+        <div class="note warn">
+          <b>Read this as a checklist.</b> Click any row to see the exact source data it is built from, the
+          expected behaviour, and what breaks in production if it isn't handled.
+          <span class="pill bad" style="margin-left:6px"><span class="led"></span>fails today</span>
+          means the case fails against the code as it stands right now.
+        </div>
+        <div class="card">
+          <div class="card-h" style="gap:14px">
+            <h2>Test cases</h2>
+            <span class="sub" id="matrixCount"></span>
+            <div class="spacer"></div>
+            <div class="chips" id="sevChips"></div>
+          </div>
+          <div class="card-b" style="padding:12px 18px;border-bottom:1px solid var(--border)">
+            <div class="chips" id="grpChips"></div>
+          </div>
+          <div class="card-b flush" id="tcList"></div>
+        </div>
+      </section>
+
+      <!-- ===================== OVERLAY ===================== -->
+      <section class="panel" data-p="overlay">
+        <div class="note">
+          <b>The overlay in action.</b> Closure status is stored in <span class="mono">case_closure_dates</span> and stamped onto
+          the row when the report is served — <span class="mono">daily_call_plan_report_rows</span> is never written to.
+          The vendor's original value is kept in a second column so nothing is lost and the streak counters keep working.
+        </div>
+
+        <div class="card">
+          <div class="card-h">
+            <h2>Open Call Report — 31 Jul 2026</h2>
+            <span class="sub">real work orders from <span class="mono">Flex_Closure_ASP_Report 3.xlsx</span></span>
+            <div class="spacer"></div>
+            <button class="chip on" id="toggleOverlay">Overlay: ON</button>
+          </div>
+          <div class="card-b flush"><div class="tblscroll"><table id="overlayTable"></table></div></div>
+        </div>
+
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-h"><h2>What the overlay must <i>not</i> touch</h2></div>
+            <div class="card-b flush"><table id="untouchedTable"></table></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h2>Downstream consumers to re-check</h2><span class="sub">every reader of <span class="mono">output["Flex Status"]</span></span></div>
+            <div class="card-b flush" style="overflow-x:auto"><table id="consumerTable" style="min-width:560px"></table></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== RECONCILIATION ===================== -->
+      <section class="panel" data-p="recon">
+        <div class="note">
+          <b>Ours vs Flex, for one day.</b> Flex-side rows are real. The OpenCall-side state — which of our rows were
+          already closed — is simulated to show all three outcomes; in production it comes from
+          <span class="mono">getLatestReportClosedCalls()</span>.
+        </div>
+        <div class="grid g3" id="buckets" style="margin-bottom:18px"></div>
+        <div class="card">
+          <div class="card-h">
+            <h2>Reconciliation detail — 31 Jul 2026</h2>
+            <div class="spacer"></div>
+            <div class="chips" id="bucketChips"></div>
+          </div>
+          <div class="card-b flush"><div class="tblscroll"><table id="reconTable"></table></div></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Region scoping — the same endpoint, seen by three principals</h2><span class="sub">the <span class="mono">/records</span> endpoint had exactly this bug once</span></div>
+          <div class="card-b flush"><table id="scopeTable"></table></div>
+        </div>
+      </section>
+
+      <!-- ===================== WORKER ===================== -->
+      <section class="panel" data-p="worker">
+        <div class="note bad">
+          <b>One process, one browser, two schedules.</b> <span class="mono">chromium.launchPersistentContext</span> takes an
+          exclusive lock on the profile directory — a second worker container sharing the
+          <span class="mono">fieldez-profile</span> volume will not start, and giving it its own profile means a second
+          concurrent FieldEZ login. The jobs share one <span class="mono">Page</span> and must never overlap.
+        </div>
+        <div class="grid g2">
+          <div class="card">
+            <div class="card-h"><h2>One hour in the worker's life</h2><span class="sub">the 15-min WIP job and the 60-min closure job colliding at :00</span></div>
+            <div class="card-b"><div class="tl" id="timeline"></div></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h2>Worker configuration</h2><span class="sub">all defaulted — a deploy with no new env changes nothing</span></div>
+            <div class="card-b flush"><table id="envTable"></table></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Failure modes the loop has to survive</h2></div>
+          <div class="card-b flush"><table id="failTable"></table></div>
+        </div>
+      </section>
+
+    </div>
+
+    <div class="foot">
+      Built from <span class="mono">Flex_Closure_ASP_Report 2.xlsx</span> (30 Jul 2026, 60 rows / 48 work orders) and
+      <span class="mono">Flex_Closure_ASP_Report 3.xlsx</span> (31 Jul 2026, 14 rows / 13 work orders), read directly.
+      Flex-side values are verbatim from those files. OpenCall-side report state is simulated —
+      the application database is not reachable from this session.
+    </div>
+  </main>
+</div>
+
+<script>
+/* ============================ REAL DATA ============================ */
+/* Verbatim from the two workbooks. `parts` = number of part-order rows the
+   work order occupies in the file (the reason de-duplication is required). */
+const WO = [
+  // ---- 31 Jul 2026 file (13 work orders / 14 rows) ----
+  {wo:"WO-035297995",cs:"5162655132",st:"WO Closed",cd:"2026-07-31 14:55:54",at:"2026-07-31 14:56:37",ct:"2026-07-28 10:21:02",loc:"ASPS01511",asp:"Hosur",fse:"Vijayananth M ",parts:2,fc:["73 used & consumed","72"],acct:"TENNECO AUTOMOTIVE INDIA",prod:"HP LaserJet Managed MFP E72425dn",day:"31"},
+  {wo:"WO-035239736",cs:"5162467711",st:"WO Closed",cd:"2026-07-31 10:36:01",at:"2026-07-31 10:36:44",ct:"2026-07-22 19:24:20",loc:"ASPS01463",asp:"Vellore",fse:"SANTHOSH KUMAR S",parts:1,fc:["73 used & consumed"],acct:"KUMARAVEL NATARAJAN",prod:"HP 240 G8 Notebook PC",day:"31"},
+  {wo:"WO-035307902",cs:"5162701066",st:"WO Closed",cd:"2026-07-31 13:47:17",at:"2026-07-31 13:48:00",ct:"2026-07-28 18:57:34",loc:"ASPS01463",asp:"Vellore",fse:"SANTHOSH KUMAR S",parts:1,fc:["73 used & consumed"],acct:"swetha muruganandam",prod:"HP 15.6 inch Laptop PC 15-fd0000",day:"31"},
+  {wo:"WO-035315681",cs:"5162416811",st:"WO Closed",cd:"2026-07-31 10:43:17",at:"2026-07-31 10:44:00",ct:"2026-07-29 11:21:26",loc:"ASPS01463",asp:"Vellore",fse:"SANTHOSH KUMAR S",parts:1,fc:[null],acct:"The South Indian Bank Ltd",prod:"HP 285 Pro G8 Microtower PC",day:"31"},
+  {wo:"WO-035338956",cs:"5162814699",st:"WO Closed",cd:"2026-07-31 10:54:24",at:"2026-07-31 10:55:10",ct:"2026-07-30 16:33:55",loc:"ASPS01511",asp:"Hosur",fse:"M.KAUSAR BADSHAH ",parts:1,fc:[null],acct:"HDFC BANK",prod:"HP ProBook 440 G8 Notebook PC",day:"31"},
+  {wo:"WO-035340494",cs:"5162827109",st:"WO Closed",cd:"2026-07-31 10:02:42",at:"2026-07-31 10:03:26",ct:"2026-07-30 17:47:31",loc:"ASPS01463",asp:"Vellore",fse:"SARWANA N ",parts:1,fc:[null],acct:"end user",prod:"HP Smart Tank 585 All-in-One",day:"31"},
+  {wo:"WO-035311580",cs:"5162718808",st:"WO Closed",cd:"2026-07-31 14:56:42",at:"2026-07-31 14:57:35",ct:"2026-07-29 02:22:59",loc:"ASPS01511",asp:"Hosur",fse:"Vijayananth M ",parts:1,fc:[null],acct:"Home Use",prod:"HP Smart Tank 525 All-in-One",day:"31"},
+  {wo:"WO-035338478",cs:"5162808991",st:"WO Closed",cd:"2026-07-31 14:45:31",at:"2026-07-31 14:46:15",ct:"2026-07-30 16:05:10",loc:"ASPS01463",asp:"Vellore",fse:"SARWANA N ",parts:1,fc:[null],acct:"Irwin Roland Daniel J",prod:"HP Laser MFP 323sdnw Printer",day:"31"},
+  {wo:"WO-035325103",cs:"5162774781",st:"Closed - Canceled",cd:null,at:"2026-07-31 11:07:46",ct:"2026-07-29 19:16:24",loc:"ASPS01489",asp:"Kanchipuram",fse:null,parts:1,fc:[null],acct:"End User",prod:"HP Smart Tank 585 All-in-One",day:"31"},
+  {wo:"WO-035344575",cs:"5162835075",st:"WO Closed",cd:"2026-07-31 11:39:01",at:"2026-07-31 11:39:50",ct:"2026-07-31 00:47:55",loc:"ASPS01463",asp:"Vellore",fse:"SANTHOSH KUMAR S",parts:1,fc:[null],acct:"Ramesh Electricals",prod:"HP Smart Tank 525 All-in-One",day:"31"},
+  {wo:"WO-035331598",cs:"5162803149",st:"WO Closed",cd:"2026-07-31 14:58:12",at:"2026-07-31 14:59:00",ct:"2026-07-30 10:43:36",loc:"ASPS01511",asp:"Hosur",fse:"Vijayananth M ",parts:1,fc:[null],acct:"Suresh kumar",prod:"HP Smart Tank 584 All-in-One",day:"31"},
+  {wo:"WO-035293383",cs:"5162643082",st:"Closed - Canceled",cd:null,at:"2026-07-31 13:41:47",ct:"2026-07-27 21:11:28",loc:"ASPS01461",asp:"Chennai",fse:null,parts:1,fc:[null],acct:"KARUKUVELRAJ GANESAN",prod:"HP Smart Tank 580 All-in-One",day:"31"},
+  {wo:"WO-035323151",cs:"5162771246",st:"WO Closed",cd:"2026-07-31 14:57:23",at:"2026-07-31 14:58:07",ct:"2026-07-29 17:18:04",loc:"ASPS01511",asp:"Hosur",fse:"Vijayananth M ",parts:1,fc:["73 used & consumed"],acct:"VENKATESH A",prod:"HP Smart Tank 585 All-in-One",day:"31"},
+  // ---- 30 Jul 2026 file — the rows the test cases cite ----
+  {wo:"WO-035102542",cs:"5161888567",st:"WO Closed",cd:"2026-07-30 12:15:17",at:"2026-07-30 12:16:05",ct:"2026-07-11 11:53:08",loc:"ASPS01511",asp:"Hosur",fse:"M.KAUSAR BADSHAH ",parts:5,fc:["72",null,"73 used & consumed",null,null],acct:"Uno Minda Limited",prod:"HP P22v G5 FHD Monitor",day:"30"},
+  {wo:"WO-035197646",cs:"5162273725",st:"WO Closed",cd:"2026-07-30 21:27:35",at:"2026-07-30 21:28:19",ct:"2026-07-20 11:00:11",loc:"ASPS01465",asp:"Salem",fse:"MANICKAVASAGAM.E ",parts:2,fc:["73 used & consumed","72"],acct:"Judicial Department",prod:"HP ProOne 440 23.8 G9 AiO",day:"30"},
+  {wo:"WO-035182628",cs:"5162274134",st:"WO Closed",cd:"2026-07-30 22:46:30",at:"2026-07-30 22:47:16",ct:"2026-07-18 17:06:27",loc:"ASPS01489",asp:"Kanchipuram",fse:"Vijaya kumar S",parts:3,fc:["73 used & consumed","73 used & consumed","73 used & consumed"],acct:"Mahindra and Mahindra Ltd",prod:"HP EliteBook 645 14 G10",day:"30"},
+  {wo:"WO-034903076",cs:"5161247544",st:"WO Closed",cd:"2026-07-30 15:57:07",at:"2026-07-30 15:57:54",ct:"2026-06-24 18:47:14",loc:"ASPS01463",asp:"Vellore",fse:"SARWANA N ",parts:1,fc:[null],acct:"Karunanidhi S",prod:"HP Smart Tank 520 All-in-One",day:"30"},
+  {wo:"WO-034886925",cs:"5161175149",st:"Closed - Canceled",cd:null,at:"2026-07-30 12:44:22",ct:"2026-06-23 18:32:02",loc:"ASPS01511",asp:"Hosur",fse:null,parts:1,fc:[null],acct:"Abilash A",prod:"HP ProBook 440 G8 Notebook PC",day:"30"},
+  {wo:"WO-034965515",cs:"5161486925",st:"Closed - Canceled",cd:null,at:"2026-07-30 00:31:21",ct:"2026-06-30 15:57:25",loc:"ASPS01511",asp:"Hosur",fse:null,parts:1,fc:[null],acct:"Sivakumar -",prod:"HP LaserJet Tank MFP 2606sdw",day:"30"},
+  {wo:"WO-035007864",cs:"5161638710",st:"Closed - Canceled",cd:null,at:"2026-07-30 05:01:19",ct:"2026-07-03 14:08:47",loc:"ASPS01461",asp:"Chennai",fse:null,parts:1,fc:[null],acct:"jaya kumar",prod:"HP Laser MFP 138fnw",day:"30"},
+  {wo:"WO-035328290",cs:"5162786852",st:"WO Closed",cd:"2026-07-30 18:51:58",at:"2026-07-30 18:52:44",ct:"2026-07-30 01:50:39",loc:"ASPS01463",asp:"Vellore",fse:"SANTHOSH KUMAR S",parts:1,fc:[null],acct:"Ashok Kumar",prod:"HP Smart Tank 675 All-in-One",day:"30"},
+  {wo:"WO-035332366",cs:"5162807529",st:"Closed - Canceled",cd:null,at:"2026-07-30 12:12:48",ct:"2026-07-30 11:28:28",loc:"ASPS01489",asp:"Kanchipuram",fse:null,parts:1,fc:[null],acct:"Sriram Kk",prod:"HP EliteBook 640 14 G10",day:"30"},
+];
+
+const REGIONS = [
+  {code:"ASPS01511",name:"Hosur",      rows30:19,wo30:15, rows31:6,wo31:5, canc:2},
+  {code:"ASPS01465",name:"Salem",      rows30:15,wo30:11, rows31:0,wo31:0, canc:0},
+  {code:"ASPS01463",name:"Vellore",    rows30:9, wo30:8,  rows31:6,wo31:6, canc:0},
+  {code:"ASPS01461",name:"Chennai",    rows30:9, wo30:9,  rows31:1,wo31:1, canc:5},
+  {code:"ASPS01489",name:"Kanchipuram",rows30:8, wo30:5,  rows31:1,wo31:1, canc:2},
+];
+
+/* ============================ TEST CASES ============================ */
+const G = {
+  parse:"Parsing &amp; de-duplication",
+  cancel:"Cancelled work orders",
+  date:"Dates &amp; timezone",
+  merge:"Merge vs replace",
+  overlay:"Flex Status overlay",
+  recon:"Reconciliation",
+  worker:"Worker &amp; scheduling",
+  ops:"Observability &amp; ops",
+};
+
+const TESTS = [
+/* ---- parsing ---- */
+{id:"TC-01",g:"parse",sev:"high",fails:true,t:"One work order spread across five part-order rows collapses to one closure record",
+ input:`WO-035102542 · Case 5161888567 · 5 rows in the file, one per part order
+Part orders: MO-717091861 / MO-717039194 / MO-716990881 / +2
+Failure Code by row: "72", (blank), "73 used & consumed", (blank), (blank)
+Closure Date identical on all five: 2026-07-30 12:15:17`,
+ exp:"Exactly one row in <span class='mono'>case_closure_dates</span> for WO-035102542. The retained row is chosen deterministically: prefer a non-empty Closure Date, then the latest Activity Time, then the first non-empty Failure Code.",
+ breaks:"The current de-dupe scans the array backwards and keeps the last occurrence. For this work order the last row's Failure Code is blank — so a real failure code (<span class='mono'>73 used &amp; consumed</span>) is silently replaced with an empty string.",
+ ev:`<span class="dim">// current: repositories/caseClosureDateRepository.ts</span>
+for (let i = rows.length - 1; i >= 0; i--) {   <span class="no">// last occurrence wins — arbitrary</span>
+  ...
+}
+<span class="dim">// picks row 5 → Failure Code = ""</span>  <span class="no">✗</span>
+<span class="dim">// wanted: row 3 → Failure Code = "73 used &amp; consumed"</span>  <span class="ok">✓</span>`},
+
+{id:"TC-02",g:"parse",sev:"high",fails:true,t:"Region cards count work orders, not source rows",
+ input:`30-Jul file: 60 rows → 48 distinct work orders
+31-Jul file: 14 rows → 13 distinct work orders
+Hosur alone: 19 rows → 15 work orders`,
+ exp:"Every count surfaced to the user — region cards, the summary endpoint, the reconciliation buckets — is a work-order count.",
+ breaks:"Hosur's card reads 19 closures when 15 calls were actually closed. The inflation is proportional to how many multi-part jobs a region did, so it is worst for the busiest branches.",
+ ev:`30-Jul  60 rows → <span class="hl">48</span> work orders   <span class="dim">(-20%)</span>
+31-Jul  14 rows → <span class="hl">13</span> work orders   <span class="dim">(-7%)</span>
+Hosur   19 rows → <span class="hl">15</span> work orders   <span class="dim">(-21%)</span>`},
+
+{id:"TC-03",g:"parse",sev:"medium",fails:true,t:"Multi-part rows disagree on Failure Code — tie-break must be stable",
+ input:`WO-035197646 · 2 parts · Failure Codes "73 used & consumed" and "72"
+WO-035182628 · 3 parts · all three "73 used & consumed"`,
+ exp:"Re-running the same import twice produces byte-identical rows. The tie-break is Activity Time descending, then file order.",
+ breaks:"A non-deterministic pick makes the hourly import write a different Failure Code every cycle, which shows up as phantom churn in the audit log and makes the <span class='mono'>imported_at</span> column useless for spotting real change.",
+ ev:`WO-035197646  part 1 → <span class="hl">"73 used &amp; consumed"</span>
+              part 2 → <span class="hl">"72"</span>
+              <span class="dim">both rows share Activity Time 2026-07-30 21:28:19</span>
+              → tie-break falls through to file order  <span class="ok">deterministic</span>`},
+
+{id:"TC-04",g:"parse",sev:"medium",fails:false,t:"Both lookup keys blank — row is skipped, not stored",
+ input:`Not present in either sample (0 blank Ticket No, 0 blank Case Id across 74 rows) — but the schema permits '' on both keys.`,
+ exp:"A row with neither key increments <span class='mono'>skippedNoKey</span> and is dropped. A row with exactly one key is stored, and the partial unique indexes let the blank side coexist with other blank sides.",
+ breaks:"Storing a double-blank row creates an unmatchable record that inflates the total on the status endpoint forever.",
+ ev:`blank Ticket No : <span class="ok">0 / 74</span>
+blank Case Id   : <span class="ok">0 / 74</span>
+<span class="dim">// clean today — keep the guard anyway, the schema allows it</span>`},
+
+/* ---- cancelled ---- */
+{id:"TC-05",g:"cancel",sev:"critical",fails:true,t:"“Closed - Canceled” rows have no closure date and are thrown away",
+ input:`9 of 74 rows carry Status = "Closed - Canceled" with Closure Date = NULL:
+30-Jul → WO-035332366, WO-034886925, WO-034965515, WO-035315500, WO-035097017, WO-035007864, WO-035325815
+31-Jul → WO-035325103, WO-035293383`,
+ exp:"These are closed in Flex and must reach <span class='mono'>case_closure_dates</span> with their status, even without a date — falling back to the Activity Time's calendar day for the day bucket.",
+ breaks:"Today's parser counts them as <span class='mono'>skippedNoDate</span> and drops them. They then sit in the reconciliation's “closed in Flex, still open here” bucket <b>forever</b>, because nothing will ever import them. Nine permanent false positives from two days of data — roughly 12% of every batch.",
+ ev:`<span class="dim">// closureDateImportService.ts</span>
+const closureDate = toIsoDate(pick(row, "Closure Date"));
+if (!closureDate) { skippedNoDate += 1; <span class="no">continue;</span> }
+
+<span class="dim">// 029_case_closure_dates.sql</span>
+closure_date  DATE <span class="no">NOT NULL</span>   <span class="no">← cannot store these rows at all</span>`},
+
+{id:"TC-06",g:"cancel",sev:"critical",fails:true,t:"Schema change: closure_date must become nullable",
+ input:`ALTER required on case_closure_dates before cancelled rows can be stored.`,
+ exp:"<span class='mono'>closure_date DROP NOT NULL</span>, plus a <span class='mono'>closed_on DATE</span> fallback column populated from Activity Time so day-bucketing still works for cancelled rows.",
+ breaks:"Without it the import either drops the row (current behaviour) or throws a not-null violation and rolls the whole hourly batch back — one cancelled call would block every closure in that cycle.",
+ ev:`ALTER TABLE case_closure_dates
+  ALTER COLUMN closure_date <span class="ok">DROP NOT NULL</span>,
+  ADD COLUMN closed_on DATE;   <span class="dim">-- closure_date ?? activity day</span>
+
+<span class="dim">-- backfill: closed_on = COALESCE(closure_date, activity_time::date)</span>`},
+
+{id:"TC-07",g:"cancel",sev:"critical",fails:true,t:"“Closed - Canceled” contains both CLOSED and CANCEL — check order decides the answer",
+ input:`Status literal, verbatim: "Closed - Canceled"
+uppercased: "CLOSED - CANCELED"  →  .includes("CLOSED") === true
+                                    .includes("CANCEL") === true`,
+ exp:"Classify with CANCEL tested first, exactly as <span class='mono'>flexRawClassify.ts#classifyRawStatus</span> already does. Result: <span class='tag t-cancel'>cancelled</span>, never <span class='tag t-closed'>closed</span>.",
+ breaks:"A fresh matcher that tests CLOSED first buckets all 9 cancelled work orders as genuine closures. They then count toward the region cards, engineer productivity and the closed ledger — inflating everyone's numbers with jobs that were cancelled, not completed.",
+ ev:`<span class="ok">// correct — mirrors classifyRawStatus</span>
+if (s.includes("CANCEL"))   return "cancelled";   <span class="ok">✓ wins</span>
+if (s.includes("CLOSED"))   return "closed";
+
+<span class="no">// wrong — plausible, and silently inflates every count</span>
+if (s.includes("CLOSED"))   return "closed";      <span class="no">✗ wins</span>
+if (s.includes("CANCEL"))   return "cancelled";`},
+
+{id:"TC-08",g:"cancel",sev:"high",fails:true,t:"Cancelled rows carry no engineer — don't credit anyone",
+ input:`All 9 cancelled rows have FSE = (blank). Every non-cancelled row has an engineer.`,
+ exp:"Cancelled closures are excluded from engineer productivity and are attributed to the region only, via <span class='mono'>Work Location</span>.",
+ breaks:"A blank FSE joined naively becomes an “” engineer bucket on the productivity board — or worse, gets attributed to whoever the previous row belonged to.",
+ ev:`WO-035325103  Closed - Canceled  FSE = <span class="no">(blank)</span>  loc = ASPS01489
+WO-035293383  Closed - Canceled  FSE = <span class="no">(blank)</span>  loc = ASPS01461
+WO-034965515  Closed - Canceled  FSE = <span class="no">(blank)</span>  loc = ASPS01511
+<span class="dim">// 9/9 cancelled rows: no engineer</span>`},
+
+/* ---- dates ---- */
+{id:"TC-09",g:"date",sev:"critical",fails:true,t:"Activity at 00:31 IST lands on the previous day under a UTC container",
+ input:`WO-034965515 · Activity Time 2026-07-30 00:31:21
+WO-035007864 · Activity Time 2026-07-30 05:01:19   ← inside the full 5h30m shift`,
+ exp:"Both bucket to 2026-07-30. The numeric path goes through <span class='mono'>xlsx.SSF.parse_date_code</span>, which is timezone-free, or the container runs with <span class='mono'>TZ=Asia/Kolkata</span>.",
+ breaks:"<span class='mono'>toIsoDate()</span> builds the date with <span class='mono'>getFullYear()/getMonth()/getDate()</span> — the container's local time, which is UTC. Both rows shift to 2026-07-29 and land in yesterday's reconciliation, where nothing matches them.",
+ ev:`Excel serial → JS Date → <span class="no">getDate()</span> in a UTC container
+
+00:31 IST  →  <span class="no">2026-07-29 19:01 UTC</span>  →  bucketed 29-Jul  <span class="no">✗</span>
+05:01 IST  →  <span class="no">2026-07-29 23:31 UTC</span>  →  bucketed 29-Jul  <span class="no">✗</span>
+<span class="dim">// every closure between 00:00 and 05:30 IST is off by one day</span>`},
+
+{id:"TC-10",g:"date",sev:"high",fails:true,t:"Opened and closed on the same day, with the open before dawn",
+ input:`WO-035344575 · Created 2026-07-31 00:47:55 · Closed 2026-07-31 11:39:01
+WO-035328290 · Created 2026-07-30 01:50:39 · Closed 2026-07-30 18:51:58`,
+ exp:"Both are recognised as same-day closures and light up the <span class='mono'>same_day_closed</span> path, staying visible on the Records page until the next day's first upload.",
+ breaks:"With the UTC shift the create date moves to the previous day while the closure date stays put — so a genuine same-day close is recorded as a 1-day-aged call, and the same-day-closed visibility rule never fires.",
+ ev:`WO-035344575  created <span class="hl">31-Jul 00:47</span>  closed <span class="hl">31-Jul 11:39</span>
+              correct   → same-day close  <span class="ok">✓</span>
+              UTC-shift → created 30-Jul  <span class="no">✗ aged 1 day</span>`},
+
+{id:"TC-11",g:"date",sev:"medium",fails:false,t:"Closure day equals activity day on every row — the assumption the whole design rests on",
+ input:`74 of 74 rows: date(Closure Date) === date(Activity Time). Zero exceptions.`,
+ exp:"Assert it on every import and log a warning if it ever breaks, because the hourly “date = today” filter is a filter on activity, not on closure.",
+ breaks:"If Flex ever back-dates a closure — closing a job today with yesterday's closure stamp — the today-filtered file silently stops containing that closure and the hourly job never sees it.",
+ ev:`closure day ≠ activity day : <span class="ok">0 / 74</span>
+<span class="dim">// holds across both files and all five regions — assert it, don't assume it</span>`},
+
+{id:"TC-12",g:"date",sev:"high",fails:false,t:"A month-old call closed today still belongs to today",
+ input:`WO-034903076 · Created 2026-06-24 18:47 · Closed 2026-07-30 15:57  → 36 days aged
+WO-034886925 · Created 2026-06-23 18:32 · Cancelled 2026-07-30 12:44 → 37 days aged`,
+ exp:"Bucketed by closure day (30-Jul), not by create day. WIP aging stays 36 days for reporting.",
+ breaks:"Bucketing on create date drops these out of today's reconciliation entirely — and they are exactly the calls a branch manager most wants to see close.",
+ ev:`WO-034903076  created <span class="dim">2026-06-24</span>  closed <span class="hl">2026-07-30</span>  aging <span class="hl">36d</span>
+              → reconciliation bucket: <span class="ok">30-Jul</span>  ✓
+              → NOT 24-Jun  <span class="no">✗</span>`},
+
+/* ---- merge ---- */
+{id:"TC-13",g:"merge",sev:"critical",fails:true,t:"Importing today over yesterday must not erase yesterday",
+ input:`Step 1 — import 30-Jul file: 48 work orders stored
+Step 2 — import 31-Jul file (today-only): 13 work orders
+Overlap between the two files: 0 work orders`,
+ exp:"Table holds 61 rows. Both days survive. Only keys present in the incoming batch are touched.",
+ breaks:"<span class='mono'>replaceCaseClosureDates</span> opens with an unconditional <span class='mono'>DELETE FROM case_closure_dates</span>. Table goes 48 → 13 and every 30-Jul closure is gone. One hour after go-live the history is a single hour deep. Because the two files share zero work orders, this is the maximum-damage case — nothing is re-inserted to soften it.",
+ ev:`<span class="dim">// with the current replace path</span>
+after import #1 : <span class="ok">48</span> rows
+after import #2 : <span class="no">13</span> rows      <span class="no">← 48 destroyed, 0 recovered</span>
+
+<span class="dim">// with a key-scoped merge</span>
+after import #1 : <span class="ok">48</span> rows
+after import #2 : <span class="ok">61</span> rows      <span class="ok">✓</span>
+
+<span class="dim">// migration 029's own comment claims the code already upserts. It doesn't.</span>`},
+
+{id:"TC-14",g:"merge",sev:"critical",fails:true,t:"A cancelled call that later closes properly must update in place",
+ input:`10:00 — WO-035332366 arrives as "Closed - Canceled", Closure Date NULL
+11:00 — the same WO re-appears as "WO Closed" with a real Closure Date`,
+ exp:"One row, updated in place: status flips to <span class='mono'>WO Closed</span>, the date is filled in, <span class='mono'>imported_at</span> advances.",
+ breaks:"A plain INSERT hits the partial unique index <span class='mono'>case_closure_dates_wo_id_uidx</span> and throws, aborting the whole hourly transaction — so one flip-flopping work order blocks every other closure in that cycle.",
+ ev:`10:00  WO-035332366  <span class="tag t-cancel">Closed - Canceled</span>  date <span class="dim">NULL</span>
+11:00  WO-035332366  <span class="tag t-closed">WO Closed</span>          date <span class="hl">2026-07-30 …</span>
+
+INSERT without ON CONFLICT →
+  <span class="no">ERROR: duplicate key value violates unique constraint
+         "case_closure_dates_wo_id_uidx"</span>
+  <span class="no">→ whole hourly batch rolls back</span>`},
+
+{id:"TC-15",g:"merge",sev:"high",fails:true,t:"The merge must be scoped by both keys, not just the WO",
+ input:`case_closure_dates carries two partial unique indexes: on wo_id and on case_id.
+Sample data is clean 1:1 — no Case Id maps to two WOs, no WO maps to two Case Ids.`,
+ exp:"The key-scoped delete covers both sets: <span class='mono'>WHERE wo_id = ANY($1) OR case_id = ANY($2)</span>, then insert.",
+ breaks:"Deleting by WO alone can leave a stale row still holding an incoming Case Id — the insert then violates <span class='mono'>case_closure_dates_case_id_uidx</span>. A single <span class='mono'>ON CONFLICT</span> target cannot cover two partial indexes, which is why this needs a scoped delete rather than an upsert.",
+ ev:`DELETE FROM case_closure_dates
+ WHERE (wo_id   &lt;&gt; '' AND wo_id   = ANY($1))
+    <span class="ok">OR (case_id &lt;&gt; '' AND case_id = ANY($2))</span>;   <span class="ok">← both, not one</span>
+INSERT ...;`},
+
+{id:"TC-16",g:"merge",sev:"medium",fails:false,t:"The manual upload button keeps replacing, not merging",
+ input:`An admin uploads a full-month closure export by hand from the Closed Calls page.`,
+ exp:"<span class='mono'>mode</span> defaults to <span class='mono'>replace</span>, so the existing button behaves exactly as it does today. Only the worker sends <span class='mono'>mode=merge</span>.",
+ breaks:"Silently switching the manual path to merge means a corrective re-upload can no longer clear bad rows — the admin's usual fix for a bad import stops working.",
+ ev:`POST /api/v1/closure-dates/import
+  manual  →  mode <span class="dim">(absent)</span> → <span class="hl">replace</span>   <span class="ok">unchanged</span>
+  worker  →  mode=<span class="hl">merge</span>              <span class="ok">new path</span>`},
+
+/* ---- overlay ---- */
+{id:"TC-17",g:"overlay",sev:"high",fails:false,t:"Flex Status is overlaid and the vendor value is preserved",
+ input:`WO-035297995 · report row shows Flex Status "Open" · closure record says "WO Closed"`,
+ exp:"Served row reads <span class='mono'>Flex Status = WO Closed</span> and <span class='mono'>Flex Status (WIP) = Open</span>. Nothing is written to <span class='mono'>daily_call_plan_report_rows</span>.",
+ breaks:"Overwriting the stored column loses the vendor's own value permanently, and the next report generation writes the WIP value straight back over it — so the change appears to work, then quietly reverts.",
+ ev:`output["Flex Status"]        = <span class="ok">"WO Closed"</span>     <span class="dim">← from closure report</span>
+output["Flex Status (WIP)"]  = <span class="dim">"Open"</span>          <span class="dim">← vendor value, kept</span>
+daily_call_plan_report_rows  <span class="ok">untouched</span>`},
+
+{id:"TC-18",g:"overlay",sev:"high",fails:true,t:"Reopening from history shows the same Flex Status as generating",
+ input:`Generate the 31-Jul report, then reopen 31-Jul from Report History.`,
+ exp:"Identical Flex Status in both views.",
+ breaks:"<span class='mono'>enrichReportWithClosureDates</span> is called only from the generate path in <span class='mono'>reportController.ts</span>. The history-detail path skips it, so the same day shows overlaid statuses when generated and raw vendor statuses when reopened — and Case Closed Date already has this bug today.",
+ ev:`generate  → enrich() <span class="ok">✓</span> → Flex Status "WO Closed"
+history   → enrich() <span class="no">✗</span> → Flex Status "Open"
+<span class="no">// same report, two different answers</span>`},
+
+{id:"TC-19",g:"overlay",sev:"high",fails:false,t:"The overlay must not reset the unchanged-days streak",
+ input:`WO-034903076 · created 24-Jun · closed 30-Jul · flex_status_unchanged_days = 36`,
+ exp:"The streak keeps computing off the stored vendor value, so it stays 36. Same for the day-over-day comparison and productivity exclusions.",
+ breaks:"If the overlay were persisted, every closure would look like a status change and reset the streak to 0 — the stale-status modal would empty out overnight and you'd lose the signal that finds forgotten calls.",
+ ev:`stored  flex_status = <span class="dim">"Open"</span>       → streak <span class="ok">36 days</span>  ✓
+served  Flex Status = <span class="hl">"WO Closed"</span>  → display only
+<span class="dim">// display-only is what keeps the streak honest</span>`},
+
+{id:"TC-20",g:"overlay",sev:"medium",fails:false,t:"A closure with no matching report row doesn't crash the enricher",
+ input:`A closure record for a work order that never appeared in any OpenCall report — e.g. a call raised and closed inside the same hour, before our WIP upload ran.`,
+ exp:"The enricher ignores it; the record still counts on the closure summary and shows up in the reconciliation as “closed in Flex, never seen here”.",
+ breaks:"An unguarded map lookup returns undefined and throws inside the row loop, taking down the entire report response — not just that row.",
+ ev:`closure lookup miss → <span class="ok">skip row, keep serving</span>
+                      <span class="no">not: throw inside the map()</span>`},
+
+{id:"TC-21",g:"overlay",sev:"high",fails:true,t:"Five downstream readers change behaviour once the overlay lands",
+ input:`Every consumer of output["Flex Status"] in the frontend.`,
+ exp:"Each is re-checked and the new behaviour is the intended one — a <span class='mono'>WO Closed</span> row should drop out of open counts and out of the stale-status modal.",
+ breaks:"The Flex-status breakdown cards, the Request-to-Cancel visibility rule, the RTPL analytics, the stale-status modal and the productivity exclusions all read this field. Shipping the overlay without checking them means five dashboards change silently on the same deploy.",
+ ev:`lib/reportDashboardAnalytics.ts:277  buildFlexOperationalAnalytics
+lib/reportDashboardAnalytics.ts:179  isRequestToCancelFlexStatus
+hooks/useRtplAnalytics.ts:93         flexStatusMetrics
+app/page.tsx:5104                    stale-status modal
+shared/analytics/engineerProductivity.ts:339  exclusions`},
+
+/* ---- reconciliation ---- */
+{id:"TC-22",g:"recon",sev:"high",fails:false,t:"Closed here and closed in Flex — the healthy path",
+ input:`WO-035239736 · closed in our 31-Jul report · present in the 31-Jul closure file at 10:36`,
+ exp:"Lands in <b>matched</b>. No action, no alert.",
+ breaks:"A matcher that compares raw strings without trimming or upper-casing misses these, and the healthy majority floods the exception list — which trains the team to ignore it.",
+ ev:`ours:  ticket_id = <span class="hl">"WO-035239736"</span>
+flex:  Ticket No = <span class="hl">"WO-035239736"</span>
+normalizeKey() → trim + upper on both sides  <span class="ok">✓ matched</span>`},
+
+{id:"TC-23",g:"recon",sev:"high",fails:false,t:"Closed by our engineer, not yet closed in Flex",
+ input:`Engineer marks a call closed in OpenCall at 16:00. Flex has not processed it by the 17:00 sync.`,
+ exp:"Lands in <b>closed here, not in Flex</b> — the actionable list. Ages out of the bucket automatically once Flex catches up.",
+ breaks:"Without an age on the bucket, a call that Flex will process tonight looks identical to one whose WO number was typed wrong three weeks ago. Show hours-since-we-closed so the team can tell them apart.",
+ ev:`ours:  same_day_closed = <span class="ok">true</span>   @ 16:00
+flex:  no closure record for 31-Jul
+       → bucket 2, age <span class="hl">1h</span>
+       <span class="dim">// &gt;24h in this bucket is the real exception</span>`},
+
+{id:"TC-24",g:"recon",sev:"critical",fails:false,t:"Closed in Flex while our report still shows it open",
+ input:`WO-035338956 · closed in Flex 31-Jul 10:54 · our 09:00 report still carries it as open`,
+ exp:"The 11:00 sync puts it in <b>closed in Flex, still open here</b>. The overlay simultaneously flips its Flex Status, so the row reads correctly on the grid even before anyone acts.",
+ breaks:"Without this bucket the branch keeps calling a customer whose job is already closed — the single most visible failure of the whole feature to the people using it.",
+ ev:`09:00 report  WO-035338956  <span class="tag t-open">Open</span>
+10:54 flex    closed
+11:00 sync    → bucket 3  <span class="hl">+ overlay flips the grid cell</span>  <span class="ok">✓</span>`},
+
+{id:"TC-25",g:"recon",sev:"critical",fails:true,t:"Cancelled calls must not sit in the exception list forever",
+ input:`The 9 cancelled work orders from TC-05.`,
+ exp:"They appear as <b>closed in Flex</b> with a cancelled badge, and clear from the exception list once acknowledged.",
+ breaks:"Chained to TC-05: because they are never imported, they can never match, so they accumulate in bucket 3 permanently. Roughly 12% of every batch becomes permanent noise, and the panel stops being trusted within a week.",
+ ev:`day 1  bucket 3: <span class="hl">9</span> cancelled  <span class="no">(never importable)</span>
+day 2  bucket 3: <span class="no">18</span>
+day 5  bucket 3: <span class="no">45</span>   <span class="no">← nobody reads it any more</span>`},
+
+{id:"TC-26",g:"recon",sev:"critical",fails:false,t:"A Salem region admin sees only Salem",
+ input:`30-Jul batch spans 5 ASP codes. Salem (ASPS01465) holds 15 rows / 11 work orders of 48.`,
+ exp:"<span class='mono'>allowedAspCodesForRequest</span> scopes the reconciliation endpoint. Salem's admin sees 11 work orders; the unmatched bucket is forced to 0 for scoped principals.",
+ breaks:"The <span class='mono'>/records</span> endpoint shipped with exactly this hole — a region-scoped credential could read any region's closure records by changing the <span class='mono'>asp</span> query parameter. Don't rebuild it on the new endpoint.",
+ ev:`SUPER_ADMIN     → <span class="ok">48</span> work orders, 5 regions
+Salem admin     → <span class="ok">11</span> work orders, 1 region
+Salem admin
+  &amp;asp=ASPS01511 → <span class="ok">403 Forbidden</span>   <span class="dim">← not a silent empty list</span>`},
+
+{id:"TC-27",g:"recon",sev:"medium",fails:false,t:"Work Location comes straight from the file — the unmatched bucket goes to zero",
+ input:`Every row carries Work Location (ASPS01511 …) and ASP Name ("RENDERWAYS TECHNOLOGY PRIVATE LIMITED- Hosur").`,
+ exp:"Store both at import time. Region attribution stops depending on <span class='mono'>buildLocationCteSql</span> joining back to report rows.",
+ breaks:"Today the ASP is recovered by joining closure records to <span class='mono'>daily_call_plan_report_rows</span> / <span class='mono'>flex_raw_records</span>; anything unresolvable lands in <span class='mono'>unmatched</span>. A call closed before it ever reached a WIP report is unresolvable by definition — precisely the fast closures you most want counted.",
+ ev:`before: closure row → join back to report rows → <span class="no">maybe unmatched</span>
+after : closure row carries <span class="ok">work_location = "ASPS01511"</span>
+        → unmatched <span class="ok">0</span>`},
+
+/* ---- worker ---- */
+{id:"TC-28",g:"worker",sev:"critical",fails:false,t:"Both jobs due at the same minute must run one after the other",
+ input:`WIP job every 15 min, closure job every 60 min. Both fall due at :00.`,
+ exp:"The loop wakes on the earliest due job and runs jobs strictly sequentially on the shared <span class='mono'>Page</span>.",
+ breaks:"Two concurrent <span class='mono'>page.goto</span> calls on one Playwright Page interleave — the closure job's download dialog opens over the WIP report's, and one of the two silently downloads the wrong file. The hash check then marks the wrong report as freshly synced.",
+ ev:`:00  wip     start → <span class="ok">done</span> 0:42
+:00  closure  <span class="dim">queued</span> → start 0:42 → <span class="ok">done</span> 1:38
+<span class="no">// never: both start at :00 on the same Page</span>`},
+
+{id:"TC-29",g:"worker",sev:"critical",fails:false,t:"A second worker container cannot exist",
+ input:`Hypothetical: a separate closure-worker service mounting the same fieldez-profile volume.`,
+ exp:"No second service. One process, one browser, a job table inside it.",
+ breaks:"<span class='mono'>chromium.launchPersistentContext</span> takes an exclusive lock on the user-data directory — the second container crash-loops on startup. Giving it a separate profile instead means two concurrent FieldEZ logins, doubling login pressure and risking a session-limit lockout on the account both workers share.",
+ ev:`<span class="no">Error: Failed to launch: user data directory is already in use
+       /data/fieldez-profile</span>
+<span class="dim">// crash-loop, restart: unless-stopped, forever</span>`},
+
+{id:"TC-30",g:"worker",sev:"high",fails:false,t:"Each job keeps its own change-detection hash",
+ input:`Existing worker writes a single last-uploaded.hash.`,
+ exp:"<span class='mono'>last-wip.hash</span> and <span class='mono'>last-closure.hash</span>, written separately.",
+ breaks:"With one shared file the two jobs overwrite each other's hash. The WIP job writes its hash, the closure job compares against it, finds a mismatch and re-uploads every cycle — while the WIP job now sees the closure hash and skips a genuinely changed report.",
+ ev:`<span class="no">shared: last-uploaded.hash</span>
+  wip writes H(wip) → closure compares vs H(wip) → <span class="no">always differs, always re-uploads</span>
+  closure writes H(cls) → wip compares vs H(cls) → <span class="no">always differs</span>
+
+<span class="ok">per job: last-wip.hash / last-closure.hash</span>`},
+
+{id:"TC-31",g:"worker",sev:"high",fails:true,t:"The format dropdown may no longer be the first select on the page",
+ input:`Current code: page.locator("select").first().selectOption({ label: "XLSX" })
+The WIP report's dialog has no parameters. The closure report needs a date.`,
+ exp:"The format select is located by label or name, never by position. Confirmed against the real dialog in the discovery phase before any of this is written.",
+ breaks:"If the closure report's dialog puts a date-parameter dropdown first, <span class='mono'>.first()</span> selects a date value where XLSX was intended. Playwright reports success, the download is HTML or PDF, and the parser fails on a file that looks fine in the logs.",
+ ev:`WIP dialog     : [ <span class="ok">format</span> ]                    → .first() <span class="ok">✓</span>
+Closure dialog : [ <span class="no">date?</span> ][ <span class="hl">format</span> ][ … ]   → .first() <span class="no">✗</span>
+<span class="dim">// this is what the discovery phase exists to settle</span>`},
+
+{id:"TC-32",g:"worker",sev:"medium",fails:false,t:"A lapsed FieldEZ session re-logs in mid-cycle",
+ input:`The session expires between the 15:00 WIP run and the 16:00 closure run.`,
+ exp:"<span class='mono'>ensureReportsPage</span> detects the redirect to <span class='mono'>/auth/login</span>, logs back in and retries — for the closure job exactly as it already does for WIP.",
+ breaks:"The closure job downloads the login page as an “XLSX”, the parser throws, and the cycle is skipped until someone reads the logs.",
+ ev:`goto(reportsUrl) → url matches /auth\\/login/
+  → login() → goto(reportsUrl) again  <span class="ok">✓</span>
+<span class="dim">// reuse the existing helper, don't re-implement it</span>`},
+
+{id:"TC-33",g:"worker",sev:"medium",fails:false,t:"An expired OpenCall token refreshes once and retries",
+ input:`The import POST returns 401 because the admin JWT expired.`,
+ exp:"<span class='mono'>getToken(true)</span> re-logs in and the POST is retried exactly once, mirroring the WIP upload path.",
+ breaks:"Without the retry the hourly closure import silently no-ops from the moment the token expires until the container restarts.",
+ ev:`POST /closure-dates/import → <span class="no">401</span>
+  → getToken(force = true)
+  → POST again → <span class="ok">201</span>   <span class="dim">(once, not a loop)</span>`},
+
+{id:"TC-34",g:"worker",sev:"medium",fails:false,t:"An unchanged file is skipped without side effects",
+ input:`A quiet evening: two consecutive hourly downloads are byte-identical.`,
+ exp:"Hash matches, the job returns early — no import, no audit row, no <span class='mono'>imported_at</span> bump.",
+ breaks:"Re-importing identical data every hour makes <span class='mono'>imported_at</span> useless for spotting genuine change and buries the audit log in 24 no-op entries a day.",
+ ev:`18:00 H(file) = a3f…  → import  <span class="ok">✓</span>
+19:00 H(file) = a3f…  → <span class="dim">skip, return early</span>
+20:00 H(file) = b71…  → import  <span class="ok">✓</span>`},
+
+{id:"TC-35",g:"worker",sev:"high",fails:false,t:"Deploying the worker with no new env changes nothing",
+ input:`The new worker image ships with FIELDEZ_CLOSURE_REPORT_NAME unset.`,
+ exp:"The closure job is skipped entirely. The WIP job behaves exactly as before. The feature is switched on by adding one env var.",
+ breaks:"A worker that starts hunting for a report that isn't configured throws every cycle, filling the logs and — depending on where the throw lands — taking the WIP job down with it.",
+ ev:`FIELDEZ_CLOSURE_REPORT_NAME = <span class="dim">(unset)</span>
+  → jobs = [ wip ]              <span class="ok">closure never scheduled</span>
+  → WIP behaviour <span class="ok">byte-identical to today</span>`},
+
+/* ---- ops ---- */
+{id:"TC-36",g:"ops",sev:"high",fails:false,t:"A dead worker is visible on the page, not just in the logs",
+ input:`The worker container dies at 02:00. Nobody looks at the logs.`,
+ exp:"The Closed Calls page shows the last auto-sync time and turns it red once it is older than 3× the interval.",
+ breaks:"The overlay keeps serving yesterday's closure statuses and looks perfectly healthy. Stale data that looks fresh is worse than no data — the team acts on it.",
+ ev:`lastImportedAt 02:00 · now 09:00 · interval 60m
+  age 7h &gt; 3h → <span class="no">● Auto-sync stale — last synced 02:00</span>`},
+
+{id:"TC-37",g:"ops",sev:"medium",fails:false,t:"Manual and automatic imports stay distinguishable",
+ input:`An admin uploads a full-month file at 11:15; the worker runs at 11:00 and 12:00.`,
+ exp:"<span class='mono'>import_source</span> is MANUAL or AUTO, and the activity log carries <span class='mono'>CLOSURE_DATES_AUTO_IMPORT</span> separately from the existing manual event.",
+ breaks:"When a number looks wrong, nobody can tell whether the worker or a person wrote it — which is the first question anyone asks.",
+ ev:`11:00 AUTO    merge   13 work orders
+11:15 <span class="hl">MANUAL</span>  replace 1,204 work orders   <span class="dim">← the one that changed everything</span>
+12:00 AUTO    merge   4 work orders`},
+
+{id:"TC-38",g:"ops",sev:"medium",fails:false,t:"Every auto-import writes an audit row with its tallies",
+ input:`A normal hourly cycle importing 13 work orders, 2 of them cancelled.`,
+ exp:"One activity row: rows read, work orders after de-dup, closed, cancelled, skipped-no-key, region breakdown.",
+ breaks:"Without per-cycle tallies a gradual format drift — Flex renaming a column, say — shows up as a slow silent decline in counts that nobody can date.",
+ ev:`{ kind: "CLOSURE_DATES_AUTO_IMPORT",
+  totalRows: 14, workOrders: 13,
+  closed: 11, cancelled: 2,
+  skippedNoKey: 0, byAsp: {…} }`},
+];
+
+/* ============================ RISK COVERAGE ============================ */
+const COVER = [
+  {r:"Cancelled work orders <b>(found in your data — not in the plan)</b>", ids:["TC-05","TC-06","TC-25"]},
+  {r:"Full-replace destroying closure history",          ids:["TC-13","TC-14","TC-15","TC-16"]},
+  {r:"Timezone on the Excel serial conversion",          ids:["TC-09","TC-10","TC-11","TC-12"]},
+  {r:"One closure row per part order",                   ids:["TC-01","TC-02","TC-03"]},
+  {r:"Worker scheduling &amp; process model",            ids:["TC-28","TC-29","TC-30","TC-33","TC-34","TC-35"]},
+  {r:"Free-text Status — classify, don't enum",          ids:["TC-07","TC-08"]},
+  {r:"Overlay correctness &amp; preservation",           ids:["TC-17","TC-19","TC-20"]},
+  {r:"Silent failure after go-live",                     ids:["TC-36","TC-37","TC-38"]},
+  {r:"FieldEZ dialog, date parameters, selectors",       ids:["TC-31","TC-32"]},
+  {r:"Lookup keys &amp; row matching",                   ids:["TC-04","TC-22"]},
+  {r:"Reconciliation buckets behave",                    ids:["TC-23","TC-24"]},
+  {r:"Region scoping on the new endpoint",               ids:["TC-26","TC-27"]},
+  {r:"Overlay changing downstream analytics",            ids:["TC-21"]},
+  {r:"Enricher missing on the history path",             ids:["TC-18"]},
+];
+
+/* ============================ RENDER ============================ */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "");
+
+const TABS = [
+  {k:"overview",l:"Overview"},
+  {k:"matrix",l:"Test matrix",n:TESTS.length},
+  {k:"overlay",l:"Flex Status overlay"},
+  {k:"recon",l:"Reconciliation"},
+  {k:"worker",l:"Worker & scheduling"},
+];
+$("#tabs").innerHTML = TABS.map((t,i)=>
+  `<button class="tab${i===0?' on':''}" data-t="${t.k}">${t.l}${t.n?`<span class="cnt">${t.n}</span>`:''}</button>`).join("");
+$("#tabs").addEventListener("click",e=>{
+  const b=e.target.closest(".tab"); if(!b) return;
+  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x===b));
+  document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("on",p.dataset.p===b.dataset.t));
+  window.scrollTo({top:0,behavior:"smooth"});
+});
+
+/* --- overview KPIs --- */
+const failCount = TESTS.filter(t=>t.fails).length;
+$("#kFail").textContent = failCount;
+$("#kTotal").textContent = TESTS.length;
+
+/* --- coverage --- */
+const coverMax = Math.max(...COVER.map(c=>c.ids.length));
+const coveredIds = new Set(COVER.flatMap(c=>c.ids));
+const orphans = TESTS.filter(t=>!coveredIds.has(t.id)).map(t=>t.id);
+$("#coverBox").innerHTML = COVER.map(c=>{
+  const f = c.ids.filter(id=>TESTS.find(t=>t.id===id)?.fails).length;
+  return `<div class="cover">
+    <div class="bar"><i style="width:${Math.round((c.ids.length/coverMax)*100)}%"></i></div>
+    <div>${c.r}</div>
+    <div class="r">${c.ids.length} case${c.ids.length>1?'s':''}${f?` · <span style="color:var(--danger)">${f} failing</span>`:''}</div>
+  </div>`;
+}).join("") + `<div style="margin-top:12px;font-size:11.5px;color:${orphans.length?'var(--danger)':'var(--ok)'};font-weight:700">
+  ${orphans.length ? `⚠ ${orphans.length} case(s) not tied to a risk: ${orphans.join(", ")}`
+                   : `✓ all ${TESTS.length} cases tied to a risk — no orphans`}</div>`;
+
+/* --- region table --- */
+$("#regionTable").innerHTML = `
+<thead><tr><th>ASP code</th><th>Region</th><th style="text-align:right">Rows 30-Jul</th><th style="text-align:right">WOs 30-Jul</th><th style="text-align:right">Rows 31-Jul</th><th style="text-align:right">WOs 31-Jul</th><th style="text-align:right">Cancelled rows</th><th style="text-align:right">Card inflation if counted by row</th></tr></thead>
+<tbody>${REGIONS.map(r=>{
+  const rows=r.rows30+r.rows31, wos=r.wo30+r.wo31;
+  const inf = wos ? Math.round(((rows-wos)/wos)*100) : 0;
+  return `<tr class="z"><td class="mono">${r.code}</td><td><b>${r.name}</b></td>
+  <td style="text-align:right" class="mono">${r.rows30}</td><td style="text-align:right" class="mono">${r.wo30}</td>
+  <td style="text-align:right" class="mono">${r.rows31}</td><td style="text-align:right" class="mono">${r.wo31}</td>
+  <td style="text-align:right">${r.canc?`<span class="tag t-cancel">${r.canc}</span>`:'<span class="mono" style="color:var(--muted)">0</span>'}</td>
+  <td style="text-align:right"><span class="tag ${inf>=25?'t-crit':inf>0?'t-cancel':'t-none'}">+${inf}%</span></td></tr>`;
+}).join("")}
+<tr class="z" style="background:#fbfcfe;font-weight:800"><td class="mono">—</td><td>All regions</td>
+<td style="text-align:right" class="mono">60</td><td style="text-align:right" class="mono">48</td>
+<td style="text-align:right" class="mono">14</td><td style="text-align:right" class="mono">13</td>
+<td style="text-align:right"><span class="tag t-cancel">9</span></td>
+<td style="text-align:right"><span class="tag t-crit">+21%</span></td></tr></tbody>`;
+
+/* --- test matrix --- */
+let fSev="all", fGrp="all";
+const sevOrder={critical:0,high:1,medium:2};
+const sevTag=s=>`<span class="tag ${s==='critical'?'t-crit':s==='high'?'t-high':'t-med'}">${s}</span>`;
+
+const grpCounts = Object.keys(G).map(k=>({k,n:TESTS.filter(t=>t.g===k).length}));
+$("#grpChips").innerHTML =
+  `<button class="chip on" data-g="all">All groups<span class="n">${TESTS.length}</span></button>` +
+  grpCounts.map(c=>`<button class="chip" data-g="${c.k}">${G[c.k]}<span class="n">${c.n}</span></button>`).join("");
+$("#sevChips").innerHTML =
+  `<button class="chip on" data-s="all">All</button>` +
+  ["critical","high","medium"].map(s=>`<button class="chip" data-s="${s}">${s}<span class="n">${TESTS.filter(t=>t.sev===s).length}</span></button>`).join("") +
+  `<button class="chip" data-s="fails">fails today<span class="n">${failCount}</span></button>`;
+
+function renderMatrix(){
+  const list = TESTS
+    .filter(t=> fGrp==="all" || t.g===fGrp)
+    .filter(t=> fSev==="all" || (fSev==="fails" ? t.fails : t.sev===fSev))
+    .sort((a,b)=> sevOrder[a.sev]-sevOrder[b.sev] || a.id.localeCompare(b.id));
+  $("#matrixCount").textContent = `${list.length} of ${TESTS.length} shown · ${list.filter(t=>t.fails).length} failing on today's code`;
+  $("#tcList").innerHTML = list.map(t=>`
+    <div class="tc" data-id="${t.id}">
+      <div class="tc-h">
+        <div class="tc-id">${t.id}</div>
+        <div><div class="tc-t">${t.t}</div><div class="tc-g">${G[t.g]}</div></div>
+        <div class="tc-m">${sevTag(t.sev)}${t.fails?'<span class="pill bad"><span class="led"></span>fails today</span>':'<span class="pill ok"><span class="led"></span>new behaviour</span>'}</div>
+      </div>
+      <div class="tc-b">
+        <div class="tc-row"><div class="k">Source data</div><div class="v"><div class="ev">${esc(t.input)}</div></div></div>
+        <div class="tc-row"><div class="k">Expected</div><div class="v">${t.exp}</div></div>
+        <div class="tc-row"><div class="k">Breaks if missed</div><div class="v">${t.breaks}</div></div>
+        <div class="tc-row"><div class="k">Evidence</div><div class="v"><div class="ev">${t.ev}</div></div></div>
+      </div>
+    </div>`).join("") || `<div style="padding:28px;text-align:center;color:var(--muted)">Nothing matches that filter.</div>`;
+}
+$("#grpChips").addEventListener("click",e=>{const b=e.target.closest(".chip");if(!b)return;
+  fGrp=b.dataset.g;document.querySelectorAll("#grpChips .chip").forEach(c=>c.classList.toggle("on",c===b));renderMatrix();});
+$("#sevChips").addEventListener("click",e=>{const b=e.target.closest(".chip");if(!b)return;
+  fSev=b.dataset.s;document.querySelectorAll("#sevChips .chip").forEach(c=>c.classList.toggle("on",c===b));renderMatrix();});
+$("#tcList").addEventListener("click",e=>{const h=e.target.closest(".tc-h");if(!h)return;h.parentElement.classList.toggle("open");});
+renderMatrix();
+
+/* --- overlay demo --- */
+let overlayOn = true;
+const day31 = WO.filter(w=>w.day==="31");
+const priorFlex = {  // what our 09:00 WIP report carried, before the closure file landed
+  "WO-035297995":"Open","WO-035239736":"Open","WO-035307902":"Open","WO-035315681":"Open",
+  "WO-035338956":"Open","WO-035340494":"Open","WO-035311580":"Open","WO-035338478":"Open",
+  "WO-035325103":"Open","WO-035344575":"Open","WO-035331598":"Open","WO-035293383":"Open",
+  "WO-035323151":"Open"
+};
+function statusTag(s){
+  if(!s) return `<span class="tag t-none">—</span>`;
+  if(/CANCEL/i.test(s)) return `<span class="tag t-cancel">${s}</span>`;
+  if(/CLOSED/i.test(s)) return `<span class="tag t-closed">${s}</span>`;
+  return `<span class="tag t-open">${s}</span>`;
+}
+function renderOverlay(){
+  $("#overlayTable").innerHTML = `
+  <thead><tr>
+    <th>Ticket ID</th><th>Case ID</th><th>ASP / Region</th><th>Engineer</th><th>Account</th>
+    <th>Flex Status</th><th>Flex Status (WIP)</th><th>Case Closed Date</th><th>Parts</th>
+  </tr></thead>
+  <tbody>${day31.map(w=>{
+    const vendor = priorFlex[w.wo] ?? "Open";
+    const shown  = overlayOn ? w.st : vendor;
+    const changed = overlayOn && shown !== vendor;
+    return `<tr class="z">
+      <td class="mono nowrap"><b>${w.wo}</b></td>
+      <td class="mono nowrap">${w.cs}</td>
+      <td class="nowrap">${w.asp}<div class="mono" style="color:var(--muted);font-size:10.5px">${w.loc}</div></td>
+      <td class="nowrap">${w.fse ? esc(w.fse).trim() : '<span style="color:var(--danger)">(blank)</span>'}</td>
+      <td>${esc(w.acct)}</td>
+      <td class="nowrap">${statusTag(shown)}${changed?'<span style="color:var(--ok);font-weight:800;margin-left:5px">▲</span>':''}</td>
+      <td class="nowrap">${overlayOn?`<span class="was">${vendor}</span>`:'<span style="color:var(--muted)">—</span>'}</td>
+      <td class="mono nowrap">${w.cd ? w.cd.slice(0,10).split("-").reverse().join("-") : '<span style="color:var(--danger)">NULL</span>'}</td>
+      <td class="mono" style="text-align:center">${w.parts}</td>
+    </tr>`;}).join("")}</tbody>`;
+}
+$("#toggleOverlay").addEventListener("click",()=>{
+  overlayOn=!overlayOn;
+  $("#toggleOverlay").textContent = `Overlay: ${overlayOn?"ON":"OFF"}`;
+  $("#toggleOverlay").classList.toggle("on",overlayOn);
+  renderOverlay();
+});
+renderOverlay();
+
+$("#untouchedTable").innerHTML = `
+<thead><tr><th>Field</th><th>Reads from</th><th>Why</th></tr></thead><tbody>
+${[
+ ["<span class='mono'>flex_status</span> (column)","vendor WIP file","overlay is display-only — the column is never written"],
+ ["<span class='mono'>flex_status_unchanged_days</span>","stored vendor value","a closure must not reset the stale-status streak"],
+ ["<span class='mono'>previous_flex_status</span>","day-over-day comparison","the diff compares vendor to vendor, not vendor to overlay"],
+ ["Engineer productivity","stored vendor value","cancelled jobs have no engineer at all (TC-08)"],
+ ["<span class='mono'>same_day_closed</span>","report generation","set by the WIP pipeline, not by the closure file"],
+].map(r=>`<tr class="z"><td>${r[0]}</td><td>${r[1]}</td><td style="color:var(--muted)">${r[2]}</td></tr>`).join("")}
+</tbody>`;
+
+$("#consumerTable").innerHTML = `
+<thead><tr><th>File</th><th>Reader</th><th>Effect of the overlay</th></tr></thead><tbody>
+${[
+ ["lib/reportDashboardAnalytics.ts:277","buildFlexOperationalAnalytics","closed rows move into a WO&nbsp;Closed bucket"],
+ ["lib/reportDashboardAnalytics.ts:179","isRequestToCancelFlexStatus","cancelled rows now hidden from the call plan"],
+ ["hooks/useRtplAnalytics.ts:93","flexStatusMetrics","breakdown cards gain a closed segment"],
+ ["app/page.tsx:5104","stale-status modal","closed rows drop out — intended"],
+ ["shared/analytics/engineerProductivity.ts:339","exclusions","verify cancelled ≠ completed"],
+].map(r=>`<tr class="z"><td class="mono" style="font-size:11px">${r[0]}</td><td class="mono" style="font-size:11px">${r[1]}</td><td style="color:var(--muted)">${r[2]}</td></tr>`).join("")}
+</tbody>`;
+
+/* --- reconciliation --- */
+/* Flex side = real. OpenCall side = simulated so all three outcomes appear. */
+const RECON = [
+  {wo:"WO-035239736",asp:"Vellore",ours:"closed 10:20",flex:"WO Closed 10:36",b:1},
+  {wo:"WO-035307902",asp:"Vellore",ours:"closed 13:30",flex:"WO Closed 13:47",b:1},
+  {wo:"WO-035297995",asp:"Hosur",  ours:"closed 14:40",flex:"WO Closed 14:55",b:1},
+  {wo:"WO-035323151",asp:"Hosur",  ours:"closed 14:45",flex:"WO Closed 14:57",b:1},
+  {wo:"WO-035331598",asp:"Hosur",  ours:"closed 14:50",flex:"WO Closed 14:58",b:1},
+  {wo:"WO-035311580",asp:"Hosur",  ours:"closed 14:52",flex:"WO Closed 14:56",b:1},
+  {wo:"WO-035344575",asp:"Vellore",ours:"closed 11:30",flex:"WO Closed 11:39",b:1},
+  {wo:"WO-035340494",asp:"Vellore",ours:"closed 16:05",flex:"—",b:2,note:"engineer closed in OpenCall 5h ago; Flex has not processed it"},
+  {wo:"WO-035338478",asp:"Vellore",ours:"closed 15:40",flex:"—",b:2,note:"closed after the last sync — expected to clear next cycle"},
+  {wo:"WO-035338956",asp:"Hosur",  ours:"still open",  flex:"WO Closed 10:54",b:3,note:"our 09:00 report still carries it — overlay flips the grid cell now"},
+  {wo:"WO-035315681",asp:"Vellore",ours:"still open",  flex:"WO Closed 10:43",b:3,note:"same — closed in Flex before our next WIP upload"},
+  {wo:"WO-035325103",asp:"Kanchipuram",ours:"still open",flex:"Closed - Canceled",b:3,note:"cancelled, no closure date — dropped by today's parser, would never clear (TC-05 / TC-25)",cancel:true},
+  {wo:"WO-035293383",asp:"Chennai",ours:"still open",  flex:"Closed - Canceled",b:3,note:"same — 9 of these across the two sample days",cancel:true},
+];
+const BDEF=[
+  {n:1,cls:"ok",  l:"Matched",                     d:"Closed in OpenCall and in Flex. No action."},
+  {n:2,cls:"warn",l:"Closed here, not in Flex",    d:"We closed it; Flex has not caught up. Chase anything older than 24h."},
+  {n:3,cls:"bad", l:"Closed in Flex, open here",   d:"Flex is done; our report still carries the call. Close it."},
+];
+$("#buckets").innerHTML = BDEF.map(b=>{
+  const n = RECON.filter(r=>r.b===b.n).length;
+  const c = RECON.filter(r=>r.b===b.n && r.cancel).length;
+  return `<div class="bucket ${b.cls}"><div class="bucket-h">
+    <div class="n">${n}</div><div class="l">${b.l}</div><div class="d">${b.d}</div>
+    ${c?`<div style="margin-top:8px"><span class="pill bad"><span class="led"></span>${c} cancelled — permanent noise until TC-05 is fixed</span></div>`:''}
+  </div></div>`;
+}).join("");
+
+let fB="all";
+$("#bucketChips").innerHTML = `<button class="chip on" data-b="all">All<span class="n">${RECON.length}</span></button>` +
+  BDEF.map(b=>`<button class="chip" data-b="${b.n}">${b.l}<span class="n">${RECON.filter(r=>r.b===b.n).length}</span></button>`).join("");
+function renderRecon(){
+  const list = RECON.filter(r=> fB==="all" || r.b===Number(fB));
+  $("#reconTable").innerHTML = `
+  <thead><tr><th>Ticket ID</th><th>Region</th><th>OpenCall</th><th>Flex closure report</th><th>Bucket</th><th>Note</th></tr></thead>
+  <tbody>${list.map(r=>{
+    const b=BDEF.find(x=>x.n===r.b);
+    const cls = r.b===1?'t-closed':r.b===2?'t-cancel':'t-crit';
+    return `<tr class="z">
+      <td class="mono nowrap"><b>${r.wo}</b></td>
+      <td class="nowrap">${r.asp}</td>
+      <td class="nowrap">${r.ours}</td>
+      <td class="nowrap">${r.flex==="—"?'<span style="color:var(--muted)">—</span>':statusTag(r.flex.replace(/\s\d\d:\d\d$/,""))+' <span class="mono" style="color:var(--muted)">'+(r.flex.match(/\d\d:\d\d$/)||[""])[0]+'</span>'}</td>
+      <td class="nowrap"><span class="tag ${cls}">${b.l}</span></td>
+      <td style="color:var(--muted)">${r.note??""}</td></tr>`;}).join("")}</tbody>`;
+}
+$("#bucketChips").addEventListener("click",e=>{const b=e.target.closest(".chip");if(!b)return;
+  fB=b.dataset.b;document.querySelectorAll("#bucketChips .chip").forEach(c=>c.classList.toggle("on",c===b));renderRecon();});
+renderRecon();
+
+$("#scopeTable").innerHTML = `
+<thead><tr><th>Principal</th><th>Regions visible</th><th>Work orders (30-Jul)</th><th>asp=ASPS01511 in the query string</th></tr></thead><tbody>
+<tr class="z"><td><b>SUPER_ADMIN</b></td><td>all 5</td><td class="mono">48</td><td><span class="tag t-closed">allowed</span></td></tr>
+<tr class="z"><td><b>REGION_ADMIN — Salem</b></td><td class="mono">ASPS01465</td><td class="mono">11</td><td><span class="tag t-crit">403 Forbidden</span></td></tr>
+<tr class="z"><td><b>REGION_ADMIN — Hosur</b></td><td class="mono">ASPS01511</td><td class="mono">15</td><td><span class="tag t-closed">allowed</span></td></tr>
+<tr class="z" style="background:#fef2f2"><td colspan="4" style="color:var(--danger)"><b>Regression guard:</b> a 403 — not a silent empty list. The <span class="mono">/closure-dates/records</span> endpoint shipped once with <span class="mono">asp</span> going straight to SQL, letting any region read any other region's closures.</td></tr>
+</tbody>`;
+
+/* --- worker timeline --- */
+const TL = [
+ {t:"15:00:00",c:"",d:"<b>WIP job due.</b> Warm session reused — no login. Downloads <span class='mono'>Flex WIP Report ASP</span>, hashes it, uploads, generates the report."},
+ {t:"15:00:42",c:"mute",d:"WIP job finishes. Closure job is <b>not</b> due yet (last ran 14:00). Loop sleeps until the earliest next due job."},
+ {t:"15:15:00",c:"mute",d:"WIP job runs again. File unchanged since 15:00 → hash match → <b>skipped</b>, no upload, no audit row."},
+ {t:"15:30:00",c:"mute",d:"WIP job. Changed → uploaded."},
+ {t:"15:45:00",c:"mute",d:"WIP job. Changed → uploaded."},
+ {t:"16:00:00",c:"",d:"<b>Both jobs due in the same minute.</b> WIP runs first; the closure job is queued, never started in parallel — they share one Playwright <span class='mono'>Page</span>."},
+ {t:"16:00:44",c:"",d:"<b>Closure job starts.</b> Sets the date parameter to today (IST), format XLSX, downloads <span class='mono'>Flex Closure ASP Report</span>."},
+ {t:"16:01:20",c:"",d:"Hash differs from <span class='mono'>last-closure.hash</span> → POST <span class='mono'>/api/v1/closure-dates/import</span> with <span class='mono'>mode=merge</span>."},
+ {t:"16:01:23",c:"bad",d:"<b>401 — admin token expired.</b> <span class='mono'>getToken(force)</span> re-logs in and the POST is retried once."},
+ {t:"16:01:25",c:"",d:"201 Created — 14 rows read, 13 work orders after de-dup, 11 closed, 2 cancelled. <span class='mono'>last-closure.hash</span> written."},
+ {t:"16:01:25",c:"mute",d:"No report regeneration. The overlay applies at serve time, so the next page load already shows the new statuses."},
+ {t:"16:15:00",c:"mute",d:"WIP job only. Closure job next due at 17:00."},
+];
+$("#timeline").innerHTML = TL.map(i=>`<div class="tl-i ${i.c}"><div class="tl-t">${i.t}</div><div class="tl-d">${i.d}</div></div>`).join("");
+
+$("#envTable").innerHTML = `
+<thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead><tbody>
+${[
+ ["FIELDEZ_CLOSURE_REPORT_NAME","<i>(unset)</i>","blank ⇒ the closure job is never scheduled"],
+ ["FIELDEZ_CLOSURE_INTERVAL_MS","3600000","one hour"],
+ ["FIELDEZ_CLOSURE_DATE_MODE","today","the date parameter sent to FieldEZ"],
+ ["FIELDEZ_SYNC_INTERVAL_MS","900000","existing WIP cadence — unchanged"],
+ ["FIELDEZ_PROFILE_DIR","/data/fieldez-profile","one profile, one browser, one lock"],
+ ["OPENCALL_API_URL","http://api:4000","internal network, no public round-trip"],
+].map(r=>`<tr class="z"><td class="mono" style="font-size:11px">${r[0]}</td><td class="mono" style="font-size:11px">${r[1]}</td><td style="color:var(--muted)">${r[2]}</td></tr>`).join("")}
+</tbody>`;
+
+$("#failTable").innerHTML = `
+<thead><tr><th>Failure</th><th>Detection</th><th>Response</th><th>Case</th></tr></thead><tbody>
+${[
+ ["FieldEZ session lapsed","redirected to <span class='mono'>/auth/login</span>","re-login, retry the cycle","TC-32"],
+ ["OpenCall token expired","POST returns 401","refresh once, retry once","TC-33"],
+ ["Download times out","Playwright 120s timeout","log, skip the cycle, retry next hour","TC-32"],
+ ["Report renamed in FieldEZ","row locator finds nothing","log the report name, skip — do not fall back to another row","TC-31"],
+ ["Format select grabbed the wrong dropdown","parser rejects the file","fail loudly at parse; never store a partial batch","TC-31"],
+ ["Worker container dead","<span class='mono'>lastImportedAt</span> older than 3× interval","red dot on the Closed Calls page","TC-36"],
+ ["A cancelled WO flips to closed mid-day","same key, new status","merge updates in place, no unique violation","TC-14"],
+].map(r=>`<tr class="z"><td><b>${r[0]}</b></td><td style="color:var(--muted)">${r[1]}</td><td style="color:var(--muted)">${r[2]}</td><td class="mono" style="color:var(--accent-strong);font-weight:700">${r[3]}</td></tr>`).join("")}
+</tbody>`;
+</script>
+</body>
+</html>

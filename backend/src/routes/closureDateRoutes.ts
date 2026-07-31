@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   getClosureDatesStatusController,
   getClosureDatesSummaryController,
+  getClosureReconciliationController,
   importClosureDatesController,
   listClosureDateRecordsController,
 } from "../controllers/closureDateController.js";
@@ -32,6 +33,13 @@ closureDateRouter.get(
   "/records",
   requirePrincipal,
   listClosureDateRecordsController,
+);
+
+// "Did Flex agree with us on this day?" — region-scoped like /records.
+closureDateRouter.get(
+  "/reconciliation",
+  requirePrincipal,
+  getClosureReconciliationController,
 );
 
 closureDateRouter.post(
