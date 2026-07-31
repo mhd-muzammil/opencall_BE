@@ -9,6 +9,7 @@ import {
   tallyClosureStatuses,
   type ClosureStatusTally,
 } from "./closureStatusClassify.js";
+import { badRequest } from "../../utils/httpError.js";
 
 /**
  * Parses a Flex Closure ASP Report workbook into one record per work order and stores it,
@@ -200,19 +201,40 @@ function beats(candidate: Candidate, incumbent: Candidate): boolean {
 }
 
 export function readWorkbookRows(filePath: string): Array<Record<string, unknown>> {
-  // `cellDates: false` + `raw: true` keeps date cells as Excel serials so `parseSheetDate`
-  // can decode them timezone-free, and keeps ids as their literal values rather than
-  // number-formatted text.
-  const workbook = xlsx.readFile(filePath, { cellDates: false, raw: true });
+  // Every failure below is a BAD UPLOAD, not a server fault, and is reported as such
+  // with the real reason. The unhandled-error path returns a deliberately opaque
+  // "Unexpected server error", which left the auto-sync worker able to log only
+  // "import returned 500" — true, and useless.
+  let workbook: ReturnType<typeof xlsx.readFile>;
+  try {
+    // `cellDates: false` + `raw: true` keeps date cells as Excel serials so
+    // `parseSheetDate` can decode them timezone-free, and keeps ids as their literal
+    // values rather than number-formatted text.
+    workbook = xlsx.readFile(filePath, { cellDates: false, raw: true });
+  } catch (error) {
+    // A vendor error page, a truncated download or an empty export all arrive here as
+    // bytes that simply are not a workbook.
+    throw badRequest(
+      `Could not read the closure workbook: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { field: "closureReport" },
+    );
+  }
+
   const sheetName =
     workbook.SheetNames.find((n) => n.toLowerCase() === "report") ??
     workbook.SheetNames[0];
   if (!sheetName) {
-    throw new Error("No sheet found in the closure-date workbook");
+    throw badRequest("The closure workbook has no sheets", {
+      field: "closureReport",
+    });
   }
   const worksheet = workbook.Sheets[sheetName];
   if (!worksheet) {
-    throw new Error("Closure-date worksheet is undefined");
+    throw badRequest(`Closure workbook sheet "${sheetName}" is empty`, {
+      field: "closureReport",
+    });
   }
   return xlsx.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: "" });
 }

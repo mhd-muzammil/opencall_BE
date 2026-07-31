@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
 
@@ -330,6 +330,19 @@ interface ClosureImportOutcome {
   workOrders?: number | undefined;
   imported?: number | undefined;
   withoutClosureDate?: number | undefined;
+  /** The server's own message on a non-2xx, so a failure is diagnosable from these logs. */
+  error?: string | undefined;
+}
+
+/**
+ * The most useful one-line description of a failed response: the API's
+ * `{ error: { message } }` when it sent one, otherwise the raw body, truncated.
+ */
+function describeFailure(raw: string, body: unknown): string {
+  const message = (body as { error?: { message?: string } } | null)?.error?.message;
+  if (message) return message;
+  const flat = raw.replace(/\s+/g, " ").trim();
+  return flat.length > 400 ? `${flat.slice(0, 400)}…` : flat || "no response body";
 }
 
 /**
@@ -351,22 +364,31 @@ async function importClosureToOpenCall(filePath: string): Promise<ClosureImportO
     });
   });
 
-  const body = (await res.json().catch(() => null)) as
-    | {
-        data?: {
-          totalRows?: number;
-          workOrders?: number;
-          imported?: number;
-          withoutClosureDate?: number;
-        };
-      }
-    | null;
+  // Read as text first: a 500 from the API is often an HTML error page or a plain
+  // message, and `res.json()` would swallow it into `null` — which is exactly why the
+  // first real failure logged only "import returned 500" and told us nothing.
+  const raw = await res.text().catch(() => "");
+  let body: {
+    data?: {
+      totalRows?: number;
+      workOrders?: number;
+      imported?: number;
+      withoutClosureDate?: number;
+    };
+  } | null = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = null;
+  }
+
   return {
     status: res.status,
     totalRows: body?.data?.totalRows,
     workOrders: body?.data?.workOrders,
     imported: body?.data?.imported,
     withoutClosureDate: body?.data?.withoutClosureDate,
+    error: res.ok ? undefined : describeFailure(raw, body),
   };
 }
 
@@ -482,10 +504,17 @@ async function syncClosure(page: Page): Promise<void> {
     return;
   }
 
-  log(`[closure] report changed (${today}) — importing to OpenCall…`);
+  // The byte size distinguishes a real workbook from an error page or an empty
+  // export, which is the other way this import can fail with a server error.
+  const bytes = statSync(file).size;
+  log(`[closure] report changed (${today}, ${bytes} bytes) — importing to OpenCall…`);
+
   const out = await importClosureToOpenCall(file);
   if (out.status !== 201 && out.status !== 200) {
-    log(`[closure] ⚠️ import returned ${out.status} — will retry next cycle`);
+    log(
+      `[closure] ⚠️ import returned ${out.status}: ${out.error ?? "no detail"}` +
+        ` — will retry next cycle`,
+    );
     return;
   }
 
