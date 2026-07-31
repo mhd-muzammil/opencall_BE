@@ -133,13 +133,54 @@ async function findFormatSelect(page: Page): Promise<Locator> {
 }
 
 /**
+ * Puts a date into one of the modal's From/To fields.
+ *
+ * These are ng-bootstrap datepickers rendered with the `readonly` attribute:
+ *
+ *   <input readonly ngbdatepicker placeholder="yyyy-mm-dd" class="form-control …">
+ *
+ * so Playwright's `fill()` refuses them outright ("element is not editable") and the
+ * whole closure job died on the first cycle. Opening the calendar and clicking a day
+ * would mean driving month navigation, which is far more fragile.
+ *
+ * Instead the value is set through the native `value` setter and an `input` event is
+ * dispatched — which is exactly what NgbInputDatepicker's `manualDateChange` host
+ * listener consumes, and its default parser is ISO `yyyy-mm-dd`, the very format the
+ * placeholder advertises. `readonly` is dropped first so the field also accepts a
+ * normal fill if FieldEZ ever makes these editable.
+ *
+ * Returns the value the field ended up holding, so the caller can verify it.
+ */
+async function setDateField(input: Locator, value: string): Promise<string> {
+  if (await input.isEditable().catch(() => false)) {
+    await input.fill(value, { timeout: 10000 });
+  } else {
+    await input.evaluate((el, target) => {
+      const field = el as HTMLInputElement;
+      field.removeAttribute("readonly");
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(field, target);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
+  }
+
+  // Blur rather than pressing Escape: a focused field can leave the calendar overlay
+  // covering the Download button, and Escape would close the whole modal.
+  await input.evaluate((el) => (el as HTMLElement).blur());
+  return (await input.inputValue().catch(() => "")).trim();
+}
+
+/**
  * Fills the modal's From/To date fields when the caller supplied dates AND the dialog
  * actually has them. The WIP report takes no parameters; the closure report requires
- * both (red asterisks). They are plain text inputs with a `yyyy-mm-dd` placeholder, so
- * they are typed into directly — the calendar pickers are never opened.
+ * both (red asterisks).
  *
- * Returns how many fields were filled, so a required-date dialog that we failed to
- * populate fails loudly instead of downloading the wrong range.
+ * Returns how many fields were populated, so a required-date dialog we failed to fill
+ * fails loudly instead of downloading the wrong range.
  */
 async function fillDateRange(
   page: Page,
@@ -153,15 +194,24 @@ async function fillDateRange(
   if (count === 0) return 0;
 
   const values = [fromDate, toDate];
+  const labels = ["From Date", "To Date"];
   let filled = 0;
   for (let index = 0; index < Math.min(count, values.length); index += 1) {
     const value = values[index];
     if (!value) continue;
     const input = dateInputs.nth(index);
-    await input.fill(value, { timeout: 10000 });
-    // Blur rather than pressing Escape: a focused field can leave the calendar overlay
-    // covering the Download button, and Escape would close the whole modal.
-    await input.evaluate((el) => (el as HTMLElement).blur());
+    const actual = await setDateField(input, value);
+
+    if (!actual) {
+      throw new Error(
+        `${labels[index] ?? `date field ${index}`} stayed empty after setting "${value}"`,
+      );
+    }
+    if (actual !== value) {
+      // Not fatal — the widget may reformat — but the range we actually asked for
+      // must be visible in the logs, not inferred.
+      log(`[closure] ⚠️ ${labels[index]} shows "${actual}" after setting "${value}"`);
+    }
     filled += 1;
   }
   return filled;
