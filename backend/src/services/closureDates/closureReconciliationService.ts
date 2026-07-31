@@ -204,6 +204,25 @@ export function bucketReconciliation(input: {
 // ----------------------------------------------------------------------- loading
 
 /**
+ * Records-page visibility, mirroring the frontend's `isRecordsPageVisibleRow` — the exact
+ * filter the "RTPL HOURES STATUS" tiles run on before deriving a status.
+ *
+ *   (!closedSyntheticRow || sameDayClosedRow) && !hasRequestToCancelFlexStatus
+ *
+ * This is NOT optional. A call closed by an earlier day's upload keeps its synthetic row
+ * and is re-stamped into every later report forever (there is no pruning), along with the
+ * Evening status it was closed under. Without this filter every past closure counts as
+ * "closed here" again every single day, so `closedHereNotInFlex` grows without bound and
+ * reads as a huge disagreement with Flex when nothing is actually wrong.
+ */
+const RECORDS_PAGE_VISIBLE_SQL = `
+          AND (rows.change_type IS DISTINCT FROM 'CLOSED' OR rows.same_day_closed)
+          AND lower(regexp_replace(TRIM(COALESCE(rows.flex_status, '')), '\\s+', ' ', 'g'))
+              <> 'request to cancel'
+          AND lower(regexp_replace(TRIM(COALESCE(rows.previous_flex_status, '')), '\\s+', ' ', 'g'))
+              <> 'request to cancel'`;
+
+/**
  * Every distinct work order in the day's report(s). A day can hold several reports (a
  * re-upload generates another one), so rows are collapsed per work order keeping the most
  * recently touched — the same "latest wins" rule the Evening-status authority uses.
@@ -244,7 +263,7 @@ async function loadDayRows(
          FROM daily_call_plan_report_rows rows
          JOIN daily_call_plan_reports reports ON reports.id = rows.report_id
         WHERE reports.report_date = $1::date
-          AND NOT rows.is_excluded
+          AND NOT rows.is_excluded${RECORDS_PAGE_VISIBLE_SQL}
      )
      SELECT ticket_id,
             case_id,

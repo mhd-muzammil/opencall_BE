@@ -1,16 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   bucketReconciliation,
   eveningFirstStatus,
   isClosedHereStatus,
+  reconcileClosuresForDate,
   type ClosedHereRow,
   type FlexClosureRow,
 } from "./closureReconciliationService.js";
 
+const mocks = vi.hoisted(() => ({ query: vi.fn() }));
+
 vi.mock("../../config/database.js", () => ({
-  query: vi.fn(),
+  query: mocks.query,
   pool: { connect: vi.fn() },
 }));
+
+beforeEach(() => {
+  mocks.query.mockReset().mockResolvedValue({ rows: [] });
+});
 
 const NOW = Date.parse("2026-07-31T18:00:00+05:30");
 
@@ -179,6 +186,20 @@ describe("bucketReconciliation", () => {
     expect(result.counts.matched).toBe(1);
   });
 
+  it("counts a same-day closure but not one closed on an earlier day", () => {
+    // Both look identical by status. The earlier-day closure is a synthetic row that
+    // gets re-stamped into every later report forever, so only the SQL visibility
+    // filter can tell them apart — see the loadDayRows test below.
+    const result = bucketReconciliation({
+      date: "2026-07-31",
+      closedHere: [here({ ticketId: "WO-TODAY" })],
+      flexClosures: [],
+      nowMs: NOW,
+    });
+
+    expect(result.counts.closedHereNotInFlex).toBe(1);
+  });
+
   it("is empty on a day with nothing on either side", () => {
     const result = bucketReconciliation({
       date: "2026-07-31",
@@ -192,5 +213,38 @@ describe("bucketReconciliation", () => {
       closedHereNotInFlex: 0,
       closedInFlexNotHere: 0,
     });
+  });
+});
+
+describe("reconcileClosuresForDate — the day's row set", () => {
+  it("applies Records-page visibility, or every past closure recounts every day", async () => {
+    await reconcileClosuresForDate({ date: "2026-07-31", allowedAspCodes: null });
+
+    const [sql] = mocks.query.mock.calls[0] as [string, unknown[]];
+    const flat = sql.replace(/\s+/g, " ");
+
+    // A call closed by an EARLIER day's upload keeps its synthetic row and is
+    // re-stamped into every later report forever. Without this it would count as
+    // "closed here" again every single day and closedHereNotInFlex would grow without
+    // bound — which is exactly what it did on the first prod deploy.
+    expect(flat).toContain(
+      "AND (rows.change_type IS DISTINCT FROM 'CLOSED' OR rows.same_day_closed)",
+    );
+    // Request-to-Cancel rows are off the Records page, so they are not ours to close.
+    expect(flat).toContain("<> 'request to cancel'");
+    expect(flat).toContain("AND NOT rows.is_excluded");
+  });
+
+  it("scopes both halves to the caller's ASP codes", async () => {
+    await reconcileClosuresForDate({
+      date: "2026-07-31",
+      allowedAspCodes: ["ASPS01461"],
+      aspCode: "ASPS01461",
+    });
+
+    expect(mocks.query).toHaveBeenCalledTimes(2);
+    for (const [, params] of mocks.query.mock.calls) {
+      expect((params as unknown[])[1]).toEqual(["ASPS01461"]);
+    }
   });
 });
