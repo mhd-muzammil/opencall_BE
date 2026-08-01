@@ -42,7 +42,9 @@ const config = {
   // Closure report. Blank report name ⇒ the closure job is never scheduled, so a deploy
   // that does not set these behaves exactly as before.
   closureReportName: str("FIELDEZ_CLOSURE_REPORT_NAME"),
-  closureIntervalMs: num("FIELDEZ_CLOSURE_INTERVAL_MS", 60 * 60 * 1000), // 1 h default
+  // Matches the WIP job's cadence. The closure report demonstrably changes well
+  // inside an hour, so a slower poll just serves stale reconciliation numbers.
+  closureIntervalMs: num("FIELDEZ_CLOSURE_INTERVAL_MS", 15 * 60 * 1000), // 15 min
   closureDateMode: str("FIELDEZ_CLOSURE_DATE_MODE", "today"),
   // Pause between two jobs that came due in the same cycle, so the second one does
   // not hit the API while the first one's report generation is still finishing.
@@ -587,44 +589,48 @@ async function main(): Promise<void> {
 
   try {
     while (!isShuttingDown) {
-      const now = Date.now();
-      const due = jobs.filter((job) => job.nextRunAt <= now);
+      // Drain every due job, RE-CHECKING what is due after each one finishes.
+      //
+      // This used to take a single snapshot of the due list and iterate it, which
+      // left a hole: a job whose turn arrived WHILE another was running was not in
+      // that snapshot, so the settle delay never applied to it. The loop simply fell
+      // through to its 1-second floor and started it ~1s after the previous job — the
+      // exact spacing that produced "[closure] import returned 500" twice. Invisible
+      // at hourly intervals, unavoidable at quarter-hourly ones, where the natural
+      // gap is only as wide as the WIP job is short.
+      let ranThisPass = false;
 
-      if (due.length > 0) {
-        // One Page, one FieldEZ session: the jobs MUST NOT overlap.
-        await ensureReportsPage(page).catch((error: unknown) => {
-          log(`could not reach the reports page: ${error instanceof Error ? error.message : String(error)}`);
-        });
-        for (let index = 0; index < due.length; index += 1) {
-          const job = due[index]!;
-          if (isShuttingDown) break;
-          try {
-            await job.run(page);
-          } catch (error) {
-            log(`[${job.key}] cycle failed: ${error instanceof Error ? error.message : String(error)}`);
-          } finally {
-            // Schedule off completion, so a slow cycle never queues up behind itself.
-            job.nextRunAt = Date.now() + job.intervalMs;
-          }
+      while (!isShuttingDown) {
+        // Array order is the tie-break, so `wip` keeps priority over `closure`.
+        const job = jobs.find((candidate) => candidate.nextRunAt <= Date.now());
+        if (!job) break;
 
-          const isLast = index === due.length - 1;
-          if (isLast || isShuttingDown) continue;
-
-          // A failed job may have left a modal open; go back to a known-good page
-          // before the next job touches it.
-          await ensureReportsPage(page).catch(() => {});
-
-          // Let the API settle before the next job hits it. Jobs only ever bunch up
-          // on the FIRST cycle after a restart, when both are due at once — and that
-          // is exactly when the closure import failed with a 500, landing ~5 seconds
-          // behind a 2400-row report generation while it still held its database
-          // connections. Every closure run that was minutes clear of the WIP job
-          // succeeded. Cheap insurance: the jobs are hourly and quarter-hourly, so
-          // spacing them by a minute costs nothing.
+        if (ranThisPass) {
+          // Let the API settle before the next job hits it: the closure import
+          // failed with a 500 whenever it landed seconds behind a 2400-row report
+          // generation, and succeeded every time it was clear of one.
           if (config.jobStaggerMs > 0) {
             log(`settling ${Math.round(config.jobStaggerMs / 1000)}s before the next job…`);
             await interruptibleSleep(config.jobStaggerMs);
+            if (isShuttingDown) break;
           }
+        }
+
+        // A failed job may have left a modal open; start every job from a
+        // known-good page, and re-log in if the session lapsed.
+        await ensureReportsPage(page).catch((error: unknown) => {
+          log(`could not reach the reports page: ${error instanceof Error ? error.message : String(error)}`);
+        });
+
+        ranThisPass = true;
+        try {
+          await job.run(page);
+        } catch (error) {
+          log(`[${job.key}] cycle failed: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+          // Schedule off completion, so a slow cycle never queues up behind itself
+          // — and so a job can never be immediately due again inside this loop.
+          job.nextRunAt = Date.now() + job.intervalMs;
         }
       }
 

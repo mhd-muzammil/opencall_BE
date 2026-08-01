@@ -26,7 +26,7 @@ services:
       # Second job in the same worker process (same browser, same profile). Blank
       # report name ⇒ never scheduled, so this overlay stays backwards-compatible.
       FIELDEZ_CLOSURE_REPORT_NAME: ${FIELDEZ_CLOSURE_REPORT_NAME:-}
-      FIELDEZ_CLOSURE_INTERVAL_MS: ${FIELDEZ_CLOSURE_INTERVAL_MS:-3600000}
+      FIELDEZ_CLOSURE_INTERVAL_MS: ${FIELDEZ_CLOSURE_INTERVAL_MS:-900000}
       FIELDEZ_CLOSURE_DATE_MODE: ${FIELDEZ_CLOSURE_DATE_MODE:-today}
       FIELDEZ_JOB_STAGGER_MS: ${FIELDEZ_JOB_STAGGER_MS:-60000}
       TZ: ${TZ:-Asia/Kolkata}

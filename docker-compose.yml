@@ -126,7 +126,7 @@ services:
       # Blank report name ⇒ the job is never scheduled, so leaving these unset keeps
       # the worker behaving exactly as it did before.
       FIELDEZ_CLOSURE_REPORT_NAME: ${FIELDEZ_CLOSURE_REPORT_NAME:-}
-      FIELDEZ_CLOSURE_INTERVAL_MS: ${FIELDEZ_CLOSURE_INTERVAL_MS:-3600000}
+      FIELDEZ_CLOSURE_INTERVAL_MS: ${FIELDEZ_CLOSURE_INTERVAL_MS:-900000}
       FIELDEZ_CLOSURE_DATE_MODE: ${FIELDEZ_CLOSURE_DATE_MODE:-today}
       # Pause between two jobs due in the same cycle (only ever on the first cycle
       # after a restart), so the closure import does not hit the API while the WIP
