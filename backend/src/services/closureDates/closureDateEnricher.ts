@@ -23,9 +23,15 @@ import { loadCustomerFeedbackLookup } from "../../repositories/customerFeedbackR
  * vendor value. That is deliberate: a closure must not reset a stale-status streak.
  */
 export async function enrichReportWithClosureDates<
-  T extends { rows: Array<{ output: Record<string, unknown> }> },
+  T extends {
+    reportDate?: string;
+    rows: Array<{ output: Record<string, unknown> }>;
+  },
 >(report: T): Promise<T> {
   try {
+    // The day this report is FOR. The Flex Status overlay is scoped to it (see below);
+    // an empty value disables the overlay rather than guessing.
+    const reportDate = String(report.reportDate ?? "").slice(0, 10);
     const [{ byWoId, byCaseId }, feedback] = await Promise.all([
       loadClosureDateLookup(),
       loadCustomerFeedbackLookup(),
@@ -50,17 +56,37 @@ export async function enrichReportWithClosureDates<
       const closure =
         (woId && byWoId.get(woId)) || (caseId && byCaseId.get(caseId)) || null;
       if (closure) {
+        // Case Closed Date is historical fact and is stamped whenever we have one —
+        // unchanged since it shipped, and it never misrepresents the current state.
         if (closure.closedOn) {
           output["Case Closed Date"] = closure.closedOn;
         }
-        if (closure.status) {
+
+        // The Flex Status overlay, however, is scoped to closures recorded FOR THIS
+        // REPORT'S DAY.
+        //
+        // `case_closure_dates` is a running archive with no concept of a work order
+        // being reopened: a WO closed in June stays in it forever. Overlaying on any
+        // match therefore branded live calls — SSC Pending, Visit Estimate, Scheduled —
+        // as "WO Closed" / "Closed - Canceled" purely because they had been closed at
+        // some point in the past and later came back.
+        //
+        // Today's WIP file is the newer information: a work order present in it as an
+        // active row is open in Flex right now, whatever an old closure record says. So
+        // only a closure dated to this report's own day may rewrite the cell, which also
+        // means reopening an older report still shows that day's closures.
+        const closedOnThisReportDay =
+          Boolean(reportDate) && closure.closedOnIso === reportDate;
+
+        if (closure.status && closedOnThisReportDay) {
           // Keep the vendor's WIP-report value visible in its own column before
           // overwriting the cell the whole dashboard reads.
           output["Flex Status (WIP)"] = output["Flex Status"] ?? "";
           output["Flex Status"] = closure.status;
-        }
-        if (closure.statusRemarks) {
-          output["Status Remarks"] = closure.statusRemarks;
+
+          if (closure.statusRemarks) {
+            output["Status Remarks"] = closure.statusRemarks;
+          }
         }
       }
 
