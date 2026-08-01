@@ -25,12 +25,15 @@ import { loadCustomerFeedbackLookup } from "../../repositories/customerFeedbackR
 export async function enrichReportWithClosureDates<
   T extends {
     reportDate?: string;
-    rows: Array<{ output: Record<string, unknown> }>;
+    rows: Array<{
+      output: Record<string, unknown>;
+      carryForward?: { closedSyntheticRow?: boolean } | undefined;
+    }>;
   },
 >(report: T): Promise<T> {
   try {
-    // The day this report is FOR. The Flex Status overlay is scoped to it (see below);
-    // an empty value disables the overlay rather than guessing.
+    // The day this report is FOR. Used by the overlay rule below; an empty value
+    // means an open row is never overlaid rather than the date being guessed.
     const reportDate = String(report.reportDate ?? "").slice(0, 10);
     const [{ byWoId, byCaseId }, feedback] = await Promise.all([
       loadClosureDateLookup(),
@@ -62,23 +65,30 @@ export async function enrichReportWithClosureDates<
           output["Case Closed Date"] = closure.closedOn;
         }
 
-        // The Flex Status overlay, however, is scoped to closures recorded FOR THIS
-        // REPORT'S DAY.
+        // The Flex Status overlay turns on the ROW'S OWN STATE, not on the calendar.
         //
-        // `case_closure_dates` is a running archive with no concept of a work order
-        // being reopened: a WO closed in June stays in it forever. Overlaying on any
-        // match therefore branded live calls — SSC Pending, Visit Estimate, Scheduled —
-        // as "WO Closed" / "Closed - Canceled" purely because they had been closed at
-        // some point in the past and later came back.
+        //   closed row  -> overlay, whatever the closure's date. A call that has left
+        //                  the WIP is closed, and the vendor status is the only thing
+        //                  that says whether it was completed ("WO Closed") or
+        //                  abandoned ("Closed - Canceled"). Yesterday's and last
+        //                  month's closures show it too.
+        //   open row    -> overlay ONLY for a closure dated to this report's day.
         //
-        // Today's WIP file is the newer information: a work order present in it as an
-        // active row is open in Flex right now, whatever an old closure record says. So
-        // only a closure dated to this report's own day may rewrite the cell, which also
-        // means reopening an older report still shows that day's closures.
+        // The open-row restriction matters because `case_closure_dates` is a running
+        // archive with no concept of a work order being REOPENED: a WO closed in June
+        // stays in it forever. Overlaying every match branded live calls — SSC Pending,
+        // Visit Estimate, Scheduled — as closed purely because they had once been
+        // closed and later came back (16 such rows on 2026-08-01, against 3 real
+        // closures). Today's WIP file is the newer truth about an active row.
+        //
+        // Keeping same-day closures on open rows is deliberate: when Flex closes a call
+        // after the WIP file was pulled, that disagreement is exactly what the
+        // reconciliation card reports as "Closed in Flex, not here".
+        const isClosedRow = row.carryForward?.closedSyntheticRow === true;
         const closedOnThisReportDay =
           Boolean(reportDate) && closure.closedOnIso === reportDate;
 
-        if (closure.status && closedOnThisReportDay) {
+        if (closure.status && (isClosedRow || closedOnThisReportDay)) {
           // Keep the vendor's WIP-report value visible in its own column before
           // overwriting the cell the whole dashboard reads.
           output["Flex Status (WIP)"] = output["Flex Status"] ?? "";

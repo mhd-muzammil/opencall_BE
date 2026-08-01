@@ -34,8 +34,15 @@ function closure(overrides: Partial<ClosureRecord> = {}): ClosureRecord {
 function reportWith(
   rows: Array<Record<string, unknown>>,
   reportDate = "2026-08-01",
+  closedSyntheticRow = false,
 ) {
-  return { reportDate, rows: rows.map((output) => ({ output })) };
+  return {
+    reportDate,
+    rows: rows.map((output) => ({
+      output,
+      carryForward: { closedSyntheticRow },
+    })),
+  };
 }
 
 beforeEach(() => {
@@ -81,6 +88,36 @@ describe("enrichReportWithClosureDates — Flex Status overlay", () => {
     expect(report.rows[0]?.output["Status Remarks"]).toBeUndefined();
     // The historical closure date is still useful and is still stamped.
     expect(report.rows[0]?.output["Case Closed Date"]).toBe("14-06-2026");
+  });
+
+  it("overlays an OLD closure on a row that has actually closed", async () => {
+    // A call that has left the WIP is closed; the vendor status is the only thing that
+    // says whether it was completed ("WO Closed") or abandoned ("Closed - Canceled"),
+    // and that matters at any age because only completions are billable.
+    mocks.loadClosureDateLookup.mockResolvedValue({
+      byWoId: new Map([
+        [
+          "WO-1",
+          closure({
+            closedOnIso: "2026-06-14",
+            closedOn: "14-06-2026",
+            status: "Closed - Canceled",
+          }),
+        ],
+      ]),
+      byCaseId: new Map(),
+    });
+
+    const report = await enrichReportWithClosureDates(
+      reportWith(
+        [{ "Ticket ID": "WO-1", "Flex Status": "Request to Cancel" }],
+        "2026-08-01",
+        true,
+      ),
+    );
+
+    expect(report.rows[0]?.output["Flex Status"]).toBe("Closed - Canceled");
+    expect(report.rows[0]?.output["Flex Status (WIP)"]).toBe("Request to Cancel");
   });
 
   it("shows an older report the closures of ITS day, not today's", async () => {
