@@ -44,6 +44,9 @@ const config = {
   closureReportName: str("FIELDEZ_CLOSURE_REPORT_NAME"),
   closureIntervalMs: num("FIELDEZ_CLOSURE_INTERVAL_MS", 60 * 60 * 1000), // 1 h default
   closureDateMode: str("FIELDEZ_CLOSURE_DATE_MODE", "today"),
+  // Pause between two jobs that came due in the same cycle, so the second one does
+  // not hit the API while the first one's report generation is still finishing.
+  jobStaggerMs: num("FIELDEZ_JOB_STAGGER_MS", 60 * 1000),
   // OpenCall target
   apiUrl: str("OPENCALL_API_URL", "http://localhost:4000").replace(/\/$/, ""),
   token: str("OPENCALL_TOKEN"),
@@ -592,7 +595,8 @@ async function main(): Promise<void> {
         await ensureReportsPage(page).catch((error: unknown) => {
           log(`could not reach the reports page: ${error instanceof Error ? error.message : String(error)}`);
         });
-        for (const job of due) {
+        for (let index = 0; index < due.length; index += 1) {
+          const job = due[index]!;
           if (isShuttingDown) break;
           try {
             await job.run(page);
@@ -602,10 +606,24 @@ async function main(): Promise<void> {
             // Schedule off completion, so a slow cycle never queues up behind itself.
             job.nextRunAt = Date.now() + job.intervalMs;
           }
+
+          const isLast = index === due.length - 1;
+          if (isLast || isShuttingDown) continue;
+
           // A failed job may have left a modal open; go back to a known-good page
           // before the next job touches it.
-          if (due.length > 1) {
-            await ensureReportsPage(page).catch(() => {});
+          await ensureReportsPage(page).catch(() => {});
+
+          // Let the API settle before the next job hits it. Jobs only ever bunch up
+          // on the FIRST cycle after a restart, when both are due at once — and that
+          // is exactly when the closure import failed with a 500, landing ~5 seconds
+          // behind a 2400-row report generation while it still held its database
+          // connections. Every closure run that was minutes clear of the WIP job
+          // succeeded. Cheap insurance: the jobs are hourly and quarter-hourly, so
+          // spacing them by a minute costs nothing.
+          if (config.jobStaggerMs > 0) {
+            log(`settling ${Math.round(config.jobStaggerMs / 1000)}s before the next job…`);
+            await interruptibleSleep(config.jobStaggerMs);
           }
         }
       }

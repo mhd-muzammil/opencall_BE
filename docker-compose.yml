@@ -128,6 +128,10 @@ services:
       FIELDEZ_CLOSURE_REPORT_NAME: ${FIELDEZ_CLOSURE_REPORT_NAME:-}
       FIELDEZ_CLOSURE_INTERVAL_MS: ${FIELDEZ_CLOSURE_INTERVAL_MS:-3600000}
       FIELDEZ_CLOSURE_DATE_MODE: ${FIELDEZ_CLOSURE_DATE_MODE:-today}
+      # Pause between two jobs due in the same cycle (only ever on the first cycle
+      # after a restart), so the closure import does not hit the API while the WIP
+      # job's report generation is still finishing.
+      FIELDEZ_JOB_STAGGER_MS: ${FIELDEZ_JOB_STAGGER_MS:-60000}
       FIELDEZ_PROFILE_DIR: /data/fieldez-profile
       # The closure workbook's timestamps are IST wall-clock. The parser decodes Excel
       # serials timezone-free, but this keeps every other date path (and the logs) on
