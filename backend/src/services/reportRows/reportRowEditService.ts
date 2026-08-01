@@ -14,6 +14,7 @@ import {
 import { findRegionById } from "../../repositories/regionRepository.js";
 import { workLocationMatchesRegion } from "../rbac/regionRowAccess.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
+import { dispatchAssignedCaseToPayroll } from "../payroll/dispatchAssignedCase.js";
 import {
   appendCustomerPendingKci,
   buildScheduledRemark,
@@ -382,6 +383,13 @@ export async function applyReportRowManualFieldEdit(input: {
 
   if (!updated) {
     throw unprocessableEntity("Report row could not be updated", { rowId });
+  }
+
+  // Mirror a freshly-scheduled call (engineer assigned) into the Payroll app so
+  // the engineer sees the case and streams GPS. Fire-and-forget: never blocks or
+  // fails this save; no-op unless Payroll is configured.
+  if (settingScheduled) {
+    dispatchAssignedCaseToPayroll(updated);
   }
 
   return {

@@ -87,6 +87,9 @@ export interface PayrollCaseInput {
   latitude?: number | null;
   longitude?: number | null;
   priority?: "low" | "medium" | "high" | "urgent";
+  // Originating-system reference (OpenCall ticket id) — makes dispatch idempotent
+  // so re-sending the same ticket updates the one case instead of duplicating.
+  external_ref?: string;
 }
 
 export interface PayrollCase {
