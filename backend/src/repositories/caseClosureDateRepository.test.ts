@@ -158,4 +158,22 @@ describe("replaceCaseClosureDates", () => {
     const deletes = statements().filter((sql) => sql.startsWith("DELETE"));
     expect(deletes).toEqual(["DELETE FROM case_closure_dates"]);
   });
+
+  it("refuses to wipe the table for an empty batch", async () => {
+    // The DELETE is unconditional, so a file that parsed to no usable rows — a
+    // headers-only morning export, a truncated download, unexpected column names —
+    // used to destroy the entire closure history and put nothing back. It emptied
+    // production on 2026-08-01.
+    expect(await replaceCaseClosureDates([])).toBe(0);
+    expect(mocks.connect).not.toHaveBeenCalled();
+  });
+
+  it("refuses when every row is unusable, not just when the list is empty", async () => {
+    // dedupeByBothKeys drops rows with no key at all, so a workbook whose Ticket No
+    // and Case Id columns did not parse arrives here non-empty but reduces to nothing.
+    expect(
+      await replaceCaseClosureDates([record({ woId: "", caseId: "" })]),
+    ).toBe(0);
+    expect(mocks.connect).not.toHaveBeenCalled();
+  });
 });

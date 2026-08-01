@@ -98,6 +98,15 @@ export async function replaceCaseClosureDates(
 ): Promise<number> {
   const deduped = dedupeByBothKeys(rows);
 
+  // NEVER wipe the table for an empty batch. The DELETE below is unconditional, so an
+  // import whose file parsed to no usable rows — a headers-only morning export, a
+  // truncated download, a workbook with unexpected column names — used to destroy the
+  // entire closure history and replace it with nothing. Callers surface this as an
+  // error; here we simply refuse to touch the table.
+  if (deduped.length === 0) {
+    return 0;
+  }
+
   const client: PoolClient = await pool.connect();
   try {
     await client.query("BEGIN");

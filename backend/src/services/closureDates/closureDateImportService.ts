@@ -339,6 +339,19 @@ export async function importClosureDatesFromFile(
     );
   }
 
+  // A replace import REPLACES: an empty batch would leave nothing behind. The
+  // repository refuses to act on one, and this turns that refusal into a message the
+  // person who uploaded actually sees, instead of a silent "imported 0" that looks
+  // like success while the closure history is gone.
+  if (mode === "replace" && records.length === 0) {
+    throw badRequest(
+      `No usable rows found in the closure workbook (${totalRows} rows read), so the ` +
+        `existing closure data was left untouched. Check the file covers the dates you ` +
+        `expect and has its Ticket No / Case Id columns.`,
+      { field: "closureReport", totalRows, skippedNoKey },
+    );
+  }
+
   const imported =
     mode === "merge"
       ? await mergeCaseClosureDates(records)
