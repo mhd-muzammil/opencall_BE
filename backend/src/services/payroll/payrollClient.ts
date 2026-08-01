@@ -110,7 +110,12 @@ export async function createCase(input: PayrollCaseInput): Promise<PayrollCase> 
 /** Assign by engineer name/email/id — Payroll resolves whichever is provided. */
 export async function assignCase(
   caseId: number,
-  engineer: { engineer_name?: string; engineer_email?: string; engineer_id?: number },
+  engineer: {
+    engineer_name?: string;
+    engineer_email?: string;
+    engineer_phone?: string;
+    engineer_id?: number;
+  },
 ): Promise<PayrollCase> {
   return authed<PayrollCase>(`/api/cases/${caseId}/assign/`, {
     method: "POST",
@@ -122,21 +127,22 @@ export async function assignCase(
  * Convenience: create a case and immediately assign it to an engineer.
  *
  * The engineer in OpenCall and the employee in Payroll are separate DB records
- * linked only by identity. Pass BOTH email and name when you have them — Payroll
- * matches email first (unique + stable), falling back to the (case-insensitive)
- * name. Email is strongly recommended; name-only matching breaks on any spelling
- * or formatting difference between the two systems.
+ * linked only by identity. Pass email, phone and name when you have them —
+ * Payroll matches email first, then phone (both unique + stable), then the
+ * (case-insensitive) name. Email/phone are strongly preferred; name-only
+ * matching breaks on any spelling or formatting difference between the systems.
  */
 export async function dispatchCase(
   input: PayrollCaseInput,
-  engineer: { email?: string | null; name?: string | null },
+  engineer: { email?: string | null; phone?: string | null; name?: string | null },
 ): Promise<PayrollCase> {
-  if (!engineer.email && !engineer.name) {
-    throw new Error("dispatchCase needs the engineer's email or name to match a Payroll employee.");
+  if (!engineer.email && !engineer.phone && !engineer.name) {
+    throw new Error("dispatchCase needs the engineer's email, phone or name to match a Payroll employee.");
   }
   const created = await createCase(input);
-  const ref: { engineer_email?: string; engineer_name?: string } = {};
+  const ref: { engineer_email?: string; engineer_phone?: string; engineer_name?: string } = {};
   if (engineer.email) ref.engineer_email = engineer.email;
+  if (engineer.phone) ref.engineer_phone = engineer.phone;
   if (engineer.name) ref.engineer_name = engineer.name;
   return assignCase(created.id, ref);
 }

@@ -1,4 +1,5 @@
 import type { EditedReportRow } from "../../repositories/dailyCallPlanReportRepository.js";
+import { findEngineerByNameInRegion } from "../../repositories/engineerRepository.js";
 import { dispatchCase, isPayrollConfigured } from "./payrollClient.js";
 
 /**
@@ -13,21 +14,35 @@ import { dispatchCase, isPayrollConfigured } from "./payrollClient.js";
 export function dispatchAssignedCaseToPayroll(row: EditedReportRow): void {
   if (!isPayrollConfigured() || !row.engineer) return;
 
-  const label = [row.part, row.segment].filter(Boolean).join(" - ") || "Service call";
-  const title = `${label} (${row.ticketId})`.slice(0, 200);
-  const description = [row.rca, row.remarks].filter(Boolean).join("\n");
+  const engineerName = row.engineer;
 
-  void dispatchCase(
-    {
-      customer_name: row.customerName ?? "Unknown",
-      title,
-      description,
-      address: row.workLocation ?? row.location ?? "",
-      priority: "medium",
-      external_ref: row.ticketId,
-    },
-    { name: row.engineer },
-  ).catch((err) => {
+  void (async () => {
+    // Resolve the engineer's email + phone from the engineers table so Payroll
+    // can match on those (unique, reliable) rather than only the display name.
+    let email: string | null = null;
+    let phone: string | null = null;
+    if (row.regionId) {
+      const eng = await findEngineerByNameInRegion(engineerName, row.regionId);
+      email = eng?.email ?? null;
+      phone = eng?.phone ?? null;
+    }
+
+    const label = [row.part, row.segment].filter(Boolean).join(" - ") || "Service call";
+    const title = `${label} (${row.ticketId})`.slice(0, 200);
+    const description = [row.rca, row.remarks].filter(Boolean).join("\n");
+
+    await dispatchCase(
+      {
+        customer_name: row.customerName ?? "Unknown",
+        title,
+        description,
+        address: row.workLocation ?? row.location ?? "",
+        priority: "medium",
+        external_ref: row.ticketId,
+      },
+      { email, phone, name: engineerName },
+    );
+  })().catch((err) => {
     // eslint-disable-next-line no-console
     console.error(
       "[payroll] dispatchAssignedCase failed for ticket",
