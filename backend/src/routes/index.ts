@@ -18,6 +18,7 @@ import { quotationRouter } from "./quotationRoutes.js";
 import { specialAccessSessionRouter } from "./specialAccessSessionRoutes.js";
 import { vendorAccessSessionRouter } from "./vendorAccessSessionRoutes.js";
 import { warrantyRouter } from "./warrantyRoutes.js";
+import { engineerTargetRouter } from "./engineerTargetRoutes.js";
 import { renewalRouter } from "./renewalRoutes.js";
 import { payrollTrackingRouter } from "./payrollTrackingRoutes.js";
 
@@ -42,5 +43,6 @@ apiRouter.use("/record-layout", recordLayoutRouter);
 apiRouter.use("/special-access", specialAccessSessionRouter);
 apiRouter.use("/vendor-access", vendorAccessSessionRouter);
 apiRouter.use("/warranty", warrantyRouter);
+apiRouter.use("/engineer-target", engineerTargetRouter);
 apiRouter.use("/renewal", renewalRouter);
 apiRouter.use("/payroll-tracking", payrollTrackingRouter);
