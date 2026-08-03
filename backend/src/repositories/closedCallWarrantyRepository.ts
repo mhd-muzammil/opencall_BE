@@ -87,16 +87,23 @@ const LATEST_REPORT_CTE = `
  * between reports, so approximate selection is fine (the cache accumulates over days).
  */
 export async function getLatestReportClosedSerials(): Promise<string[]> {
+  // Order matters: the daily lookup budget is taken from the FRONT of this list
+  // (enqueueUncached slices to the remaining cap). The closed ledger accumulates
+  // every past closure, so plain ticket order spent the whole budget on the oldest
+  // backlog and today's closures never got looked up. Same-day closures first,
+  // then newest tickets first.
   const result = await query<{ product_serial_no: string | null }>(
     `${LATEST_REPORT_CTE}
-      SELECT DISTINCT rows.product_serial_no
+      SELECT rows.product_serial_no
         FROM latest
         JOIN daily_call_plan_report_rows rows
           ON rows.report_id = latest.report_id
        WHERE NOT rows.is_excluded
          AND (rows.change_type = 'CLOSED' OR rows.same_day_closed = TRUE)
          AND rows.product_serial_no IS NOT NULL
-         AND TRIM(rows.product_serial_no) <> ''`,
+         AND TRIM(rows.product_serial_no) <> ''
+       GROUP BY rows.product_serial_no
+       ORDER BY BOOL_OR(rows.same_day_closed) DESC, MAX(rows.ticket_id) DESC`,
   );
   return result.rows
     .map((r) => r.product_serial_no)
@@ -117,6 +124,10 @@ export interface ClosedCallRow {
  * recent), so the list matches the closed-call ledger.
  */
 export async function getLatestReportClosedCalls(): Promise<ClosedCallRow[]> {
+  // Outer ORDER BY: same-day closures first, then newest tickets. The on-view
+  // enqueue takes the daily lookup budget from the front of this list, and the
+  // ever-growing closed ledger means ticket order alone starves today's calls —
+  // the rows the person opening Warranty Lookup actually came to check.
   const result = await query<{
     ticket_id: string | null;
     customer_name: string | null;
@@ -124,13 +135,14 @@ export async function getLatestReportClosedCalls(): Promise<ClosedCallRow[]> {
     work_location: string | null;
     product: string | null;
   }>(
-    `${LATEST_REPORT_CTE}
+    `${LATEST_REPORT_CTE}, picked AS (
       SELECT DISTINCT ON (rows.ticket_id)
              rows.ticket_id,
              rows.customer_name,
              rows.product_serial_no,
              rows.work_location,
-             rows.product
+             rows.product,
+             rows.same_day_closed
         FROM latest
         JOIN daily_call_plan_report_rows rows
           ON rows.report_id = latest.report_id
@@ -139,8 +151,11 @@ export async function getLatestReportClosedCalls(): Promise<ClosedCallRow[]> {
        ORDER BY
          rows.ticket_id,
          (rows.product_serial_no IS NOT NULL AND TRIM(rows.product_serial_no) <> '') DESC,
-         rows.id DESC`,
-
+         rows.id DESC
+      )
+      SELECT ticket_id, customer_name, product_serial_no, work_location, product
+        FROM picked
+       ORDER BY same_day_closed DESC NULLS LAST, ticket_id DESC`,
   );
   return result.rows.map((r) => ({
     ticketId: (r.ticket_id ?? "").trim(),
