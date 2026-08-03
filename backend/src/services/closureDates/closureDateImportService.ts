@@ -1,6 +1,7 @@
 import xlsx from "xlsx";
 import {
   mergeCaseClosureDates,
+  recordClosureSyncRun,
   replaceCaseClosureDates,
   type CaseClosureRecordInput,
 } from "../../repositories/caseClosureDateRepository.js";
@@ -356,6 +357,16 @@ export async function importClosureDatesFromFile(
     mode === "merge"
       ? await mergeCaseClosureDates(records)
       : await replaceCaseClosureDates(records);
+
+  // Record the RUN, imported-0 included: an empty new-day export is a healthy sync,
+  // and this is what keeps the freshness badge honest about a live worker. Best-effort
+  // (never fails the import) and a no-op until migration 042 exists.
+  await recordClosureSyncRun({
+    source: importSource,
+    mode,
+    totalRows,
+    imported,
+  });
 
   return {
     totalRows,

@@ -503,16 +503,21 @@ async function syncClosure(page: Page): Promise<void> {
     destBaseName: "flexclosure-latest",
   });
   const hash = hashFile(file);
+  const unchanged = hash === readLastHash("closure");
 
-  if (hash === readLastHash("closure")) {
-    log("[closure] report unchanged since last import — skipping.");
-    return;
-  }
-
+  // Import even when the file is unchanged. The import call is what stamps the
+  // sync as alive (closure_sync_runs); skipping identical files froze the
+  // freshness badge at the previous successful data import, so every quiet
+  // morning — and a genuinely dead worker — both read "stale". The file is one
+  // day's closures (a few dozen work orders), so the redundant merge is cheap.
+  //
   // The byte size distinguishes a real workbook from an error page or an empty
   // export, which is the other way this import can fail with a server error.
   const bytes = statSync(file).size;
-  log(`[closure] report changed (${today}, ${bytes} bytes) — importing to OpenCall…`);
+  log(
+    `[closure] report ${unchanged ? "unchanged" : "changed"} (${today}, ${bytes} bytes)` +
+      ` — importing to OpenCall…`,
+  );
 
   const out = await importClosureToOpenCall(file);
   if (out.status !== 201 && out.status !== 200) {

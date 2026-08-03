@@ -253,6 +253,79 @@ export interface ClosureImportStatus {
   lastImportSource: string | null;
   /** YYYY-MM-DD of the latest closure day stored. */
   lastClosedOn: string | null;
+  /**
+   * ISO instant of the most recent import RUN — even one that imported 0 rows (an empty
+   * new-day export). This is the liveness signal; `lastImportedAt` only moves when a run
+   * actually wrote rows, which every morning is hours later than the last healthy run.
+   * Null until migration 042 is applied or before the first recorded run.
+   */
+  lastSyncAt: string | null;
+  /** 'AUTO' / 'MANUAL' — the source of that most recent run. */
+  lastSyncSource: string | null;
+  /** Work orders that run imported (0 for an empty export). */
+  lastSyncImported: number | null;
+}
+
+/** Migration 042 may not be applied yet — every reader/writer of the run log checks. */
+async function closureSyncRunsTablePresent(): Promise<boolean> {
+  const result = await query<{ present: boolean }>(
+    `SELECT to_regclass('public.closure_sync_runs') IS NOT NULL AS present`,
+  );
+  return result.rows[0]?.present ?? false;
+}
+
+/**
+ * Record one closure import run. Best-effort by design: the import itself must never
+ * fail because the freshness bookkeeping did, so callers fire-and-forget this and a
+ * missing table (migration 042 not yet applied) is simply a no-op.
+ */
+export async function recordClosureSyncRun(input: {
+  source: string;
+  mode: string;
+  totalRows: number;
+  imported: number;
+}): Promise<void> {
+  try {
+    if (!(await closureSyncRunsTablePresent())) return;
+    await query(
+      `INSERT INTO closure_sync_runs (source, mode, total_rows, imported)
+       VALUES ($1, $2, $3, $4)`,
+      [input.source, input.mode, input.totalRows, input.imported],
+    );
+    // The auto-sync runs ~96 times a day; without pruning this log accumulates forever
+    // (cf. the closed-call ledger). 90 days is far more history than the badge needs.
+    await query(
+      `DELETE FROM closure_sync_runs WHERE ran_at < NOW() - INTERVAL '90 days'`,
+    );
+  } catch (error) {
+    console.warn("[ClosureDates] could not record sync run:", error);
+  }
+}
+
+interface LastClosureSyncRun {
+  ranAt: string;
+  source: string;
+  imported: number;
+}
+
+async function getLastClosureSyncRun(): Promise<LastClosureSyncRun | null> {
+  if (!(await closureSyncRunsTablePresent())) return null;
+  const result = await query<{
+    ran_at: string;
+    source: string;
+    imported: number;
+  }>(
+    `SELECT to_char(ran_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS ran_at,
+            source,
+            imported
+       FROM closure_sync_runs
+      ORDER BY ran_at DESC, id DESC
+      LIMIT 1`,
+  );
+  const row = result.rows[0];
+  return row
+    ? { ranAt: row.ran_at, source: row.source, imported: Number(row.imported) }
+    : null;
 }
 
 /**
@@ -277,11 +350,15 @@ export async function getClosureImportStatus(): Promise<ClosureImportStatus> {
   );
 
   const row = result.rows[0];
+  const lastRun = await getLastClosureSyncRun();
   return {
     count: Number(row?.count ?? 0),
     lastImportedAt: row?.last_imported_at ?? null,
     lastImportSource: row?.last_import_source ?? null,
     lastClosedOn: row?.last_closed_on ?? null,
+    lastSyncAt: lastRun?.ranAt ?? null,
+    lastSyncSource: lastRun?.source ?? null,
+    lastSyncImported: lastRun?.imported ?? null,
   };
 }
 
