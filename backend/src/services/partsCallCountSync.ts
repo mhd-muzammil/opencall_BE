@@ -4,6 +4,7 @@ import {
   inventoryFetch,
   inventoryApiConfigured,
 } from "./inventorySyncService.js";
+import { filterReceivedParts } from "./normalization/dedupeRowsByTicket.js";
 
 /**
  * OpenCall's "Active Part Cases" — active rows (no closed-synthetic, no Request-to-Cancel)
@@ -11,8 +12,13 @@ import {
  *
  * Pushes two things to inventory, computed from the already-generated report (never
  * re-generates):
- *   - the region-wise COUNT  -> HP Stock region cards' "Active" number
- *   - the CASE ID list       -> scopes HP Stock's part-value bands to these cases
+ *   - the region-wise COUNT  -> HP Stock region cards' "Active" number. Narrowed to
+ *     work orders holding a physically RECEIVED spare (Good Part Installed Status =
+ *     RCV_SPARE); an all-in-transit (YTR_INTRANSIT) case is an active part case but
+ *     nothing has landed in stock yet, so it is not counted.
+ *   - the CASE ID list       -> scopes HP Stock's part-value bands to these cases.
+ *     Deliberately still EVERY active part case (received or not), so the bands and
+ *     the HP Stock table keep covering the same set they always have.
  */
 
 export interface PartsCallCountRow {
@@ -61,7 +67,11 @@ export function computeActivePartData(
     const region = mapAspCodeToRegion(String(output["Work Location"] ?? ""));
     if (!region) continue;
 
-    byRegion.set(region, (byRegion.get(region) ?? 0) + 1);
+    // Seed the region so it is always pushed — a region whose active part cases are
+    // all in transit must land as an explicit 0, not go missing (a missing row would
+    // leave the card showing whatever was pushed for it earlier).
+    const received = filterReceivedParts(row.match?.flexWip?.parts ?? []).length > 0;
+    byRegion.set(region, (byRegion.get(region) ?? 0) + (received ? 1 : 0));
 
     const caseId = String(row.enriched.case_id ?? "").trim();
     if (caseId && !seenCases.has(caseId)) {
@@ -158,9 +168,9 @@ export async function pushActivePartData(
   lastPushedFingerprint = fingerprint;
   const total = data.counts.reduce((s, r) => s + r.count, 0);
   console.info(
-    `[PartsCallCounts] Synced ${data.reportDate} — Active Part Cases: ${total} (${data.counts
+    `[PartsCallCounts] Synced ${data.reportDate} — RCV_SPARE part cases: ${total} (${data.counts
       .map((r) => `${r.region} ${r.count}`)
-      .join(", ")}), ${data.cases.length} case ids`,
+      .join(", ")}), ${data.cases.length} active part case ids`,
   );
 }
 
