@@ -16,6 +16,12 @@ import {
   findColumnsUsedBySuperAdmins,
   findLatestFlexRawColumnHeaders,
 } from "../repositories/userRecordLayoutRepository.js";
+import { findReportDatesForRegions } from "../repositories/historyRepository.js";
+import { listRtplStatusChanges } from "../repositories/activityLogRepository.js";
+import {
+  allowedAspCodesForRequest,
+  aspScopeToArray,
+} from "../services/rbac/principalAspScope.js";
 import { updateReportRowForSpecialAccess } from "../services/specialAccess/specialAccessRowEditService.js";
 import {
   getEngineersDropdownForSpecialAccess,
@@ -27,6 +33,9 @@ import { recordLayoutSchema } from "../validators/recordLayoutValidator.js";
 import { reportRowEditRequestSchema } from "../validators/reportRowEditRequestValidator.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { badRequest, forbidden } from "../utils/httpError.js";
+
+/** A calendar day, "YYYY-MM-DD". Shared by the report date param and Final EOD. */
+const workingDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 /** Ensures the caller is a special-access principal (not a regular user). */
 function requireSpecialAccess(request: Request): SpecialAccessPrincipal {
@@ -88,11 +97,82 @@ export const getSpecialAccessRtplStatusesDropdownController: RequestHandler =
     });
   });
 
+/**
+ * The scoped report. `?date=YYYY-MM-DD` opens a past day; omitted = latest.
+ *
+ * Past days used to be unreachable for special access entirely (`/report-history`
+ * is user-only, so the history panel was permanently empty), which meant a
+ * mistake made yesterday could never be corrected by the person who made it.
+ */
 export const getSpecialAccessReportController: RequestHandler = asyncHandler(
   async (request, response) => {
     const principal = requireSpecialAccess(request);
-    const result = await loadScopedReportForPrincipal(principal);
+    const rawDate = request.query.date;
+    const reportDate =
+      typeof rawDate === "string" && rawDate.trim().length > 0
+        ? workingDateSchema.parse(rawDate.trim())
+        : undefined;
+
+    const result = await loadScopedReportForPrincipal(principal, { reportDate });
     response.json({ data: result });
+  },
+);
+
+/** Days this credential can open, newest first — drives its date picker. */
+export const getSpecialAccessReportDatesController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const principal = requireSpecialAccess(request);
+    const dates = await findReportDatesForRegions(
+      principal.allRegions ? null : principal.regions,
+    );
+    response.json({ data: { dates } });
+  },
+);
+
+/**
+ * RTPL status activity, scoped to the credential's regions.
+ *
+ * Mirrors GET /report-rows/rtpl-status-changes (role-guarded to SUPER_ADMIN /
+ * REGION_ADMIN). The frontend used to skip the call entirely for special access
+ * to avoid a 401 banner, so every granted RTPL section showed an empty feed and
+ * looked broken. Scoping is by ASP code — the same `workLocationCodes` filter a
+ * REGION_ADMIN gets — so an all-regions grant sees everything and a scoped grant
+ * can never read another region's activity.
+ */
+export const getSpecialAccessRtplStatusChangesController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    requireSpecialAccess(request);
+
+    const reportId = String(request.query.reportId ?? "").trim();
+    const ticketId = String(request.query.ticketId ?? "").trim();
+    if (!reportId && !ticketId) {
+      throw badRequest("Missing report id or ticket id");
+    }
+
+    const rawChangeDate = request.query.changeDate ?? request.query.reportDate;
+    const changeDate =
+      typeof rawChangeDate === "string" && rawChangeDate.trim().length > 0
+        ? workingDateSchema.parse(rawChangeDate.trim())
+        : undefined;
+
+    const parsedLimit = Number(request.query.limit ?? 50);
+    const limit = Number.isFinite(parsedLimit) ? Math.min(parsedLimit, 200) : 50;
+
+    // Reuses the audited scope resolver rather than a fourth private copy of
+    // "which ASP codes may this principal see". null = unrestricted (allRegions).
+    const workLocationCodes = aspScopeToArray(
+      await allowedAspCodesForRequest(request),
+    );
+
+    const changes = await listRtplStatusChanges({
+      ...(reportId ? { reportId } : {}),
+      ...(ticketId ? { ticketId } : {}),
+      ...(changeDate ? { changeDate } : {}),
+      limit,
+      ...(workLocationCodes ? { workLocationCodes } : {}),
+    });
+
+    response.json({ data: changes });
   },
 );
 
@@ -105,7 +185,6 @@ export const getSpecialAccessReportController: RequestHandler = asyncHandler(
 // `productivity` grant and goes through the same hardened freeze path.
 // ---------------------------------------------------------------------------
 
-const workingDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const eodRegionIdSchema = z.string().uuid();
 const eodCloseBodySchema = z.object({ workingDate: workingDateSchema });
 

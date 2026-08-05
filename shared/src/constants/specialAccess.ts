@@ -54,8 +54,15 @@ export const SPECIAL_ACCESS_PERMISSION_LEVELS: readonly {
   label: string;
   description: string;
 }[] = [
-  { value: "view", label: "View only", description: "Read dashboards; cannot edit, upload or generate" },
-  { value: "edit", label: "Edit", description: "May edit report rows, upload and generate" },
+  // These strings are what the Admin Console promises an operator, so they must
+  // describe what the credential can ACTUALLY do. "Edit" used to claim "upload and
+  // generate": both /uploads and /reports/daily-call-plan/generate are user+role
+  // guarded, so a special-access token 401s on them every time — the console was
+  // advertising a capability that cannot exist. Uploading is also the one action
+  // that must stay with a full admin: a region-scoped file mass-closes every region
+  // missing from it (the 2026-07-18 incident), so it is deliberately not delegated.
+  { value: "view", label: "View only", description: "Read dashboards; cannot change anything" },
+  { value: "edit", label: "Edit", description: "May edit report rows and close Final EOD; cannot upload or generate" },
 ];
 
 export const SPECIAL_ACCESS_DATA_SCOPE_VALUES: readonly SpecialAccessDataScope[] =

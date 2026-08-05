@@ -1,7 +1,7 @@
 import type { SpecialAccessPrincipal } from "../../types/auth.js";
 import type { GeneratedDailyCallPlanReport } from "../../types/reportGeneration.js";
 import { generateDailyCallPlanReport } from "../callPlanGenerator/dailyCallPlanGenerator.js";
-import { findLatestCompletedReportSession } from "../../repositories/historyRepository.js";
+import { findLatestCompletedReportSessionForRegions } from "../../repositories/historyRepository.js";
 import { findRegionById } from "../../repositories/regionRepository.js";
 import { aspCodesForRegion } from "../rbac/regionRowAccess.js";
 import { enrichReportWithClosureDates } from "../closureDates/closureDateEnricher.js";
@@ -69,25 +69,39 @@ export interface ScopedReportResult {
   report: GeneratedDailyCallPlanReport | null;
   dataScope: SpecialAccessPrincipal["dataScope"];
   permissionLevel: SpecialAccessPrincipal["permissionLevel"];
+  /** The day the returned report covers, so the browser can label a past date. */
+  reportDate: string | null;
 }
 
 /**
- * Loads the globally-latest completed report and returns it filtered to exactly what the
- * special-access principal may see: their region set (or all regions) AND their data
- * scope (overall / warranty / trade). Filtering happens server-side, so data outside the
- * grant never reaches the browser. Returns `report: null` when no report exists yet.
+ * Loads the latest completed report the principal may see and returns it filtered to
+ * exactly that: their region set (or all regions) AND their data scope (overall /
+ * warranty / trade). Filtering happens server-side, so data outside the grant never
+ * reaches the browser. Returns `report: null` when no report exists yet.
+ *
+ * `reportDate` pins the load to one day (the history / past-date view); omit it for
+ * "whatever is latest".
+ *
+ * The session lookup is REGION-SCOPED. It used to be a global LIMIT 1, so the report
+ * followed whichever region uploaded last anywhere — a Vellore upload moved a
+ * Chennai + Kanchipuram credential onto a different report mid-shift, which reset the
+ * records filters and churned the rows under an open editor.
  */
 export async function loadScopedReportForPrincipal(
   principal: SpecialAccessPrincipal,
+  options?: { reportDate?: string | undefined },
 ): Promise<ScopedReportResult> {
   const base = {
     dataScope: principal.dataScope,
     permissionLevel: principal.permissionLevel,
   };
 
-  const session = await findLatestCompletedReportSession();
+  const session = await findLatestCompletedReportSessionForRegions(
+    principal.allRegions ? null : principal.regions,
+    { reportDate: options?.reportDate },
+  );
   if (!session || !session.flex_upload_batch_id) {
-    return { report: null, ...base };
+    return { report: null, reportDate: options?.reportDate ?? null, ...base };
   }
 
   const report = await generateDailyCallPlanReport({
@@ -136,6 +150,7 @@ export async function loadScopedReportForPrincipal(
       totalRows: filteredRows.length,
       regionBreakdown: filteredRegionBreakdown,
     }),
+    reportDate: session.report_date ?? null,
     ...base,
   };
 }

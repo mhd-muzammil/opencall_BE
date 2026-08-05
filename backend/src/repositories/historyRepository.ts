@@ -295,6 +295,95 @@ export async function findLatestCompletedReportSession(): Promise<ReportHistoryS
 }
 
 /**
+ * The newest COMPLETED report session VISIBLE TO A REGION SET — the scoped
+ * equivalent of `findLatestCompletedReportSession` above.
+ *
+ * Why this exists: the unscoped helper is a global LIMIT 1, so a special-access
+ * login granted Chennai + Kanchipuram followed whichever region uploaded last
+ * ANYWHERE. A Vellore upload silently moved them onto a different report,
+ * changing `reportId` under an open records grid (which reset their filters) and
+ * churning the row set beneath an open editor.
+ *
+ * The scope rule matches the frontend's auto-switch: region COMPATIBILITY, not
+ * equality. A session with `region_id IS NULL` is a worker/combined upload that
+ * contains every region's rows and must be included — those are the main source
+ * of fresh data. A session scoped to a region outside the grant is skipped:
+ * a region-scoped upload carries other regions' tickets forward verbatim, so
+ * skipping it loses no data and buys a stable report.
+ *
+ * `regionIds = null` means "all regions granted" and behaves like the unscoped
+ * helper. `reportDate` pins to one day; omit it for "latest available".
+ */
+export async function findLatestCompletedReportSessionForRegions(
+  regionIds: readonly string[] | null,
+  options?: { reportDate?: string | undefined },
+): Promise<ReportHistorySessionRow | null> {
+  const reportDate = options?.reportDate ?? null;
+  const sql = `
+    SELECT
+      sessions.*,
+      reports.report_date::TEXT AS report_date
+    FROM report_history_sessions sessions
+    JOIN daily_call_plan_reports reports
+      ON reports.id = sessions.daily_call_plan_report_id
+    WHERE sessions.status = 'COMPLETED'
+      AND sessions.flex_upload_batch_id IS NOT NULL
+      AND (
+        $1::uuid[] IS NULL
+        OR sessions.region_id IS NULL
+        OR sessions.region_id = ANY($1::uuid[])
+      )
+      AND ($2::date IS NULL OR reports.report_date = $2::date)
+    ORDER BY reports.report_date DESC NULLS LAST, sessions.created_at DESC
+    LIMIT 1;
+  `;
+  // Only an explicit `null` widens to all regions. An EMPTY array must stay
+  // empty — converting it to null would turn a credential with no granted
+  // region into an all-regions one.
+  const result = await query<ReportHistorySessionRow>(sql, [
+    regionIds === null ? null : [...regionIds],
+    reportDate,
+  ]);
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Distinct report dates a region set can open, newest first.
+ *
+ * The history panel is driven by `/report-history`, which is user-only, so a
+ * special-access login had `historySessions` permanently empty and no way to
+ * look at — let alone correct — any day but the current one. This is the scoped
+ * substitute: just the days, which is all a date picker needs. Same region
+ * compatibility rule as `findLatestCompletedReportSessionForRegions`.
+ */
+export async function findReportDatesForRegions(
+  regionIds: readonly string[] | null,
+  limit = 60,
+): Promise<string[]> {
+  const sql = `
+    SELECT DISTINCT reports.report_date::TEXT AS report_date
+    FROM report_history_sessions sessions
+    JOIN daily_call_plan_reports reports
+      ON reports.id = sessions.daily_call_plan_report_id
+    WHERE sessions.status = 'COMPLETED'
+      AND sessions.flex_upload_batch_id IS NOT NULL
+      AND reports.report_date IS NOT NULL
+      AND (
+        $1::uuid[] IS NULL
+        OR sessions.region_id IS NULL
+        OR sessions.region_id = ANY($1::uuid[])
+      )
+    ORDER BY report_date DESC
+    LIMIT $2;
+  `;
+  const result = await query<{ report_date: string }>(sql, [
+    regionIds === null ? null : [...regionIds],
+    limit,
+  ]);
+  return result.rows.map((row) => row.report_date);
+}
+
+/**
  * The newest COMPLETED session whose linked report is dated `reportDate`
  * (YYYY-MM-DD) — the same session the frontend "Specific Date" productivity
  * view restores. Used by the Final-EOD freeze to regenerate that day's report

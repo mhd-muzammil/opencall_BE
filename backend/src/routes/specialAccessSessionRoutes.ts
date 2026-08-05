@@ -8,6 +8,8 @@ import {
   getSpecialAccessRecordColumnsCatalogController,
   getSpecialAccessRecordLayoutController,
   getSpecialAccessReportController,
+  getSpecialAccessReportDatesController,
+  getSpecialAccessRtplStatusChangesController,
   getSpecialAccessRtplStatusesDropdownController,
   patchSpecialAccessReportRowController,
   putSpecialAccessRecordLayoutController,
@@ -23,6 +25,20 @@ specialAccessSessionRouter.use(requirePrincipal);
 
 specialAccessSessionRouter.get("/me", getSpecialAccessMeController);
 specialAccessSessionRouter.get("/report", getSpecialAccessReportController);
+
+// Past days. /report-history is user-only, so a special-access login had no
+// history at all and could never revisit — or correct — an earlier day's work.
+// These two are the scoped substitute: the days it may open, and (via
+// /report?date=) the report for one of them.
+specialAccessSessionRouter.get("/report-dates", getSpecialAccessReportDatesController);
+
+// RTPL status activity feed. Mirrors GET /report-rows/rtpl-status-changes, which is
+// role-guarded; without it the granted RTPL sections rendered a permanently empty
+// feed. Scoped to the credential's regions by ASP code.
+specialAccessSessionRouter.get(
+  "/rtpl-status-changes",
+  getSpecialAccessRtplStatusChangesController,
+);
 
 // Work Order Details & Entry reference data. Mirrors the admin dropdown endpoints, which
 // are role-guarded and therefore unreachable with a special-access token — without these
