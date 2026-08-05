@@ -34,7 +34,10 @@ import { closeDatabasePool, pool } from "../config/database.js";
 const SERIAL_COLLISION_WINDOW_MS = 10 * 60 * 1000;
 
 interface EditRow {
+  /** Wall clock in Asia/Kolkata, so the output matches the team's own clock. */
   occurred_at: string;
+  /** Epoch seconds from Postgres — timezone-proof arithmetic, no Date.parse. */
+  occurred_epoch: string;
   actor_email: string | null;
   username: string | null;
   report_id: string | null;
@@ -87,7 +90,13 @@ async function main(): Promise<void> {
   const edits = await pool.query<EditRow>(
     `
       SELECT
-        a.occurred_at::TEXT                              AS occurred_at,
+        -- Rendered in IST, NOT raw ::TEXT. A bare cast renders in the server's
+        -- session TimeZone, which is UTC in the container: the rows then print
+        -- as the PREVIOUS day for anything before 05:30 IST, under a header that
+        -- says otherwise. Epoch seconds come from Postgres so the window
+        -- arithmetic below never depends on JS parsing a Postgres timestamp.
+        (a.occurred_at AT TIME ZONE 'Asia/Kolkata')::TEXT AS occurred_at,
+        EXTRACT(EPOCH FROM a.occurred_at)::TEXT           AS occurred_epoch,
         a.actor_email,
         a.metadata->>'specialAccessUsername'             AS username,
         a.metadata->>'reportId'                          AS report_id,
@@ -164,7 +173,7 @@ async function main(): Promise<void> {
         rows.rtpl_status,
         rows.evening_rtpl_status,
         rows.remarks,
-        rows.updated_at::TEXT             AS updated_at
+        (rows.updated_at AT TIME ZONE 'Asia/Kolkata')::TEXT AS updated_at
       FROM daily_call_plan_report_rows rows
       JOIN daily_call_plan_reports reports ON reports.id = rows.report_id
       WHERE UPPER(TRIM(rows.ticket_id)) = ANY($1::text[])
@@ -240,10 +249,12 @@ async function main(): Promise<void> {
     for (let i = 1; i < list.length; i += 1) {
       const previous = list[i - 1]!;
       const currentEdit = list[i]!;
+      const gapMs =
+        (Number(currentEdit.occurred_epoch) - Number(previous.occurred_epoch)) * 1000;
       if (
         normalizeTicket(previous.ticket_id) !== normalizeTicket(currentEdit.ticket_id) &&
-        Date.parse(currentEdit.occurred_at) - Date.parse(previous.occurred_at) <=
-          SERIAL_COLLISION_WINDOW_MS
+        Number.isFinite(gapMs) &&
+        gapMs <= SERIAL_COLLISION_WINDOW_MS
       ) {
         collisions.push([serial, previous, currentEdit]);
       }
