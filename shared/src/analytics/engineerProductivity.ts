@@ -172,6 +172,32 @@ export function classifyProductivityStatus(
 }
 
 /**
+ * Does this outcome status mean the engineer actually attended the call?
+ *
+ * The single definition of "attended", shared by Engineer Productivity and the
+ * BOD/EOD status table so the two can never report different numbers for the
+ * same day. Attended is work that happened: CLOSED, PART_ORDER,
+ * UNDER_OBSERVATION and ATTENDED_OTHER.
+ *
+ * CX Reschedule (Customer Pending) and Engineer Delay are deliberately NOT
+ * attended — both mean the visit did not take place, the customer having
+ * rescheduled or the engineer not having reached the call. They stay Assigned.
+ *
+ * A blank status is not attended: nothing has happened yet.
+ */
+export function isAttendedOutcomeStatus(status: string): boolean {
+  const bucket = classifyProductivityStatus(status);
+  if (bucket === null) {
+    return false;
+  }
+  return (
+    bucket !== "SCHEDULED" &&
+    bucket !== "CX_RESCHEDULE" &&
+    bucket !== "ENGINEER_DELAY"
+  );
+}
+
+/**
  * The day-scoped bucket for one row, or null when the row is NOT part of the
  * day's plan (not booked / no usable status).
  *
