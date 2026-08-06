@@ -138,26 +138,43 @@ export interface DropdownEngineer {
   id: string;
   engineerCode: string | null;
   engineerName: string;
+  /**
+   * The engineer's own region, carried so the caller can narrow the picker to
+   * whichever ASP code the user is working in. `engineers.region_id` is NOT
+   * NULL and FKs to regions, so the join always resolves — but both stay
+   * nullable in the type because an older API build omits them entirely, and
+   * the frontend must degrade to "show everyone" rather than to an empty list.
+   */
+  regionCode: string | null;
+  regionName: string | null;
 }
 
 export async function listEngineersForDropdown(
   regionId: string | null,
 ): Promise<DropdownEngineer[]> {
-  const conditions: string[] = ["is_active = TRUE"];
+  const conditions: string[] = ["e.is_active = TRUE"];
   const params: unknown[] = [];
 
   if (regionId) {
     params.push(regionId);
-    conditions.push(`region_id = $${params.length}`);
+    conditions.push(`e.region_id = $${params.length}`);
   }
 
   const where = `WHERE ${conditions.join(" AND ")}`;
-  const result = await query<{ id: string; engineer_code: string | null; engineer_name: string }>(
+  const result = await query<{
+    id: string;
+    engineer_code: string | null;
+    engineer_name: string;
+    region_code: string | null;
+    region_name: string | null;
+  }>(
     `
-      SELECT id, engineer_code, engineer_name
-      FROM engineers
+      SELECT e.id, e.engineer_code, e.engineer_name,
+             r.code AS region_code, r.name AS region_name
+      FROM engineers e
+      JOIN regions r ON r.id = e.region_id
       ${where}
-      ORDER BY engineer_name ASC
+      ORDER BY e.engineer_name ASC
     `,
     params,
   );
@@ -166,6 +183,8 @@ export async function listEngineersForDropdown(
     id: row.id,
     engineerCode: row.engineer_code,
     engineerName: row.engineer_name,
+    regionCode: row.region_code,
+    regionName: row.region_name,
   }));
 }
 
