@@ -84,10 +84,14 @@ const REQUIRED_COLUMNS: Record<string, string[]> = {
     "manual_notes",
     "updated_at",
     "updated_by",
+    // Feature column (migration 040), not core — see FEATURE_COLUMNS.
+    "evening_rtpl_status_updated_at",
   ],
   report_comparisons: ["current_session_id", "previous_session_id", "summary_json"],
   report_row_diffs: ["ticket_id", "change_type", "changed_fields"],
   flex_raw_records: ["source_month"],
+  // Feature columns (migration 041).
+  case_closure_dates: ["closed_on", "closure_status"],
 };
 
 /** Rows as information_schema would return them for the given tables. */
@@ -110,6 +114,51 @@ describe("verifyRuntimeSchema", () => {
     expect(result.degraded).toBe(false);
     expect(result.missingTables).toEqual([]);
     expect(result.missingFeatureTables).toEqual([]);
+    expect(result.missingFeatureColumns).toEqual([]);
+  });
+
+  /**
+   * The 2026-08-06 outage, as this endpoint should have described it. Migration
+   * 040 was unapplied on production, so every query through the report-row
+   * repository — report history, report generation, engineer productivity —
+   * answered 500 while `/health/runtime` reported `ready` with nothing missing.
+   * A dropped column on a table that DOES exist was the blind spot.
+   */
+  it("reports a missing feature column as degraded WITHOUT failing readiness", async () => {
+    const rows = schemaRows([...CORE_TABLES, ...FEATURE_TABLES]).filter(
+      (row) =>
+        !(
+          row.table_name === "daily_call_plan_report_rows" &&
+          row.column_name === "evening_rtpl_status_updated_at"
+        ),
+    );
+    mocks.query.mockResolvedValue({ rows });
+
+    const result = await verifyRuntimeSchema();
+
+    expect(result.missingFeatureColumns).toEqual([
+      {
+        tableName: "daily_call_plan_report_rows",
+        columnName: "evening_rtpl_status_updated_at",
+      },
+    ]);
+    expect(result.degraded).toBe(true);
+    // Same safety property as a missing feature table: still ready, still 200,
+    // so an unapplied migration never fails the container healthcheck.
+    expect(result.ok).toBe(true);
+    expect(result.missingColumns).toEqual([]);
+  });
+
+  it("does not double-report a column on a table that is itself missing", async () => {
+    const present = [...CORE_TABLES, ...FEATURE_TABLES].filter(
+      (table) => table !== "case_closure_dates",
+    );
+    mocks.query.mockResolvedValue({ rows: schemaRows(present) });
+
+    const result = await verifyRuntimeSchema();
+
+    expect(result.missingFeatureTables).toEqual(["case_closure_dates"]);
+    expect(result.missingFeatureColumns).toEqual([]);
   });
 
   /**

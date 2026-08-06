@@ -20,6 +20,18 @@ export interface RuntimeVerificationResult {
    * the features backed by these tables will 500 until their migration is run.
    */
   missingFeatureTables: string[];
+  /**
+   * Feature COLUMNS that are absent from tables that do exist. Same contract as
+   * missingFeatureTables — reported, but `ok` stays true.
+   *
+   * This list exists because of the 2026-08-06 outage: migration 040 adds
+   * `evening_rtpl_status_updated_at`, the report-row repository selects it in
+   * six places, and the column was missing on prod — so report history, report
+   * generation and engineer productivity all answered 500 while this endpoint
+   * cheerfully reported `ready` with nothing missing. A dropped column on an
+   * existing table was the one shape the check could not see.
+   */
+  missingFeatureColumns: RequiredColumn[];
   /** True when the core schema is intact but a feature migration is unapplied. */
   degraded: boolean;
 }
@@ -144,6 +156,28 @@ const REQUIRED_COLUMNS: readonly RequiredColumn[] = [
   { tableName: "flex_raw_records", columnName: "source_month" },
 ];
 
+/**
+ * Per-feature COLUMNS on tables that already exist. Reported without flipping
+ * `ok`, for the same reason as FEATURE_TABLES: a 503 here fails the container
+ * healthcheck, so gating on them would turn "one migration not yet run" into a
+ * full outage.
+ *
+ * Keep this list in step with the migrations that ADD COLUMN to a live table —
+ * those are invisible to the table-level checks above.
+ */
+const FEATURE_COLUMNS: readonly RequiredColumn[] = [
+  // migrate:evening-status-edited-at (040). The report-row repository selects
+  // this in six places, so report history, generation and productivity all 500
+  // without it — the 2026-08-06 outage.
+  {
+    tableName: "daily_call_plan_report_rows",
+    columnName: "evening_rtpl_status_updated_at",
+  },
+  // migrate:closure-status (041). The closure comparison/overlay reads these.
+  { tableName: "case_closure_dates", columnName: "closed_on" },
+  { tableName: "case_closure_dates", columnName: "closure_status" },
+];
+
 export async function verifyRuntimeSchema(): Promise<RuntimeVerificationResult> {
   const result = await query<InformationSchemaColumnRow>(
     `
@@ -167,6 +201,14 @@ export async function verifyRuntimeSchema(): Promise<RuntimeVerificationResult> 
   const missingFeatureTables = FEATURE_TABLES.filter(
     (tableName) => !tableNames.has(tableName),
   );
+  // Only meaningful for tables that exist: a column on an absent table is
+  // already reported as a missing table, and listing it twice would read as two
+  // separate problems.
+  const missingFeatureColumns = FEATURE_COLUMNS.filter(
+    (column) =>
+      tableNames.has(column.tableName) &&
+      !columnKeys.has(`${column.tableName}.${column.columnName}`),
+  );
 
   const ok = missingTables.length === 0 && missingColumns.length === 0;
 
@@ -176,6 +218,8 @@ export async function verifyRuntimeSchema(): Promise<RuntimeVerificationResult> 
     missingTables,
     missingColumns,
     missingFeatureTables: [...missingFeatureTables],
-    degraded: ok && missingFeatureTables.length > 0,
+    missingFeatureColumns: [...missingFeatureColumns],
+    degraded:
+      ok && (missingFeatureTables.length > 0 || missingFeatureColumns.length > 0),
   };
 }
