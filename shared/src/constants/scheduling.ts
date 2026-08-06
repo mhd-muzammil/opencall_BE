@@ -31,30 +31,6 @@ export function isCustomerPendingStatus(
 }
 
 /**
- * The status that triggers the part-ETA remark: moving a status column to
- * SSC Pending writes "ETA <case created + SSC_PENDING_ETA_OFFSET_DAYS>" into
- * Current Remarks, so the team sees when the part is due without opening the
- * RCA. Matches "SSC Pending" and its longer spelling ("SSC Pending → Part
- * Pending"), case-insensitive and punctuation-insensitive.
- */
-export const SSC_PENDING_STATUS = "SSC Pending";
-
-/**
- * Calendar days after Case Created Time that an SSC-pending part is due.
- * Deliberately the same offset PART_SHIPMENT_ETA gives an "Ordered" part, so
- * the Current Remarks line and the RCA's ETA can never disagree.
- */
-export const SSC_PENDING_ETA_OFFSET_DAYS = 2;
-
-export function isSscPendingStatus(value: string | null | undefined): boolean {
-  const normalized = (value ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-  return normalized === "ssc" || normalized.startsWith("ssc pending");
-}
-
-/**
  * WO-level part-shipment status precedence, most-blocking first. A work order
  * can carry many part lines each with its own status; `pickWorkOrderShipmentStatus`
  * collapses them to the single most-blocking one for the RCA line.
