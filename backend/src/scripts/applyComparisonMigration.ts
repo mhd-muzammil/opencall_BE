@@ -6,7 +6,7 @@ import { closeDatabasePool, pool } from "../config/database.js";
 const apiSrcDir = path.dirname(fileURLToPath(import.meta.url));
 const migrationPath = path.resolve(
   apiSrcDir,
-  "../../../../infra/postgres/migrations/005_day_over_day_report_comparison.sql",
+  "../../../infra/postgres/migrations/005_day_over_day_report_comparison.sql",
 );
 
 async function run(): Promise<void> {
