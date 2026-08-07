@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   findPreviousFinalReportRowsForManualCarryForward: vi.fn(),
   findFlexStatusHistoryForUnchangedDays: vi.fn(),
   findSameDayUserSetEveningRows: vi.fn(),
-  fillReportRowEveningStatusIfBlank: vi.fn(),
+  adoptReportRowEveningStatusFromAuthority: vi.fn(),
   findDailyCallPlanReportRowMetadataByReportId: vi.fn(),
   backfillMissingDailyCallPlanReportRowCarryForward: vi.fn(),
   overwriteCarriedForwardFieldValues: vi.fn(),
@@ -52,7 +52,7 @@ vi.mock("../../repositories/dailyCallPlanReportRepository.js", () => ({
   findFlexStatusHistoryForUnchangedDays:
     mocks.findFlexStatusHistoryForUnchangedDays,
   findSameDayUserSetEveningRows: mocks.findSameDayUserSetEveningRows,
-  fillReportRowEveningStatusIfBlank: mocks.fillReportRowEveningStatusIfBlank,
+  adoptReportRowEveningStatusFromAuthority: mocks.adoptReportRowEveningStatusFromAuthority,
   insertDailyCallPlanReportRows: mocks.insertDailyCallPlanReportRows,
   findMaxDailyCallPlanReportRowSerialNo:
     mocks.findMaxDailyCallPlanReportRowSerialNo,
@@ -218,7 +218,7 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findMaxDailyCallPlanReportRowSerialNo.mockResolvedValue(0);
     // Default: no user-set same-day Evening statuses.
     mocks.findSameDayUserSetEveningRows.mockResolvedValue([]);
-    mocks.fillReportRowEveningStatusIfBlank.mockResolvedValue(undefined);
+    mocks.adoptReportRowEveningStatusFromAuthority.mockResolvedValue(undefined);
   });
 
   it("does not let blank persisted RTPL erase previous-final carry-forward on existing reports", async () => {
@@ -493,9 +493,96 @@ describe("generateDailyCallPlanReport", () => {
     });
 
     expect(report.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
-    expect(mocks.fillReportRowEveningStatusIfBlank).toHaveBeenCalledWith(client, {
+    expect(mocks.adoptReportRowEveningStatusFromAuthority).toHaveBeenCalledWith(client, {
       rowId: "row-1",
       eveningRtplStatus: "Case-Closed",
+      authorityEveningUpdatedAt: "2026-05-26 17:30:00+05:30",
+    });
+  });
+
+  /**
+   * The reported symptom, and the one every earlier fix missed: "I change the
+   * Evening status and it comes back to the same OLD status".
+   *
+   * Vectors 1-4 all addressed the Evening VANISHING, and the heal was gated on
+   * `if (!cleanManualValue(persisted.eveningRtplStatus))` — so a row still
+   * holding a stale value was skipped entirely and a newer entry made on
+   * another of today's reports could never reach it. With the FieldEZ worker
+   * minting a report every ~15 minutes, the report a user is shown is very
+   * often not the one they typed into, so this fired constantly.
+   */
+  it("replaces a STALE non-blank Evening with the newer same-day authority", async () => {
+    const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
+    const client = {} as PoolClient;
+
+    mocks.withTransaction.mockImplementation(async (callback) => callback(client));
+    mocks.validateReportGenerationTransaction.mockResolvedValue("report-1");
+    mocks.findFlexWipRecordsByBatchId.mockResolvedValue([{ ticketId: "WO-123", rowNumber: 1 }]);
+    mocks.findRenderwaysRecordsByBatchId.mockResolvedValue([]);
+    mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
+    mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
+    mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
+    mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([]);
+    mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
+
+    // The user changed the Evening to "Attended" at 18:00 on ANOTHER of today's
+    // reports.
+    mocks.findSameDayUserSetEveningRows.mockResolvedValue([
+      {
+        ticketId: "WO-123",
+        eveningRtplStatus: "Attended",
+        eveningUpdatedAt: "2026-05-26 18:00:00+05:30",
+      },
+    ]);
+
+    // This report's row still carries the OLDER "Case-Closed", set at 17:00.
+    // Not blank — which is exactly why the old gate skipped it.
+    mocks.findDailyCallPlanReportRowMetadataByReportId.mockResolvedValue([
+      {
+        id: "row-1",
+        serialNo: 1,
+        ticketId: "WO-123",
+        caseCreatedTime: null,
+        wipAging: "1",
+        statusAging: null,
+        hpOwnerStatus: null,
+        rtplStatus: "Scheduled",
+        eveningRtplStatus: "Case-Closed",
+        segment: "",
+        engineer: "Priya",
+        location: null,
+        customerMail: null,
+        rca: null,
+        remarks: null,
+        manualNotes: null,
+        carriedForwardFields: [],
+        manualFieldsCompleted: false,
+        manualFieldsMissing: [],
+        updatedAt: "2026-05-26 17:00:00+05:30",
+        eveningUpdatedAt: "2026-05-26 17:00:00+05:30",
+        updatedBy: null,
+        isExcluded: false,
+      },
+    ]);
+    mocks.findOrCreateCompletedHistorySessionForReport.mockResolvedValue({
+      id: "session-1",
+    });
+    mocks.findPreviousCompletedComparisonSession.mockResolvedValue(null);
+
+    const report = await generateDailyCallPlanReport({
+      reportDate: "2026-05-26",
+      generatedBy: "user-1",
+      regionId: null,
+      flexUploadBatchId: "batch-flex",
+      allowCreate: false,
+    });
+
+    expect(report.rows[0]?.enriched.evening_rtpl_status).toBe("Attended");
+    expect(mocks.adoptReportRowEveningStatusFromAuthority).toHaveBeenCalledWith(client, {
+      rowId: "row-1",
+      eveningRtplStatus: "Attended",
+      authorityEveningUpdatedAt: "2026-05-26 18:00:00+05:30",
     });
   });
 
@@ -563,7 +650,7 @@ describe("generateDailyCallPlanReport", () => {
     });
 
     expect(report.rows[0]?.enriched.evening_rtpl_status ?? null).toBeNull();
-    expect(mocks.fillReportRowEveningStatusIfBlank).not.toHaveBeenCalled();
+    expect(mocks.adoptReportRowEveningStatusFromAuthority).not.toHaveBeenCalled();
   });
 
   // Regression (prod 2026-07-30): the heal compared rows.updated_at, which
@@ -633,9 +720,10 @@ describe("generateDailyCallPlanReport", () => {
     });
 
     expect(report.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
-    expect(mocks.fillReportRowEveningStatusIfBlank).toHaveBeenCalledWith(client, {
+    expect(mocks.adoptReportRowEveningStatusFromAuthority).toHaveBeenCalledWith(client, {
       rowId: "row-1",
       eveningRtplStatus: "Case-Closed",
+      authorityEveningUpdatedAt: "2026-05-26 17:00:00+05:30",
     });
   });
 

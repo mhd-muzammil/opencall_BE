@@ -924,24 +924,50 @@ export async function findSameDayUserSetEveningRows(
 }
 
 /**
- * Backfills a blank Evening (EOD) status on a persisted report row from the
- * same-day Evening authority. Guarded in-SQL so it can never overwrite a
- * value a user saved concurrently, and deliberately does NOT touch
- * updated_at: this is a system copy of a user's edit made on another
- * same-day report, not a user edit on this row.
+ * Adopts the same-day Evening authority onto a persisted report row.
+ *
+ * This used to be fill-if-BLANK only, which handled "the Evening vanished" but
+ * not the commoner complaint: "I change it and it comes back to the same OLD
+ * status". A row holding a stale NON-blank Evening was skipped entirely, so a
+ * newer value saved on another of today's reports never reached it — and with
+ * the FieldEZ worker minting a report every ~15 minutes, the report a user is
+ * shown is very often not the one they typed into.
+ *
+ * The guard is now a timestamp comparison rather than a blank check, done
+ * IN SQL so a save landing concurrently always wins: the row is only rewritten
+ * when its own Evening is older than the authority's, or was never
+ * Evening-edited at all. A clear made on THIS row after the authority entry
+ * therefore stands, and is never resurrected.
+ *
+ * Deliberately does NOT touch updated_at or evening_rtpl_status_updated_at:
+ * this is a system copy of a user's edit made elsewhere, not a user edit on
+ * this row. Stamping it would make the copy outrank the original at the next
+ * generation.
  */
-export async function fillReportRowEveningStatusIfBlank(
+export async function adoptReportRowEveningStatusFromAuthority(
   client: PoolClient,
-  payload: { rowId: string; eveningRtplStatus: string },
+  payload: {
+    rowId: string;
+    eveningRtplStatus: string;
+    /** When the authority's Evening was set. Null-safe: see the SQL guard. */
+    authorityEveningUpdatedAt: string | null;
+  },
 ): Promise<void> {
   await client.query(
     `
       UPDATE daily_call_plan_report_rows
       SET evening_rtpl_status = $2
       WHERE id = $1
-        AND NULLIF(TRIM(COALESCE(evening_rtpl_status, '')), '') IS NULL
+        AND evening_rtpl_status IS DISTINCT FROM $2
+        AND (
+          -- Never Evening-edited here, so nothing of the user's to protect.
+          evening_rtpl_status_updated_at IS NULL
+          -- Or this row's own Evening predates the authority's.
+          OR ($3::timestamptz IS NOT NULL
+              AND evening_rtpl_status_updated_at < $3::timestamptz)
+        )
     `,
-    [payload.rowId, payload.eveningRtplStatus],
+    [payload.rowId, payload.eveningRtplStatus, payload.authorityEveningUpdatedAt],
   );
 }
 

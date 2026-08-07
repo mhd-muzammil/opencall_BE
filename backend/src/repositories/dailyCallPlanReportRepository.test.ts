@@ -7,7 +7,7 @@ import {
   OPTIONAL_MANUAL_CARRY_FORWARD_FIELDS,
 } from "../types/reportGeneration.js";
 import {
-  fillReportRowEveningStatusIfBlank,
+  adoptReportRowEveningStatusFromAuthority,
   findDailyCallPlanReportRowMetadataByReportId,
   findPreviousFinalReportRowsForManualCarryForward,
   findSameDayUserSetEveningRows,
@@ -373,24 +373,51 @@ describe("insertDailyCallPlanReportRows", () => {
     ]);
   });
 
-  it("fills a blank Evening without ever overwriting a concurrently saved value", async () => {
+  it("adopts the authority's Evening guarded by edit time, not by blankness", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 1 });
     const client = { query } as unknown as PoolClient;
 
-    await fillReportRowEveningStatusIfBlank(client, {
+    await adoptReportRowEveningStatusFromAuthority(client, {
       rowId: "row-1",
       eveningRtplStatus: "Case-Closed",
+      authorityEveningUpdatedAt: "2026-08-07 17:30:00+05:30",
     });
 
     const [sql, values] = query.mock.calls[0] as [string, unknown[]];
-    // Guarded in-SQL: only a blank Evening is ever written to.
-    expect(sql).toContain(
+
+    // The guard MUST NOT be "only if blank". That is what left a row holding a
+    // STALE non-blank Evening untouched, so a newer value saved on another of
+    // today's reports never reached it — the "it comes back to the same old
+    // status" complaint that survived four rounds of vanishing-Evening fixes.
+    expect(sql).not.toContain(
       "NULLIF(TRIM(COALESCE(evening_rtpl_status, '')), '') IS NULL",
     );
-    // A system copy of another report's user edit — must NOT stamp updated_at,
-    // or it would masquerade as a user edit in the authority ordering.
-    expect(sql).not.toContain("updated_at");
-    expect(values).toEqual(["row-1", "Case-Closed"]);
+    expect(sql).toContain("evening_rtpl_status_updated_at IS NULL");
+    expect(sql).toContain("evening_rtpl_status_updated_at < $3");
+
+    // Still guarded in-SQL so a concurrent save always wins.
+    expect(sql).toContain("evening_rtpl_status IS DISTINCT FROM $2");
+
+    // A system copy of another report's user edit — must NOT stamp either
+    // timestamp, or it would outrank the original in the authority ordering.
+    expect(sql).not.toContain("updated_at = NOW()");
+    expect(values).toEqual(["row-1", "Case-Closed", "2026-08-07 17:30:00+05:30"]);
+  });
+
+  it("still writes when the authority has no Evening timestamp", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 1 });
+    const client = { query } as unknown as PoolClient;
+
+    await adoptReportRowEveningStatusFromAuthority(client, {
+      rowId: "row-1",
+      eveningRtplStatus: "Attended",
+      authorityEveningUpdatedAt: null,
+    });
+
+    const [, values] = query.mock.calls[0] as [string, unknown[]];
+    // Null is passed through; the SQL then only adopts onto rows that were
+    // never Evening-edited, so a real user edit here is never clobbered.
+    expect(values).toEqual(["row-1", "Attended", null]);
   });
 
   it("updates only the addressed report row for persisted manual edits", async () => {

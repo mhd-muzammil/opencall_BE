@@ -8,7 +8,7 @@ import {
 import {
   backfillMissingDailyCallPlanReportRowCarryForward,
   createDailyCallPlanReport,
-  fillReportRowEveningStatusIfBlank,
+  adoptReportRowEveningStatusFromAuthority,
   findDailyCallPlanReportRowMetadataByReportId,
   findFlexStatusHistoryForUnchangedDays,
   findMaxDailyCallPlanReportRowSerialNo,
@@ -84,7 +84,8 @@ function countDuplicateTickets(rows: readonly GeneratedDailyCallPlanRow[]): numb
 
     counts.set(ticketId, (counts.get(ticketId) ?? 0) + 1);
   }
-  return Array.from(counts.values()).filter((count) => count > 1).length;
+
+  return Array.from(counts.values()).filter((count) => count > 1).length;
 }
 
 function countUnmatchedRows(
@@ -620,7 +621,7 @@ async function applyPersistedRowMetadata(
     // times, never the whole-row updated_at: that is stamped by every field
     // edit, so an Engineer or Remarks edit read as a deliberate clear and left
     // the blank standing.
-    if (!cleanManualValue(persisted.eveningRtplStatus)) {
+    {
       const ticketAuthorityKey = getNormalizedTicketKey(row.enriched.ticket_id);
       const authorityEntry = ticketAuthorityKey
         ? sameDayEveningAuthority.get(ticketAuthorityKey)
@@ -632,11 +633,22 @@ async function applyPersistedRowMetadata(
         authorityEditedAt !== null &&
         persistedEditedAt >= authorityEditedAt;
 
+      // Deliberately NOT gated on this row's Evening being blank. That gate is
+      // what left "I change it and it comes back to the same OLD status"
+      // unfixed after four rounds of work on the vanishing-Evening bug: a row
+      // still holding a stale value was skipped, so a newer entry made on
+      // another of today's reports could never reach it. Whether the cell is
+      // blank or stale, the newest USER-set Evening for the ticket wins.
+      //
+      // `rowSpeaksForItself` is what keeps a deliberate clear made on THIS row
+      // after the authority entry — it compares Evening edit times only, never
+      // the whole-row updated_at, which every field edit stamps.
       if (authorityEntry && !rowSpeaksForItself) {
         row.enriched.evening_rtpl_status = authorityEntry.eveningRtplStatus;
-        await fillReportRowEveningStatusIfBlank(client, {
+        await adoptReportRowEveningStatusFromAuthority(client, {
           rowId: persisted.id,
           eveningRtplStatus: authorityEntry.eveningRtplStatus,
+          authorityEveningUpdatedAt: authorityEntry.eveningUpdatedAt ?? null,
         });
       }
     }
