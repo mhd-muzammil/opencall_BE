@@ -147,6 +147,56 @@ export async function dispatchCase(
   return assignCase(created.id, ref);
 }
 
+// ---- Bulk dispatch / backfill (OpenCall -> Payroll) ----------------------
+
+export interface PayrollBulkCaseInput {
+  // Idempotency key — the OpenCall ticket id. Re-syncing updates the one case.
+  external_ref: string;
+  customer_name?: string;
+  customer_phone?: string;
+  title: string;
+  description?: string;
+  address?: string;
+  priority?: "low" | "medium" | "high" | "urgent";
+  // External status hint: "assigned"/"active" | "completed"/"closed" | "cancelled".
+  // Lets a backfill land already-finished calls as completed so they don't
+  // clutter the engineer's ACTIVE list while still showing in their history.
+  status?: string;
+  engineer_id?: number;
+  engineer_email?: string | null;
+  engineer_phone?: string | null;
+  engineer_name?: string | null;
+}
+
+export interface PayrollBulkResult {
+  created: number;
+  updated: number;
+  assigned: number;
+  skipped: number;
+  total: number;
+  details: Array<{
+    external_ref: string | null;
+    result: string;
+    reason?: string;
+    case_number?: string;
+    engineer?: string;
+    status?: string;
+  }>;
+}
+
+/**
+ * Push MANY cases in one call (the "Sync assigned cases to Payroll" backfill).
+ * Each item is idempotent on external_ref, so re-syncing the same day never
+ * duplicates. Payroll resolves each engineer by id/email/phone/name and skips
+ * (reports) any it can't match rather than failing the whole batch.
+ */
+export async function bulkDispatchCases(cases: PayrollBulkCaseInput[]): Promise<PayrollBulkResult> {
+  return authed<PayrollBulkResult>("/api/cases/bulk_dispatch/", {
+    method: "POST",
+    body: JSON.stringify({ cases }),
+  });
+}
+
 // ---- Live tracking (Payroll -> OpenCall) --------------------------------
 
 export interface LiveEngineer {

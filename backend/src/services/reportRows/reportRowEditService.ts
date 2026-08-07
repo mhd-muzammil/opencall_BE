@@ -354,10 +354,15 @@ export async function applyReportRowManualFieldEdit(input: {
     throw unprocessableEntity("Report row could not be updated", { rowId });
   }
 
-  // Mirror a freshly-scheduled call (engineer assigned) into the Payroll app so
-  // the engineer sees the case and streams GPS. Fire-and-forget: never blocks or
-  // fails this save; no-op unless Payroll is configured.
-  if (settingScheduled) {
+  // Mirror the call into the Payroll app so the engineer sees the case and
+  // streams GPS. Fires both on the original schedule action AND whenever THIS
+  // edit assigns / re-assigns an engineer to the row (so assigning an engineer
+  // in Engineer Productivity flows through even without a Scheduled toggle).
+  // Fire-and-forget: never blocks or fails this save; idempotent (external_ref
+  // = ticketId) so the extra trigger never duplicates; no-op unless configured.
+  const engineerAssignedNow =
+    hasEditedField(values, "engineer") && isCarryForwardValue(merged.engineer);
+  if (settingScheduled || engineerAssignedNow) {
     dispatchAssignedCaseToPayroll(updated);
   }
 

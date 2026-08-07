@@ -4,6 +4,7 @@ import {
   getReportProductivityController,
 } from "../controllers/eodController.js";
 import { generateDailyCallPlanReportController } from "../controllers/reportController.js";
+import { syncAssignedCasesToPayrollController } from "../controllers/payrollSyncController.js";
 import { requireAuthenticatedUser } from "../middlewares/authMiddleware.js";
 import { requireRole } from "../middlewares/roleMiddleware.js";
 
@@ -31,4 +32,13 @@ reportRouter.get(
   requireAuthenticatedUser,
   requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
   getReportProductivityController,
+);
+
+// Push every engineer-assigned case for this date into the Payroll app so each
+// engineer sees their assigned cases there. Idempotent; safe to re-run.
+reportRouter.post(
+  "/:date/payroll-sync",
+  requireAuthenticatedUser,
+  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
+  syncAssignedCasesToPayrollController,
 );
