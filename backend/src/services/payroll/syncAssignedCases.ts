@@ -16,6 +16,7 @@ import {
   findProductivityRowsByReportId,
   type ProductivityPersistedRow,
 } from "../../repositories/dailyCallPlanReportRepository.js";
+import { isScheduledStatus } from "@opencall/shared";
 import { findEngineerContactByName } from "../../repositories/engineerRepository.js";
 import { findLatestCompletedSessionByReportDate } from "../../repositories/historyRepository.js";
 import {
@@ -66,13 +67,16 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
 
   const rows = await findProductivityRowsByReportId(session.daily_call_plan_report_id);
 
-  // Keep rows that actually name an engineer AND a ticket, de-duplicated by
+  // Keep ONLY the rows that make up the productivity "Assigned" set — i.e. the
+  // day's PLAN: Morning/RTPL status is exactly "Scheduled" and an engineer is
+  // named. This is what the "Assigned" column counts; syncing every engineer
+  // row (attended/closed/pending too) would flood Payroll. De-duplicated by
   // ticket (a ticket is one case; last write wins).
   const byTicket = new Map<string, ProductivityPersistedRow>();
   for (const row of rows) {
     const ticket = (row.ticketId ?? "").trim();
     const engineer = (row.engineer ?? "").trim();
-    if (ticket && engineer) {
+    if (ticket && engineer && isScheduledStatus(row.rtplStatus)) {
       byTicket.set(ticket, row);
     }
   }
