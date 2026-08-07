@@ -2,12 +2,18 @@ import { createApp } from "./app.js";
 import { closeDatabasePool } from "./config/database.js";
 import { env } from "./config/env.js";
 import { checkDatabaseHealth } from "./services/databaseHealthService.js";
+import { startPayrollSyncScheduler } from "./services/payroll/payrollSyncScheduler.js";
 import { verifyRuntimeSchema } from "./services/runtime/runtimeVerificationService.js";
 
 const app = await createApp();
 
 const server = app.listen(env.PORT, () => {
   console.log(`OpenCall API listening on port ${env.PORT}`);
+
+  // Hands-off: periodically push each engineer's assigned cases into Payroll so
+  // they appear without any manual "Sync" click. Idempotent + no-op if Payroll
+  // isn't configured.
+  startPayrollSyncScheduler();
 
   void checkDatabaseHealth().then(async (health) => {
     if (health.connected) {
