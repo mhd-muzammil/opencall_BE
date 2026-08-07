@@ -38,6 +38,25 @@ async function runOnce(): Promise<void> {
   }
 }
 
+let soonTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Near-instant sync (debounced ~2s) — call this the moment an assignment
+ * changes so Payroll reflects the new "Assigned" set right away, instead of
+ * waiting for the periodic tick. Debounced so a burst of edits coalesces into
+ * one sync. Fire-and-forget; no-op when Payroll isn't configured.
+ */
+export function schedulePayrollSyncSoon(): void {
+  if (!isPayrollConfigured() || soonTimer) {
+    return;
+  }
+  soonTimer = setTimeout(() => {
+    soonTimer = null;
+    void runOnce();
+  }, 2000);
+  soonTimer.unref();
+}
+
 export function startPayrollSyncScheduler(): void {
   if (!isPayrollConfigured()) {
     console.log("[payroll] auto-sync disabled (PAYROLL_API_URL/USER/PASSWORD not set)");

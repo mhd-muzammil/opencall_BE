@@ -14,7 +14,7 @@ import {
 import { findRegionById } from "../../repositories/regionRepository.js";
 import { workLocationMatchesRegion } from "../rbac/regionRowAccess.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
-import { dispatchAssignedCaseToPayroll } from "../payroll/dispatchAssignedCase.js";
+import { schedulePayrollSyncSoon } from "../payroll/payrollSyncScheduler.js";
 import {
   appendCustomerPendingKci,
   buildScheduledRemark,
@@ -354,16 +354,16 @@ export async function applyReportRowManualFieldEdit(input: {
     throw unprocessableEntity("Report row could not be updated", { rowId });
   }
 
-  // Mirror the call into the Payroll app so the engineer sees the case and
-  // streams GPS. Fires both on the original schedule action AND whenever THIS
-  // edit assigns / re-assigns an engineer to the row (so assigning an engineer
-  // in Engineer Productivity flows through even without a Scheduled toggle).
-  // Fire-and-forget: never blocks or fails this save; idempotent (external_ref
-  // = ticketId) so the extra trigger never duplicates; no-op unless configured.
+  // Instantly mirror the day's assignments into the Payroll app so each
+  // engineer sees their case right away. Fires on the schedule action AND
+  // whenever THIS edit assigns / re-assigns an engineer (so assigning in
+  // Engineer Productivity flows through even without a Scheduled toggle). Runs
+  // a debounced (~2s) full sync + mirror — never blocks or fails this save,
+  // idempotent, and a no-op unless Payroll is configured.
   const engineerAssignedNow =
     hasEditedField(values, "engineer") && isCarryForwardValue(merged.engineer);
   if (settingScheduled || engineerAssignedNow) {
-    dispatchAssignedCaseToPayroll(updated);
+    schedulePayrollSyncSoon();
   }
 
   return {
