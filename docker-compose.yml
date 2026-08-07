@@ -64,6 +64,12 @@ services:
       ADMIN_COOKIE_SECRET: ${ADMIN_COOKIE_SECRET:?set ADMIN_COOKIE_SECRET}
       ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:?set ADMIN_SESSION_SECRET}
       CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN}
+      # Payroll integration (engineer case dispatch + live tracking). Optional —
+      # leave unset to disable it gracefully. Point PAYROLL_API_URL at the
+      # Payroll backend and use a Payroll admin service account (e.g. opencall-bot).
+      PAYROLL_API_URL: ${PAYROLL_API_URL:-}
+      PAYROLL_API_USER: ${PAYROLL_API_USER:-}
+      PAYROLL_API_PASSWORD: ${PAYROLL_API_PASSWORD:-}
       # Every date the app derives from "now" is a business day in IST. Leaving the
       # container on UTC put anything before 05:30 IST on the previous day.
       TZ: ${TZ:-Asia/Kolkata}
