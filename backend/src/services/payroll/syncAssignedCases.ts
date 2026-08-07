@@ -16,6 +16,7 @@ import {
   findProductivityRowsByReportId,
   type ProductivityPersistedRow,
 } from "../../repositories/dailyCallPlanReportRepository.js";
+import { findEngineerContactByName } from "../../repositories/engineerRepository.js";
 import { findLatestCompletedSessionByReportDate } from "../../repositories/historyRepository.js";
 import {
   bulkDispatchCases,
@@ -85,18 +86,38 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
     };
   }
 
+  // Enrich each distinct engineer with their email + phone (once per name), so
+  // Payroll can match on those reliable keys even when the name is spelled
+  // differently ("Praveen" here vs "Praveen S" there). Unknown/ambiguous names
+  // just carry the name and let Payroll decide.
+  const contactByName = new Map<string, { email: string | null; phone: string | null } | null>();
+  for (const row of byTicket.values()) {
+    const name = row.engineer.trim();
+    if (!contactByName.has(name)) {
+      contactByName.set(name, await findEngineerContactByName(name));
+    }
+  }
+
   const cases: PayrollBulkCaseInput[] = [];
   for (const row of byTicket.values()) {
     const ticket = row.ticketId.trim();
     const location = (row.workLocation ?? "").trim();
+    const name = row.engineer.trim();
     const input: PayrollBulkCaseInput = {
       external_ref: ticket,
       title: `Service call (${ticket})`.slice(0, 200),
-      engineer_name: row.engineer.trim(),
+      engineer_name: name,
       status: externalStatusHint(row),
     };
     if (location) {
       input.address = location;
+    }
+    const contact = contactByName.get(name);
+    if (contact?.email) {
+      input.engineer_email = contact.email;
+    }
+    if (contact?.phone) {
+      input.engineer_phone = contact.phone;
     }
     cases.push(input);
   }

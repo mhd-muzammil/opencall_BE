@@ -283,6 +283,35 @@ export async function findEngineerByNameInRegion(
   return row ? mapEngineer(row) : null;
 }
 
+/**
+ * Look up an engineer's email + phone by name alone (across all regions), for
+ * enriching a Payroll sync so it can match on the reliable keys rather than a
+ * name that may be spelled differently. Returns null when the name is unknown
+ * OR ambiguous (0 or >1 engineers share it) — the caller then falls back to
+ * name matching, which Payroll refuses to guess between namesakes anyway.
+ */
+export async function findEngineerContactByName(
+  engineerName: string,
+): Promise<{ email: string | null; phone: string | null } | null> {
+  const result = await query<{ email: string | null; phone: string | null }>(
+    `
+      SELECT email, phone
+      FROM engineers
+      WHERE lower(trim(engineer_name)) = lower(trim($1))
+      LIMIT 2
+    `,
+    [engineerName],
+  );
+  if (result.rows.length !== 1) {
+    return null;
+  }
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return { email: row.email ?? null, phone: row.phone ?? null };
+}
+
 export async function updateEngineer(
   id: string,
   input: UpdateEngineerInput,
