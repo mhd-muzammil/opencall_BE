@@ -289,7 +289,6 @@ export async function getRegionEodState(
  * paths through the same shared function.
  */
 export async function getReportProductivity(
-  _user: AuthenticatedUser,
   workingDate: string,
 ): Promise<ReportProductivityResponse> {
   assertValidWorkingDate(workingDate);

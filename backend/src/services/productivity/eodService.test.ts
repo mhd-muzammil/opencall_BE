@@ -272,7 +272,7 @@ describe("closeRegionEod", () => {
     expect(second.snapshot).toEqual(first.snapshot);
 
     // The productivity read serves the frozen snapshot, not the edited rows.
-    const read = await getReportProductivity(superAdmin, WORKING_DATE);
+    const read = await getReportProductivity(WORKING_DATE);
     const chennaiEntry = read.regions.find((r) => r.regionId === chennai.id);
     expect(chennaiEntry?.source).toBe("FROZEN");
     expect(chennaiEntry?.productivity).toEqual(first.snapshot);
@@ -281,7 +281,7 @@ describe("closeRegionEod", () => {
   it("keeps other regions live and independent after one region closes", async () => {
     await closeRegionEod(superAdmin, chennai.id, WORKING_DATE);
 
-    const read = await getReportProductivity(superAdmin, WORKING_DATE);
+    const read = await getReportProductivity(WORKING_DATE);
     const velloreEntry = read.regions.find((r) => r.regionId === vellore.id);
     expect(velloreEntry?.source).toBe("LIVE");
     expect(velloreEntry?.productivity.list[0]?.name).toBe("Vel");
@@ -314,7 +314,7 @@ describe("closeRegionEod", () => {
   // and the productivity read must be strictly read-only over the report.
   it("never regenerates the day's report — close and reads are read-only", async () => {
     await closeRegionEod(superAdmin, chennai.id, WORKING_DATE);
-    await getReportProductivity(superAdmin, WORKING_DATE);
+    await getReportProductivity(WORKING_DATE);
 
     expect(mocks.generateDailyCallPlanReport).not.toHaveBeenCalled();
     expect(mocks.findProductivityRowsByReportId).toHaveBeenCalledWith("report-1");
@@ -336,7 +336,7 @@ describe("reopenRegionEod", () => {
     expect(result.reopened).toBe(true);
     expect(result.state?.status).toBe("OPEN");
 
-    const read = await getReportProductivity(superAdmin, WORKING_DATE);
+    const read = await getReportProductivity(WORKING_DATE);
     const chennaiEntry = read.regions.find((r) => r.regionId === chennai.id);
     expect(chennaiEntry?.source).toBe("LIVE");
 

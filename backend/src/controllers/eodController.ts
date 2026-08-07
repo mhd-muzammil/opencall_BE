@@ -90,11 +90,11 @@ export const getRegionEodStateController: RequestHandler = asyncHandler(
 
 export const getReportProductivityController: RequestHandler = asyncHandler(
   async (request, response) => {
-    const currentUser = requireCurrentUser(request.currentUser);
+    requireCurrentUser(request.currentUser);
     const workingDate = workingDateSchema.parse(request.params.date);
 
     response.json({
-      data: await getReportProductivity(currentUser, workingDate),
+      data: await getReportProductivity(workingDate),
     });
   },
 );
