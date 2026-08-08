@@ -211,12 +211,24 @@ export interface LiveEngineer {
   engineer_id: number;
   engineer_name: string;
   branch: string | null;
-  latitude: number;
-  longitude: number;
+
+  // Duty is what the engineer DECLARED in Payroll, so an engineer whose phone
+  // stopped reporting stays on this list with stale=true rather than vanishing.
+  on_duty: boolean;
+  duty_started_at: string;
+  duty_minutes: number;
+  stale: boolean;
+  last_seen_minutes: number | null;
+  // Kilometres covered since this duty began.
+  distance_km: number;
+
+  // Null until the engineer's first GPS fix of the duty arrives.
+  latitude: number | null;
+  longitude: number | null;
   accuracy: number | null;
   speed: number | null;
   status: string;
-  timestamp: string;
+  timestamp: string | null;
   active_case_id: number | null;
   active_case_number: string | null;
 }
