@@ -25,10 +25,19 @@ async function runOnce(): Promise<void> {
   try {
     const result = await syncAssignedCasesForDate(date);
     if (result.payroll && result.payroll.assigned + result.payroll.skipped > 0) {
+      const { assigned, skipped, cancelled, unmatched_engineers: unmatched } = result.payroll;
       console.log(
-        `[payroll] auto-sync ${date}: assigned=${result.payroll.assigned} ` +
-          `skipped=${result.payroll.skipped} rows=${result.rowsWithEngineer}`,
+        `[payroll] auto-sync ${date}: assigned=${assigned} skipped=${skipped} ` +
+          `cancelled=${cancelled ?? 0} rows=${result.rowsWithEngineer}` +
+          // The engineers Payroll could not match — the onboarding to-do list.
+          // Without this, a sync that pushes nothing looks identical to a
+          // healthy one and there is nothing to act on.
+          (unmatched?.length ? ` unmatched=[${unmatched.join(", ")}]` : ""),
       );
+    } else {
+      // Nothing was pushed. ALWAYS say why — a silent no-op here is exactly how
+      // "the dashboard shows 56 assigned but Payroll is empty" goes unnoticed.
+      console.log(`[payroll] auto-sync ${date}: nothing pushed — ${result.message ?? "no reason given"}`);
     }
   } catch (error) {
     console.error(

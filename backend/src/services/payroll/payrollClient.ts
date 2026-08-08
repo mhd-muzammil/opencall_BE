@@ -173,11 +173,19 @@ export interface PayrollBulkResult {
   updated: number;
   assigned: number;
   skipped: number;
+  // Previously-synced cases no longer in the pushed set, marked cancelled (not deleted).
+  cancelled?: number;
   total: number;
+  // Engineer names Payroll has no employee for — their tickets were skipped, so
+  // these people need onboarding before their cases can appear.
+  unmatched_engineers?: string[];
+  // Matched employees with no login: the case exists but nobody can open it.
+  unreachable_engineers?: string[];
   details: Array<{
     external_ref: string | null;
     result: string;
     reason?: string;
+    engineer_name?: string | null;
     case_number?: string;
     engineer?: string;
     status?: string;

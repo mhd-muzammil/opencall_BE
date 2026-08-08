@@ -17,6 +17,7 @@ import {
 import { findLatestCompletedSessionByReportDate } from "../../repositories/historyRepository.js";
 import { findEngineerContactByName } from "../../repositories/engineerRepository.js";
 import { getReportProductivity } from "../productivity/eodService.js";
+import { HttpError } from "../../utils/httpError.js";
 import {
   bulkDispatchCases,
   isPayrollConfigured,
@@ -47,13 +48,19 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
   let productivity;
   try {
     productivity = await getReportProductivity(workingDate);
-  } catch {
-    return {
-      configured: true,
-      workingDate,
-      rowsWithEngineer: 0,
-      message: "No completed report for this working date.",
-    };
+  } catch (error) {
+    // Only a rejected DATE is a benign "nothing to sync". A DB/connection fault
+    // must NOT be reported as "no report for this date" — that reads as normal
+    // and hides a real outage behind a reassuring message.
+    if (error instanceof HttpError) {
+      return {
+        configured: true,
+        workingDate,
+        rowsWithEngineer: 0,
+        message: `Cannot read the productivity view for ${workingDate}: ${error.message}`,
+      };
+    }
+    throw error;
   }
 
   // Each engineer's Assigned tickets, merged across regions by name — the same
@@ -123,11 +130,16 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
   }
 
   if (cases.length === 0) {
+    // Say what WAS seen. "No assigned tickets" on a day the dashboard clearly
+    // shows assignments means the sync and the view disagree about the date or
+    // the region set, and the counts below are what tells them apart.
     return {
       configured: true,
       workingDate,
       rowsWithEngineer: 0,
-      message: "No assigned tickets for this working date.",
+      message:
+        `No assigned tickets for this working date ` +
+        `(regions=${productivity.regions.length}, engineers=${assignedByEngineer.size}).`,
     };
   }
 
