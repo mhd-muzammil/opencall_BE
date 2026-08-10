@@ -23,6 +23,10 @@ interface FlexWipRecordRow {
   customer_email: string | null;
   part_description: string | null;
   customer_pincode: string | null;
+  customer_address: string | null;
+  common_address: string | null;
+  customer_city: string | null;
+  customer_state: string | null;
   product_line_name: string | null;
   work_location: string | null;
   raw_row: Record<string, unknown>;
@@ -82,6 +86,10 @@ export async function insertFlexWipRecords(
           customer_email,
           part_description,
           customer_pincode,
+          customer_address,
+          common_address,
+          customer_city,
+          customer_state,
           product_line_name,
           work_location,
           raw_row,
@@ -89,7 +97,8 @@ export async function insertFlexWipRecords(
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19
+          $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+          $20, $21, $22::jsonb, $23
         )
       `,
       [
@@ -108,6 +117,10 @@ export async function insertFlexWipRecords(
         record.customerEmail,
         record.partDescription,
         record.customerPincode,
+        record.customerAddress,
+        record.commonAddress,
+        record.customerCity,
+        record.customerState,
         record.productLineName,
         record.workLocation,
         JSON.stringify(record.rawRow),
@@ -224,6 +237,10 @@ export async function findFlexWipRecordsByBatchId(
         customer_email,
         part_description,
         customer_pincode,
+        customer_address,
+        common_address,
+        customer_city,
+        customer_state,
         product_line_name,
         work_location,
         raw_row,
@@ -251,6 +268,21 @@ export async function findFlexWipRecordsByBatchId(
     customerEmail: row.customer_email,
     partDescription: row.part_description,
     customerPincode: row.customer_pincode,
+    // COALESCE against raw_row so rows written before migration 044 still answer
+    // — the backfill covers persisted rows, this covers any that slipped between
+    // the deploy and the migration run.
+    customerAddress:
+      row.customer_address ??
+      cleanString(getCell(row.raw_row as Record<string, unknown>, ["Customer Address", "CustomerAddress", "Customer Addr"])),
+    commonAddress:
+      row.common_address ??
+      cleanString(getCell(row.raw_row as Record<string, unknown>, ["Common Address", "CommonAddress", "Site Address"])),
+    customerCity:
+      row.customer_city ??
+      cleanString(getCell(row.raw_row as Record<string, unknown>, ["Customer City", "CustomerCity", "City"])),
+    customerState:
+      row.customer_state ??
+      cleanString(getCell(row.raw_row as Record<string, unknown>, ["Customer State", "CustomerState", "State"])),
     productLineName: row.product_line_name,
     workLocation: row.work_location,
     productSerialNo: cleanString(getCell(row.raw_row as Record<string, unknown>, ["Product Serial No", "Product S.No", "Product SN", "Serial No", "Serial Number"])),

@@ -50,6 +50,8 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyEveningStatusEditTimestampMigration", // 040 evening status edited-at
   "applyClosureReportStatusMigration", // 041 closure report status
   "applyClosureSyncRunsMigration", // 042 closure sync runs
+  "applyCustomerAddressMigration", // 044 flex_wip_records address columns
+  "applyWorkOrderGeocodingMigration", // 045 geocode_cache + work_order_geocodes
 ];
 
 /**

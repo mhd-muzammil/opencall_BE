@@ -100,6 +100,14 @@ export function parseFlexWipReport(
       customerEmail: cleanString(getCell(row.values, ["Customer Email", "Customer Mail", "Email"])),
       partDescription: cleanString(getCell(row.values, ["Part Description", "Part"])),
       customerPincode: normalizePincode(getCell(row.values, ["Customer Pincode", "Pincode", "Pin Code"])),
+      // Deliberately NOT in SOURCE_COLUMN_REQUIREMENTS: that list drives the
+      // upload's `missingColumns` validation, so requiring these would start
+      // rejecting exports that have always been accepted. Read opportunistically
+      // instead — a missing address column costs precision, never an upload.
+      customerAddress: cleanString(getCell(row.values, ["Customer Address", "CustomerAddress", "Customer Addr"])),
+      commonAddress: cleanString(getCell(row.values, ["Common Address", "CommonAddress", "Site Address"])),
+      customerCity: cleanString(getCell(row.values, ["Customer City", "CustomerCity", "City"])),
+      customerState: cleanString(getCell(row.values, ["Customer State", "CustomerState", "State"])),
       productLineName: cleanString(getCell(row.values, ["Product Line Name", "ProductLineName", "Product Line"])),
       workLocation: cleanString(getCell(row.values, ["Work Location", "WorkLocation", "ASP Code", "ASP"])),
       businessSegment: cleanString(getCell(row.values, ["Business Segment", "BusinessSegment", "Business segment"])),
