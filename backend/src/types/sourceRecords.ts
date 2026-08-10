@@ -30,6 +30,22 @@ export interface FlexWipParsedRecord {
   customerEmail: string | null;
   partDescription: string | null;
   customerPincode: string | null;
+  /**
+   * FieldEZ "Customer Address". Measured on a live export: frequently truncated
+   * (median length is exactly 62 characters, rows ending mid-token) and
+   * occasionally holding a different site than the work order — one row read
+   * "Tal-Panvel, Dist.-Raigad" on a Sriperumbudur call. Never prefer it over
+   * `commonAddress` without scoring both; see `addressSelector`.
+   */
+  customerAddress: string | null;
+  /**
+   * FieldEZ "Common Address". The more complete of the two on most rows where
+   * they disagree, and present on rows where `customerAddress` is blank.
+   */
+  commonAddress: string | null;
+  /** Geocoder disambiguation, not display. "Gandhi Road" alone is worthless. */
+  customerCity: string | null;
+  customerState: string | null;
   productLineName: string | null;
   workLocation: string | null;
   productSerialNo: string | null;
