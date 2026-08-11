@@ -20,7 +20,22 @@ const sqlQueries = [
   `CREATE INDEX IF NOT EXISTS idx_rtpl_statuses_category ON rtpl_statuses(category);`,
   `CREATE INDEX IF NOT EXISTS idx_rtpl_statuses_is_active ON rtpl_statuses(is_active);`,
 
-  `INSERT INTO rtpl_statuses (name, category, sort_order) VALUES
+  // Seed ONLY a fresh table.
+  //
+  // This script is listed in MIGRATION_SCRIPTS, so applyAllMigrations re-runs it
+  // after EVERY deploy. `ON CONFLICT (name) DO NOTHING` protects a status that
+  // still EXISTS — it does nothing for one an admin has REMOVED from the list:
+  // there is no conflicting row, so the seed re-creates it, and a re-created row
+  // takes is_active's DEFAULT of true. Every deploy therefore refilled the Work
+  // Order Details & Entry picker with statuses the admin had deleted, and brought
+  // back the original spelling of any status that had been RENAMED (which is how
+  // "To be Scheduled" and "To Be Scheduled" came to sit side by side in the same
+  // group). The status list is admin-curated DATA, not schema: seed it once, into
+  // an empty table, and never again. `diagnoseRtplStatusResurrection` cleans up
+  // rows an earlier run already resurrected.
+  `INSERT INTO rtpl_statuses (name, category, sort_order)
+   SELECT seed.name, seed.category, seed.sort_order
+   FROM (VALUES
       ('Actionable', 'General Activity', 100),
       ('CX Pending', 'General Activity', 101),
       ('Problem Resolution', 'General Activity', 102),
@@ -52,6 +67,10 @@ const sqlQueries = [
       ('Elevation Part Pending', 'Elevations / Escalations', 801),
       ('CRT Pending', 'Validation & Testing', 900),
       ('CT Validation Pending', 'Validation & Testing', 901)
+   ) AS seed(name, category, sort_order)
+   -- Constant subquery: on a fresh table every seed row is inserted, on a table
+   -- that already holds ANY status not one row is.
+   WHERE NOT EXISTS (SELECT 1 FROM rtpl_statuses)
    ON CONFLICT (name) DO NOTHING;`,
 ];
 
