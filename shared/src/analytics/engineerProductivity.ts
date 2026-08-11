@@ -33,6 +33,7 @@
 //   any other status                            -> ATTENDED_OTHER
 import { ASP_CODE_REGION_MAP } from "../constants/regions.js";
 import { isScheduledStatus } from "../constants/scheduling.js";
+import { isCancelledClosure } from "./flexClosure.js";
 
 export type ProductivityBucket =
   | "SCHEDULED"
@@ -359,9 +360,34 @@ function isRequestToCancelValue(value: unknown): boolean {
 }
 
 /**
+ * A closure Flex reported as a CANCELLATION rather than a completed job.
+ *
+ * Gated on the row actually being a closure, deliberately: the own-status
+ * keyword fallback inside isCancelledClosure would otherwise drop live calls
+ * merely parked at "Need to Cancel" / "Under Cancellation", which are still
+ * the engineer's work to do.
+ */
+function isCancelledClosureRow(row: ProductivityReportRow): boolean {
+  if (!row.carryForward.closedSyntheticRow && !row.carryForward.sameDayClosedRow) {
+    return false;
+  }
+  // Evening first — today's word on the call — with Morning as the fallback,
+  // the same precedence the EOD/BOD tiles use to ask this question.
+  const ownStatus =
+    eveningProductivityStatus(row.output) || morningProductivityStatus(row.output);
+  return isCancelledClosure(row.output, ownStatus);
+}
+
+/**
  * The rows productivity reads — the same set the Records page shows for the
- * day: open calls plus same-day closures; older synthetic closures and
- * Request-to-Cancel rows are out.
+ * day: open calls plus same-day closures; older synthetic closures,
+ * Request-to-Cancel rows and Flex-cancelled closures are out.
+ *
+ * Cancellations are excluded ENTIRELY, not merely denied the CLOSED bucket: a
+ * call the customer or Flex cancelled is not the engineer's to complete, so
+ * counting it as Assigned would drag their attended percentage down for work
+ * that was taken away. This mirrors the Request-to-Cancel exclusion that has
+ * always been here. Records still shows the row — only productivity ignores it.
  */
 export function isProductivityVisibleRow(row: ProductivityReportRow): boolean {
   const recordsVisible =
@@ -369,6 +395,7 @@ export function isProductivityVisibleRow(row: ProductivityReportRow): boolean {
     row.carryForward.sameDayClosedRow === true;
   return (
     recordsVisible &&
+    !isCancelledClosureRow(row) &&
     !isRequestToCancelValue(row.output["Flex Status"]) &&
     // The closure overlay rewrites "Flex Status" with Flex's own closure status and
     // parks the vendor's WIP value here. Without this check a Request-to-Cancel row

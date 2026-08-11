@@ -9,6 +9,7 @@ export * from "./constants/customerFeedback.js";
 export * from "./types/rbac.js";
 export * from "./types/eod.js";
 export * from "./analytics/engineerProductivity.js";
+export * from "./analytics/flexClosure.js";
 export * from "./constants/scheduling.js";
 export * from "./utils/dates.js";
 export * from "./utils/rcaText.js";
