@@ -125,15 +125,28 @@ function extractReadableBody(raw: string): string {
     const candidate = headerEnd > 0 ? part.slice(0, headerEnd) : "";
     const isHeaderBlock = /^\s*content-(type|transfer-encoding)\s*:/im.test(candidate);
     const headers = isHeaderBlock ? candidate.toLowerCase() : "";
-    const body = isHeaderBlock ? part.slice(headerEnd) : part;
+    const encoded = isHeaderBlock ? part.slice(headerEnd) : part;
     // Decode on the evidence, not just the header: nested multipart parts often carry the
     // encoding on an outer part, which left "5163= 318048" and "au= thorized" in the
     // preview. A soft line break or an =XX escape is proof enough.
-    const looksEncoded =
-      headers.includes("quoted-printable") || /=\n|=[0-9A-F]{2}/i.test(body);
+    //
+    // Base64 is tested FIRST because its "=" padding looks exactly like a quoted-printable
+    // escape — running the QP decoder over a base64 blob mangles it beyond recovery. HP's
+    // Outlook mail arrives base64 with no per-part headers at all, which is why the header
+    // alone is not enough to go on.
+    let body: string;
+    if (headers.includes("base64") || looksBase64(encoded)) {
+      body = decodeBase64(encoded);
+    } else if (headers.includes("quoted-printable") || /=\n|=[0-9A-F]{2}/i.test(encoded)) {
+      body = decodeQuotedPrintable(encoded);
+    } else {
+      body = encoded;
+    }
     return {
-      body: looksEncoded ? decodeQuotedPrintable(body) : body,
+      body,
       isPlain: headers.includes("text/plain"),
+      // Sniff the DECODED text: a base64 part gives no clue what it holds until it is
+      // decoded, and HP sends HTML that way.
       isHtml: headers.includes("text/html") || /<html|<body|<div|<p[ >]/i.test(body),
     };
   });
@@ -147,6 +160,46 @@ function extractReadableBody(raw: string): string {
   const any = sections.find((s) => s.body.trim());
   const body = any?.body ?? text;
   return /<[a-z][\s\S]*>/i.test(body) ? stripHtml(body) : body;
+}
+
+/**
+ * Is this part a base64 blob rather than prose?
+ *
+ * Deliberately strict: EVERY non-blank line must be nothing but the base64 alphabet. Real
+ * prose fails on the first space or full stop, so a customer's message can never be
+ * mistaken for base64 and thrown away — the failure mode that matters here. A short run is
+ * ignored for the same reason ("Reminder" is a valid base64 string).
+ */
+function looksBase64(value: string): boolean {
+  const lines = value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return false;
+  if (lines.join("").length < 24) return false;
+  return lines.every((line) => /^[A-Za-z0-9+/]+={0,2}$/.test(line));
+}
+
+/**
+ * Base64 → text. Ignores whatever line wrapping the sender used.
+ *
+ * The decode is only accepted when it actually yields text. A run-together message like
+ * "WO035104670PendingUpdateRequired" satisfies the base64 alphabet by accident, and
+ * decoding it would replace a real customer sentence with binary noise — so the result is
+ * kept only if it reads as prose, and the original is returned otherwise.
+ */
+function decodeBase64(value: string): string {
+  const compact = value.replace(/[^A-Za-z0-9+/=]/g, "");
+  if (!compact) return value;
+  const decoded = Buffer.from(compact, "base64").toString("utf8");
+  return isMostlyText(decoded) ? decoded : value;
+}
+
+/** Printable characters, whitespace and common accents — anything else reads as binary. */
+function isMostlyText(value: string): boolean {
+  if (!value.trim()) return false;
+  const printable = value.replace(/[^\t\n\r\x20-\x7E -ɏ€]/g, "").length;
+  return printable / value.length >= 0.9;
 }
 
 /** Quoted-printable: `=3D` escapes and `=` soft line breaks. */

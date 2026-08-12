@@ -52,6 +52,7 @@
     "migrate:inbound-email-body": "tsx src/scripts/applyInboundEmailBodyMigration.ts",
     "migrate:inbound-email-escalation": "tsx src/scripts/applyInboundEmailEscalationMigration.ts",
     "migrate:email-replies": "tsx src/scripts/applyEmailRepliesMigration.ts",
+    "backfill:email-bodies": "tsx src/scripts/backfillInboundEmailBodies.ts",
     "migrate:all": "tsx src/scripts/applyAllMigrations.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "fieldez:worker": "tsx src/worker/fieldezSyncWorker.ts",
