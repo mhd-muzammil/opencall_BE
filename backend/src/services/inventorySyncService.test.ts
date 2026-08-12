@@ -4,6 +4,7 @@ import {
   findItemForPart,
   itemMatchesPart,
   partIdentity,
+  receivedStatusFor,
   type CasePartNumbers,
 } from "./inventorySyncService.js";
 
@@ -11,7 +12,13 @@ const part = (
   partOrderNumber: string,
   goodPartNumber = "",
   soNumber = "",
-): CasePartNumbers => ({ goodPartNumber, partOrderNumber, soNumber });
+  installedStatus = "",
+): CasePartNumbers => ({
+  goodPartNumber,
+  partOrderNumber,
+  soNumber,
+  installedStatus,
+});
 
 describe("partIdentity", () => {
   it("uses Part Order No, falls back to Good Part No, case/space-insensitive", () => {
@@ -122,5 +129,48 @@ describe("findItemForPart — unkeyed parts adopt, never duplicate", () => {
   it("an unkeyed part with NO unclaimed item is unmatched (caller creates only if the case is empty)", () => {
     expect(findItemForPart(items, part("", ""), (it) => it.id === 1)).toBeUndefined();
     expect(findItemForPart([], part("", ""), () => false)).toBeUndefined();
+  });
+});
+
+describe("receivedStatusFor", () => {
+  it("treats RCV_SPARE as received and every other Flex status as in transit", () => {
+    expect(receivedStatusFor(part("MO-1", "GP-1", "", "RCV_SPARE"))).toBe("RECEIVED");
+    expect(receivedStatusFor(part("MO-1", "GP-1", "", "rcv_spare"))).toBe("RECEIVED");
+    expect(receivedStatusFor(part("MO-1", "GP-1", "", "YTR_INTRANSIT"))).toBe(
+      "IN_TRANSIT",
+    );
+  });
+
+  it("keeps a blank status blank: unknown is not the same as not-yet", () => {
+    // Inventory shows unknown rows and hides in-transit ones, so collapsing the
+    // two here would silently hide parts Flex never classified.
+    expect(receivedStatusFor(part("MO-1"))).toBe("");
+    expect(receivedStatusFor(part("MO-1", "GP-1", "", "   "))).toBe("");
+  });
+});
+
+describe("dedupeCaseParts installed status", () => {
+  it("lets a received line upgrade a stale in-transit duplicate", () => {
+    const parts = dedupeCaseParts([
+      part("MO-1", "GP-1", "", "YTR_INTRANSIT"),
+      part("MO-1", "GP-1", "", "RCV_SPARE"),
+    ]);
+    expect(parts).toHaveLength(1);
+    expect(receivedStatusFor(parts[0]!)).toBe("RECEIVED");
+  });
+
+  it("never lets an in-transit duplicate demote a received line", () => {
+    const parts = dedupeCaseParts([
+      part("MO-1", "GP-1", "", "RCV_SPARE"),
+      part("MO-1", "GP-1", "", "YTR_INTRANSIT"),
+    ]);
+    expect(parts).toHaveLength(1);
+    expect(receivedStatusFor(parts[0]!)).toBe("RECEIVED");
+  });
+
+  it("does not mutate the parts it was given", () => {
+    const stale = part("MO-1", "GP-1", "", "YTR_INTRANSIT");
+    dedupeCaseParts([stale, part("MO-1", "GP-1", "", "RCV_SPARE")]);
+    expect(stale.installedStatus).toBe("YTR_INTRANSIT");
   });
 });

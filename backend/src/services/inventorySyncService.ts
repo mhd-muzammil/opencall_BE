@@ -27,6 +27,12 @@ export interface CasePartNumbers {
   goodPartNumber: string;
   partOrderNumber: string;
   soNumber: string;
+  /**
+   * Raw `Good Part Installed Status` for this part line (RCV_SPARE,
+   * YTR_INTRANSIT, ...). Carried through to inventory so HP Stock can tell a
+   * spare that is on the shelf from one still on a van.
+   */
+  installedStatus: string;
 }
 
 /**
@@ -38,6 +44,22 @@ export function partIdentity(part: CasePartNumbers): string {
   return (part.partOrderNumber || part.goodPartNumber || "").trim().toLowerCase();
 }
 
+/** Flex's own marker for "the spare is physically here". */
+export const FLEX_RECEIVED = "RCV_SPARE";
+
+/**
+ * Inventory's view of where a part is, from the raw Flex status.
+ *
+ * Blank in means blank out. "Flex never told us" has to stay distinguishable
+ * from "Flex says not yet", because inventory keeps unknown rows visible and
+ * hides in-transit ones - collapsing the two would hide rows nobody classified.
+ */
+export function receivedStatusFor(part: CasePartNumbers): string {
+  const raw = (part.installedStatus || "").trim().toUpperCase();
+  if (!raw) return "";
+  return raw === FLEX_RECEIVED ? "RECEIVED" : "IN_TRANSIT";
+}
+
 /**
  * Collapse a case's Flex part rows to one entry per distinct part. The Flex WIP
  * file has one row per part line, so a multi-part case yields several rows — but
@@ -46,13 +68,27 @@ export function partIdentity(part: CasePartNumbers): string {
  * case never loses its single inventory row.
  */
 export function dedupeCaseParts(parts: readonly CasePartNumbers[]): CasePartNumbers[] {
-  const seen = new Set<string>();
+  const byKey = new Map<string, CasePartNumbers>();
   const out: CasePartNumbers[] = [];
   for (const part of parts) {
     const key = partIdentity(part) || "__unkeyed__";
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(part);
+    const kept = byKey.get(key);
+    if (!kept) {
+      byKey.set(key, part);
+      out.push(part);
+      continue;
+    }
+    // Same part on two lines with different installed statuses (an export
+    // re-uploaded mid-delivery). Received wins: a spare that has landed must
+    // never be demoted by a stale duplicate line that still says in-transit.
+    if (
+      receivedStatusFor(part) === "RECEIVED" &&
+      receivedStatusFor(kept) !== "RECEIVED"
+    ) {
+      const upgraded = { ...kept, installedStatus: part.installedStatus };
+      out[out.indexOf(kept)] = upgraded;
+      byKey.set(key, upgraded);
+    }
   }
   return out;
 }
@@ -99,6 +135,7 @@ const EMPTY_PART: CasePartNumbers = {
   goodPartNumber: "",
   partOrderNumber: "",
   soNumber: "",
+  installedStatus: "",
 };
 
 /**
@@ -135,6 +172,7 @@ export async function fetchCaseParts(caseId: string): Promise<CasePartNumbers[]>
           goodPartNumber: line.goodPartNo ?? "",
           partOrderNumber: line.partOrderNo ?? "",
           soNumber: line.soNumber ?? "",
+          installedStatus: line.goodPartInstalledStatus ?? "",
         };
       }),
     );
@@ -287,6 +325,8 @@ async function syncCasePartsViaApi(
         good_part_number: part.goodPartNumber,
         part_order_number: part.partOrderNumber,
         so_number: part.soNumber,
+        part_received_status: receivedStatusFor(part),
+        flex_installed_status: part.installedStatus,
         inventory_details: detailsString,
         opencall_case_details: detailsObj,
         case_created_time: caseCreatedIso,
@@ -313,6 +353,13 @@ async function syncCasePartsViaApi(
       inventory_details: detailsString,
       opencall_case_details: detailsObj,
       case_created_time: caseCreatedIso,
+      // Pushed on EVERY cycle, deliberately unconditional: this is the whole
+      // point of the 15-minute beat - a part marked received in Flex at 10:07
+      // reaches HP Stock on the 10:15 pass. Inventory owns the sticky rule
+      // (a received spare is never walked back), so this side stays dumb and
+      // just reports what the newest export says.
+      part_received_status: receivedStatusFor(part),
+      flex_installed_status: part.installedStatus,
     };
     if (!existing.work_order_id) patch.work_order_id = row.ticket_id;
     if (!existing.region) patch.region = mappedRegion;
@@ -546,8 +593,10 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
         opencall_case_details, transition_history, created_at, updated_at,
         warranty_trade, part_shipment_status, dc_cut_request_message,
         dc_cut_approved, dc_cut_chat,
-        case_created_time
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        case_created_time,
+        part_received_status, part_received_source, part_received_at,
+        flex_installed_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     // Fill blanks only + refresh the snapshot fields; never touch status or
@@ -566,6 +615,23 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
         inventory_details = ?,
         opencall_case_details = ?,
         case_created_time = ?,
+        -- Sticky, mirroring what the inventory API enforces on the prod path:
+        -- once RECEIVED the decision stands, whatever a later export says. In
+        -- SQLite every right-hand side reads the OLD row, so these CASEs all
+        -- test the pre-update value.
+        part_received_status = CASE
+          WHEN part_received_status = 'RECEIVED' THEN 'RECEIVED' ELSE ? END,
+        part_received_source = CASE
+          WHEN part_received_status = 'RECEIVED' THEN part_received_source
+          WHEN ? = 'RECEIVED' THEN 'FLEX'
+          ELSE part_received_source END,
+        part_received_at = CASE
+          WHEN part_received_status = 'RECEIVED' THEN part_received_at
+          WHEN ? = 'RECEIVED' THEN ?
+          ELSE part_received_at END,
+        -- The raw Flex value is NOT sticky: it is the audit trail that makes
+        -- "we marked it received but Flex still says in transit" visible.
+        flex_installed_status = ?,
         updated_at = ?
       WHERE id = ?
     `);
@@ -608,6 +674,10 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
           0,                    // dc_cut_approved (NOT NULL bool)
           "[]",                 // dc_cut_chat (NOT NULL JSON list)
           latestMeta?.case_created_time ?? null, // case_created_time
+          receivedStatusFor(part),               // part_received_status
+          receivedStatusFor(part) === "RECEIVED" ? "FLEX" : "", // part_received_source
+          receivedStatusFor(part) === "RECEIVED" ? now : null,  // part_received_at
+          part.installedStatus,                  // flex_installed_status
         );
         console.info(
           `[InventorySync] Created HPStockItem for case ${row.case_id} part ${part.partOrderNumber || part.goodPartNumber || "(none)"}`,
@@ -629,6 +699,11 @@ export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
         detailsString,
         caseDetailsJson,
         latestMeta?.case_created_time ?? null,
+        receivedStatusFor(part), // part_received_status (guarded by CASE)
+        receivedStatusFor(part), // part_received_source test
+        receivedStatusFor(part), // part_received_at test
+        now,                     // part_received_at value
+        part.installedStatus,    // flex_installed_status
         now,
         existing.id,
       );
