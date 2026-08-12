@@ -7,6 +7,7 @@ import {
   findUserRecordLayout,
   upsertUserRecordLayout,
 } from "../repositories/userRecordLayoutRepository.js";
+import { mergeNewStandardColumns } from "../services/reportRows/recordLayoutMerge.js";
 import { requireCurrentUser } from "../services/rbac/regionAccessService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { badRequest } from "../utils/httpError.js";
@@ -44,7 +45,23 @@ export const getRecordLayoutController: RequestHandler = asyncHandler(
   async (request, response) => {
     const current = requireCurrentUser(request.currentUser);
     const layout = await findUserRecordLayout(current.id);
-    response.json({ data: layout });
+    if (!layout) {
+      response.json({ data: null });
+      return;
+    }
+
+    // A saved layout lists only the columns to SHOW, so a report column added
+    // after the layout was saved would be invisible to this user forever.
+    response.json({
+      data: {
+        ...layout,
+        orderedColumns: mergeNewStandardColumns({
+          orderedColumns: layout.orderedColumns,
+          knownColumns: layout.knownColumns,
+          standardColumns: DAILY_CALL_PLAN_COLUMNS,
+        }),
+      },
+    });
   },
 );
 
@@ -70,6 +87,9 @@ export const putRecordLayoutController: RequestHandler = asyncHandler(
     const layout = await upsertUserRecordLayout({
       userId: current.id,
       orderedColumns: input.orderedColumns,
+      // Everything the user could have chosen from, so a column shipped later is
+      // distinguishable from one they chose to hide.
+      knownColumns: [...allowed],
     });
     response.json({ data: layout });
   },

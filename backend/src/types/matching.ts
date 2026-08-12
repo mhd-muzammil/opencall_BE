@@ -1,3 +1,4 @@
+import type { GeoPoint } from "../utils/geo.js";
 import type {
   CallPlanParsedRecord,
   FlexWipParsedRecord,
@@ -30,6 +31,16 @@ export interface MatchedCallPlanInput {
   callPlan: readonly CallPlanParsedRecord[];
   slaHoursByWipAgingCategory?: ReadonlyMap<string, number> | Record<string, number>;
   areaNameByPincode?: ReadonlyMap<string, string> | Record<string, string>;
+  /**
+   * Branch office coordinates keyed by ASP work-location code, and pincode
+   * centroids keyed by pincode. Together they give each row its distance and
+   * direction from the office that owns it. Both optional: without them the
+   * Distance column is blank, which is how every existing caller behaves.
+   */
+  officeByAspCode?: ReadonlyMap<string, GeoPoint>;
+  coordinatesByPincode?: ReadonlyMap<string, GeoPoint>;
+  /** Routed road distances keyed by roadDistanceKey(aspCode, pincode). */
+  roadDistanceByOfficePincode?: ReadonlyMap<string, number>;
 }
 
 export interface EnrichedCallPlanRow {
@@ -59,6 +70,19 @@ export interface EnrichedCallPlanRow {
   customer_name: string | null;
   customer_type: string | null;
   location: string | null;
+  /**
+   * Road-distance ESTIMATE in km from the branch office that owns this call, and
+   * the 16-point compass direction to it. Null when the branch has no surveyed
+   * coordinate or the customer pincode does not resolve — a blank cell, never a
+   * guess, because a wrong distance silently mis-ranks a dispatcher's morning.
+   */
+  distance_km: number | null;
+  distance_bearing: string | null;
+  /**
+   * True when distance_km came from real routing; false when it is the
+   * straight-line estimate, which the report renders with a leading tilde.
+   */
+  distance_is_routed: boolean;
   contact: string | null;
   part: string | null;
   /**

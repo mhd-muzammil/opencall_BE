@@ -2,11 +2,17 @@ import { query } from "../config/database.js";
 
 export interface UserRecordLayout {
   orderedColumns: string[];
+  /**
+   * The full column catalog when this layout was saved. Null for layouts saved
+   * before the column existed — see mergeNewStandardColumns.
+   */
+  knownColumns: string[] | null;
   updatedAt: string;
 }
 
 interface UserRecordLayoutDbRow {
   ordered_columns: string[];
+  known_columns: string[] | null;
   updated_at: string;
 }
 
@@ -19,7 +25,7 @@ export async function findUserRecordLayout(
 ): Promise<UserRecordLayout | null> {
   const result = await query<UserRecordLayoutDbRow>(
     `
-      SELECT ordered_columns, updated_at::TEXT AS updated_at
+      SELECT ordered_columns, known_columns, updated_at::TEXT AS updated_at
       FROM user_record_layouts
       WHERE user_id = $1
     `,
@@ -31,28 +37,46 @@ export async function findUserRecordLayout(
     return null;
   }
 
-  return { orderedColumns: row.ordered_columns, updatedAt: row.updated_at };
+  return {
+    orderedColumns: row.ordered_columns,
+    knownColumns: row.known_columns,
+    updatedAt: row.updated_at,
+  };
 }
 
 export async function upsertUserRecordLayout(input: {
   userId: string;
   orderedColumns: readonly string[];
+  /**
+   * Every column the user could have picked from at save time. Stored so a
+   * column added later can be told apart from one they chose to hide.
+   */
+  knownColumns: readonly string[];
 }): Promise<UserRecordLayout> {
   const result = await query<UserRecordLayoutDbRow>(
     `
-      INSERT INTO user_record_layouts (user_id, ordered_columns, updated_by, updated_at)
-      VALUES ($1, $2::jsonb, $1, NOW())
+      INSERT INTO user_record_layouts (user_id, ordered_columns, known_columns, updated_by, updated_at)
+      VALUES ($1, $2::jsonb, $3::jsonb, $1, NOW())
       ON CONFLICT (user_id) DO UPDATE
         SET ordered_columns = EXCLUDED.ordered_columns,
+            known_columns = EXCLUDED.known_columns,
             updated_by = EXCLUDED.updated_by,
             updated_at = NOW()
-      RETURNING ordered_columns, updated_at::TEXT AS updated_at
+      RETURNING ordered_columns, known_columns, updated_at::TEXT AS updated_at
     `,
-    [input.userId, JSON.stringify(input.orderedColumns)],
+    [
+      input.userId,
+      JSON.stringify(input.orderedColumns),
+      JSON.stringify(input.knownColumns),
+    ],
   );
 
   const row = result.rows[0]!;
-  return { orderedColumns: row.ordered_columns, updatedAt: row.updated_at };
+  return {
+    orderedColumns: row.ordered_columns,
+    knownColumns: row.known_columns,
+    updatedAt: row.updated_at,
+  };
 }
 
 /** Removes the user's custom layout, reverting them to the default. */

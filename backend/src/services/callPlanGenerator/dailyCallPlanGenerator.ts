@@ -1,4 +1,9 @@
 import { DAILY_CALL_PLAN_COLUMNS, regionNameForAspCode } from "@opencall/shared";
+import {
+  findPincodeCoordinates,
+  findRegionOfficesByAspCode,
+  findRoadDistances,
+} from "../../repositories/geoRepository.js";
 import type { ReportRowComparisonInsight } from "@opencall/shared";
 import { withTransaction } from "../../config/database.js";
 import {
@@ -826,12 +831,21 @@ export async function generateDailyCallPlanReport(
       client,
       input.regionId,
     );
+    // Origin and destination for the Distance column. Both are small tables read
+    // once per generation; a branch with no surveyed coordinate simply yields a
+    // blank cell for its rows.
+    const officeByAspCode = await findRegionOfficesByAspCode(client);
+    const coordinatesByPincode = await findPincodeCoordinates(client);
+    const roadDistanceByOfficePincode = await findRoadDistances(client);
     const matches = matchSourceRecords({
       flexWip: flexWipHeaders,
       renderways: dedupedRenderways.dedupedRows,
       callPlan: dedupedCallPlan.dedupedRows,
       slaHoursByWipAgingCategory,
       areaNameByPincode,
+      officeByAspCode,
+      coordinatesByPincode,
+      roadDistanceByOfficePincode,
     });
     const matchedMatches = matches.filter((match) => match.flexWip !== null);
     

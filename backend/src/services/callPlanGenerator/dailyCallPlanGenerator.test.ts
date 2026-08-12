@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   findCallPlanRecordsByBatchId: vi.fn(),
   findActiveSlaHoursByCategory: vi.fn(),
   findAreaNameByPincode: vi.fn(),
+  findRegionOfficesByAspCode: vi.fn(),
+  findPincodeCoordinates: vi.fn(),
+  findRoadDistances: vi.fn(),
   matchSourceRecords: vi.fn(),
   findPreviousFinalReportRowsForManualCarryForward: vi.fn(),
   findFlexStatusHistoryForUnchangedDays: vi.fn(),
@@ -90,6 +93,13 @@ vi.mock("../../repositories/uploadBatchRepository.js", () => ({
 
 vi.mock("../../repositories/regionRepository.js", () => ({
   findRegionById: mocks.findRegionById,
+}));
+
+vi.mock("../../repositories/geoRepository.js", () => ({
+  findRegionOfficesByAspCode: mocks.findRegionOfficesByAspCode,
+  findPincodeCoordinates: mocks.findPincodeCoordinates,
+  findRoadDistances: mocks.findRoadDistances,
+  roadDistanceKey: (asp: string, pin: string) => `${asp.trim().toUpperCase()}|${pin}`,
 }));
 
 function previousFinalRow(): FinalReportManualCarryForwardRow {
@@ -198,6 +208,9 @@ function currentMatch(): MatchedCallPlanRecord {
       customer_name: "Customer",
       customer_type: "Consumer",
       location: null,
+      distance_km: null,
+      distance_bearing: null,
+      distance_is_routed: false,
       contact: null,
       part: null,
       product_serial_no: null,
@@ -236,6 +249,9 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
     mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
     mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.findRegionOfficesByAspCode.mockResolvedValue(new Map());
+    mocks.findPincodeCoordinates.mockResolvedValue(new Map());
+    mocks.findRoadDistances.mockResolvedValue(new Map());
     mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
     mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([
       previousFinalRow(),
@@ -308,6 +324,9 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
     mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
     mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.findRegionOfficesByAspCode.mockResolvedValue(new Map());
+    mocks.findPincodeCoordinates.mockResolvedValue(new Map());
+    mocks.findRoadDistances.mockResolvedValue(new Map());
     mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
     mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([source]);
     mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
@@ -384,6 +403,9 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
     mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
     mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.findRegionOfficesByAspCode.mockResolvedValue(new Map());
+    mocks.findPincodeCoordinates.mockResolvedValue(new Map());
+    mocks.findRoadDistances.mockResolvedValue(new Map());
     // Flex-only upload (no Renderways/call plan): the fresh row's Morning is
     // blank, exactly what the worker produces.
     mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
@@ -444,6 +466,9 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
     mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
     mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.findRegionOfficesByAspCode.mockResolvedValue(new Map());
+    mocks.findPincodeCoordinates.mockResolvedValue(new Map());
+    mocks.findRoadDistances.mockResolvedValue(new Map());
     mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
     mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([]);
     mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
@@ -509,11 +534,11 @@ describe("generateDailyCallPlanReport", () => {
    * Evening status and it comes back to the same OLD status".
    *
    * Vectors 1-4 all addressed the Evening VANISHING, and the heal was gated on
-   * `if (!cleanManualValue(persisted.eveningRtplStatus))` — so a row still
-   * holding a stale value was skipped entirely and a newer entry made on
-   * another of today's reports could never reach it. With the FieldEZ worker
-   * minting a report every ~15 minutes, the report a user is shown is very
-   * often not the one they typed into, so this fired constantly.
+   * `if (!persisted.eveningRtplStatus)` — so a row still holding a stale value
+   * was skipped entirely and a newer entry made on another of today's reports
+   * could never reach it. With the FieldEZ worker minting a report every ~15
+   * minutes, the report a user is shown is very often not the one they typed
+   * into, so this fired constantly.
    */
   it("replaces a STALE non-blank Evening with the newer same-day authority", async () => {
     const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
@@ -526,6 +551,9 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
     mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
     mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.findRegionOfficesByAspCode.mockResolvedValue(new Map());
+    mocks.findPincodeCoordinates.mockResolvedValue(new Map());
+    mocks.findRoadDistances.mockResolvedValue(new Map());
     mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
     mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([]);
     mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
@@ -601,6 +629,9 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
     mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
     mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.findRegionOfficesByAspCode.mockResolvedValue(new Map());
+    mocks.findPincodeCoordinates.mockResolvedValue(new Map());
+    mocks.findRoadDistances.mockResolvedValue(new Map());
     mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
     mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([]);
     mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
@@ -672,6 +703,9 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
     mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
     mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.findRegionOfficesByAspCode.mockResolvedValue(new Map());
+    mocks.findPincodeCoordinates.mockResolvedValue(new Map());
+    mocks.findRoadDistances.mockResolvedValue(new Map());
     mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
     mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([]);
     mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
@@ -747,6 +781,9 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
     mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
     mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.findRegionOfficesByAspCode.mockResolvedValue(new Map());
+    mocks.findPincodeCoordinates.mockResolvedValue(new Map());
+    mocks.findRoadDistances.mockResolvedValue(new Map());
 
     // The file only covers Chennai (ASPS01461) — it is a region-scoped upload.
     mocks.findUploadBatchesForValidation.mockResolvedValue([

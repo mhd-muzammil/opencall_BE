@@ -4,6 +4,7 @@ import {
 } from "@opencall/shared";
 import type { EnrichedCallPlanRow } from "../../types/matching.js";
 import type { DailyCallPlanOutputRow } from "../../types/reportGeneration.js";
+import { formatDistanceCell } from "../../utils/geo.js";
 
 export const MANUAL_ENTRY_REQUIRED = "Manual Entry Required";
 
@@ -93,6 +94,14 @@ export function formatDailyCallPlanRow(
     "Customer Mail": valueOrManual(row.customer_mail),
     RCA: valueOrManual(row.rca),
     "Case Created Time": row.case_created_time ? formatDisplayDateTime(row.case_created_time) : "",
+    // Distance and direction share one cell: they are only meaningful together
+    // (a 12km call NNE and a 12km call SSW are not interchangeable jobs), and
+    // the column order is expensive to extend.
+    Distance: formatDistanceCell(
+      row.distance_km,
+      row.distance_bearing,
+      row.distance_is_routed,
+    ),
   };
 }
 

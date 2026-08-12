@@ -28,6 +28,10 @@ export const DAILY_CALL_PLAN_COLUMNS = [
   "Customer Mail",
   "RCA",
   "Case Created Time",
+  // Appended, never inserted: the order above is persisted in saved user
+  // layouts and in every exported workbook, so an insertion would silently
+  // reshuffle both. New columns go on the end.
+  "Distance",
 ] as const;
 
 export type DailyCallPlanColumn = (typeof DAILY_CALL_PLAN_COLUMNS)[number];

@@ -12,6 +12,7 @@ import type {
 } from "../../types/sourceRecords.js";
 import {
   normalizeCaseId,
+  normalizePincode,
   normalizeTicketId,
 } from "../normalization/valueNormalizer.js";
 import { formatOpenCallPartCell } from "../normalization/dedupeRowsByTicket.js";
@@ -23,6 +24,8 @@ import {
   mapLocation,
 } from "./enrichmentHelpers.js";
 import { calculateWipAging } from "./wipAgingCalculator.js";
+import { officeDistance, type OfficeDistance } from "../../utils/geo.js";
+import { roadDistanceKey } from "../../repositories/geoRepository.js";
 import { parseCustomDate } from "../../utils/dateParser.js";
 
 interface IndexedLookup<TRecord> {
@@ -256,6 +259,7 @@ function buildEnrichedRow(
   );
   const caseCreatedTime = toIsoString(flexWip?.createTime);
   const calculatedWipAging = calculateWipAging(caseCreatedTime);
+  const officeDistanceForRow = resolveOfficeDistance(flexWip, input);
 
   return {
     ticket_id: flexWip?.ticketId ?? renderways?.ticketId ?? callPlan?.ticketId ?? "",
@@ -277,6 +281,12 @@ function buildEnrichedRow(
     customer_name: flexWip?.customerName ?? null,
     customer_type: renderways?.customerType ?? null,
     location: callPlan?.location ?? mapLocation(flexWip?.customerPincode, input.areaNameByPincode),
+    // Derived from the PINCODE, not from `location`. The Location cell is a
+    // manually editable carry-forward field, so keying distance off it would let
+    // an edited label silently desync the kilometres from the actual place.
+    distance_km: officeDistanceForRow?.distanceKm ?? null,
+    distance_bearing: officeDistanceForRow?.bearing ?? null,
+    distance_is_routed: officeDistanceForRow?.routed ?? false,
     contact: flexWip?.contact ?? null,
     part: buildPartCell(flexWip),
     // Transient: the most-blocking part-shipment status, used only to derive
@@ -291,6 +301,50 @@ function buildEnrichedRow(
     manual_notes: null,
     match_status: matchStatus,
   };
+}
+
+/**
+ * Distance and direction from the branch office that owns this call to the
+ * customer's pincode centroid.
+ *
+ * The origin is chosen by the row's own Work Location (the ASP code), not by the
+ * report's region: a Chennai work order raised against a Vellore address must
+ * report its real 110km, because that distance is exactly what makes the
+ * misfiling visible. Suppressing it would hide the problem behind a blank cell.
+ */
+function resolveOfficeDistance(
+  flexWip: FlexWipParsedRecord | null,
+  input: MatchedCallPlanInput,
+): { distanceKm: number; bearing: string; routed: boolean } | null {
+  if (!input.officeByAspCode || !input.coordinatesByPincode) {
+    return null;
+  }
+
+  const aspCode = (flexWip?.workLocation ?? "").trim().toUpperCase();
+  const pincode = normalizePincode(flexWip?.customerPincode);
+  if (!aspCode || !pincode) {
+    return null;
+  }
+
+  const geometry: OfficeDistance | null = officeDistance(
+    input.officeByAspCode.get(aspCode),
+    input.coordinatesByPincode.get(pincode),
+  );
+  if (!geometry) {
+    return null;
+  }
+
+  // Prefer the routed distance. The straight-line estimate is only a stand-in
+  // until this pincode has been routed: measured over the live Chennai set it
+  // misses by 5.2km on average, because the real road/straight ratio varies from
+  // 1.11 to 1.94 with the character of the route.
+  const routedKm = input.roadDistanceByOfficePincode?.get(
+    roadDistanceKey(aspCode, pincode),
+  );
+
+  return routedKm == null
+    ? { distanceKm: geometry.distanceKm, bearing: geometry.bearing, routed: false }
+    : { distanceKm: routedKm, bearing: geometry.bearing, routed: true };
 }
 
 function buildMatchNotes(

@@ -310,6 +310,11 @@ function closedRowToEnriched(
     case_id: row.caseId ?? "",
     case_created_time: row.caseCreatedTime,
     wip_aging: row.wipAging,
+    // A closed row is off the dispatch board, so distance is not carried
+    // forward — nobody is choosing whether to drive to it.
+    distance_km: null,
+    distance_bearing: null,
+    distance_is_routed: false,
     // A same-day closure keeps the Evening entered earlier today (e.g.
     // "Case-Closed") — the closed row stays on the Records page all day, and a
     // blank Evening there misreads as unfinished EOD work. The same-day value

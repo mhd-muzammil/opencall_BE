@@ -555,14 +555,16 @@ export async function insertDailyCallPlanReportRows(
           match_status,
           match_notes,
           flex_status_unchanged_days,
-          same_day_closed
+          same_day_closed,
+          distance_km,
+          distance_bearing
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
           $17, $18, $19, $20, $21, $22, $23, $24,
           $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35::jsonb, $36, $37::jsonb, $38, $39::text[],
-          $40, $41::jsonb, $42, $43
+          $40, $41::jsonb, $42, $43, $44, $45
         )
         RETURNING id, updated_at::TEXT AS updated_at, updated_by::TEXT AS updated_by
       `,
@@ -610,6 +612,8 @@ export async function insertDailyCallPlanReportRows(
         JSON.stringify(row.match.notes),
         row.comparison?.flexStatusUnchangedDays ?? null,
         row.carryForward.sameDayClosedRow,
+        row.enriched.distance_km,
+        row.enriched.distance_bearing,
       ],
     );
     const inserted = result.rows[0] as InsertedDailyReportRow | undefined;

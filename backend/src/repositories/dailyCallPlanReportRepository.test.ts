@@ -44,6 +44,9 @@ function enrichedRow(): EnrichedCallPlanRow {
     customer_name: "Customer",
     customer_type: "Consumer",
     location: "Chennai",
+    distance_km: null,
+    distance_bearing: null,
+    distance_is_routed: false,
     contact: null,
     part: null,
     product_serial_no: null,
@@ -121,6 +124,7 @@ function generatedRow(): GeneratedDailyCallPlanRow {
       "Customer Mail": "test@example.com",
       RCA: "",
       "Case Created Time": "01-01-2026 00:00:00",
+      Distance: "",
     },
   };
 }
@@ -400,6 +404,7 @@ describe("insertDailyCallPlanReportRows", () => {
 
     // A system copy of another report's user edit — must NOT stamp either
     // timestamp, or it would outrank the original in the authority ordering.
+    expect(sql).not.toContain("SET evening_rtpl_status = $2,");
     expect(sql).not.toContain("updated_at = NOW()");
     expect(values).toEqual(["row-1", "Case-Closed", "2026-08-07 17:30:00+05:30"]);
   });
