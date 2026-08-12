@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "db:check": "tsx src/scripts/checkDatabase.ts",
+    "distances:compute": "tsx src/scripts/computeRoadDistances.ts",
+    "migrate:office-distance": "tsx src/scripts/applyOfficeDistanceMigration.ts",
     "migrate:user-management": "tsx src/scripts/applyUserManagementMigration.ts",
     "migrate:activity-log": "tsx src/scripts/applyActivityLogMigration.ts",
     "migrate:required-regions": "tsx src/scripts/applyRequiredRegionSeedMigration.ts",

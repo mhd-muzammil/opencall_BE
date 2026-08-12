@@ -50,6 +50,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyEveningStatusEditTimestampMigration", // 040 evening status edited-at
   "applyClosureReportStatusMigration", // 041 closure report status
   "applyClosureSyncRunsMigration", // 042 closure sync runs
+  "applyOfficeDistanceMigration", // 043 office distance (region_offices, pincode_geo)
   "applyCustomerAddressMigration", // 044 flex_wip_records address columns
   "applyWorkOrderGeocodingMigration", // 045 geocode_cache + work_order_geocodes
   "applyInboundEmailMigration", // 047 customer email ingest (own tables, no FKs)
