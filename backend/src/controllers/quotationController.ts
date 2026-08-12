@@ -51,11 +51,28 @@ const createSchema = z.object({
   customerPincode: z.string().trim().max(20).optional().default(""),
   customerPhone: z.string().trim().max(50).optional().default(""),
   customerEmail: z.string().trim().max(300).optional().default(""),
+  // --- Line items ---
+  // `lineItems` is what the form sends. The four flat fields and `baseAmount` below are
+  // the pre-053 single-item shape, kept so an older client (or a saved integration) still
+  // works; they are normalised into a one-element list right after parsing.
+  lineItems: z
+    .array(
+      z.object({
+        serviceDescription: z.string().trim().max(1000).optional().default(""),
+        productDescription: z.string().trim().max(1000).optional().default(""),
+        modelNo: z.string().trim().max(200).optional().default(""),
+        serialNo: z.string().trim().max(200).optional().default(""),
+        baseAmount: z.number().nonnegative().max(100000000),
+      }),
+    )
+    // A quotation with a hundred rows is a data-entry accident, not a quotation.
+    .max(50)
+    .optional(),
   serviceDescription: z.string().trim().max(1000).optional().default(""),
   productDescription: z.string().trim().max(1000).optional().default(""),
   modelNo: z.string().trim().max(200).optional().default(""),
   serialNo: z.string().trim().max(200).optional().default(""),
-  baseAmount: z.number().nonnegative().max(100000000),
+  baseAmount: z.number().nonnegative().max(100000000).optional(),
   sgstPercent: z.number().min(0).max(100).optional().default(9),
   cgstPercent: z.number().min(0).max(100).optional().default(9),
 });
@@ -68,7 +85,42 @@ export const createQuotationController: RequestHandler = asyncHandler(
       throw badRequest("Invalid quotation", parsed.error.flatten());
     }
 
-    const quotation = await createQuotation({ ...parsed.data, createdBy: actor });
+    const {
+      lineItems,
+      serviceDescription,
+      productDescription,
+      modelNo,
+      serialNo,
+      baseAmount,
+      ...rest
+    } = parsed.data;
+
+    // One shape from here on. A pre-053 caller sending the flat fields becomes a
+    // one-item quotation, which is exactly what it always was.
+    const items =
+      lineItems && lineItems.length > 0
+        ? lineItems
+        : [
+            {
+              serviceDescription,
+              productDescription,
+              modelNo,
+              serialNo,
+              baseAmount: baseAmount ?? 0,
+            },
+          ];
+
+    // The sheet is priced work; a quotation of nothing is a mistake worth refusing rather
+    // than issuing a running number for.
+    if (items.every((item) => item.baseAmount <= 0)) {
+      throw badRequest("Enter an amount greater than 0 on at least one line item");
+    }
+
+    const quotation = await createQuotation({
+      ...rest,
+      lineItems: items,
+      createdBy: actor,
+    });
 
     recordActivity({
       eventType: "UPLOAD_CREATED",

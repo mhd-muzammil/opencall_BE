@@ -59,6 +59,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyEmailRepliesMigration", // 050 replies (FKs inbound_emails + users)
   "applyInboundEmailHtmlMigration", // 051 body_html + inline/attached files
   "applyOutboundEmailsMigration", // 052 compose (FKs inbound_emails + users)
+  "applyQuotationLineItemsMigration", // 053 several line items per quotation (FK quotations)
 ];
 
 /**

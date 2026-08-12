@@ -1,6 +1,21 @@
 import type { PoolClient } from "pg";
 import { pool, query } from "../config/database.js";
 
+/**
+ * One priced row on a quotation.
+ *
+ * The parent's `serviceDescription` / `productDescription` / `modelNo` / `serialNo` mirror
+ * the FIRST of these and `baseAmount` mirrors their SUM, so everything that read a
+ * quotation before line items existed still reads a correct one.
+ */
+export interface QuotationLineItem {
+  serviceDescription: string;
+  productDescription: string;
+  modelNo: string;
+  serialNo: string;
+  baseAmount: number;
+}
+
 export interface Quotation {
   id: string;
   quotationNo: string;
@@ -23,6 +38,8 @@ export interface Quotation {
   cgstPercent: number;
   createdBy: string;
   createdAt: string;
+  /** Every priced row, in entry order. Never empty — a pre-053 quotation has exactly one. */
+  lineItems: QuotationLineItem[];
 }
 
 export interface CreateQuotationInput {
@@ -36,11 +53,11 @@ export interface CreateQuotationInput {
   customerPincode: string;
   customerPhone: string;
   customerEmail: string;
-  serviceDescription: string;
-  productDescription: string;
-  modelNo: string;
-  serialNo: string;
-  baseAmount: number;
+  /**
+   * The priced rows. A caller that still sends the flat single-item fields is normalised
+   * into a one-element list by the controller, so this is always the source of truth here.
+   */
+  lineItems: QuotationLineItem[];
   sgstPercent: number;
   cgstPercent: number;
   createdBy: string;
@@ -70,6 +87,69 @@ interface QuotationDbRow {
   created_at: string;
 }
 
+interface LineItemDbRow {
+  quotation_id: string;
+  service_description: string;
+  product_description: string;
+  model_no: string;
+  serial_no: string;
+  base_amount: string;
+}
+
+function mapLineItem(r: LineItemDbRow): QuotationLineItem {
+  return {
+    serviceDescription: r.service_description,
+    productDescription: r.product_description,
+    modelNo: r.model_no,
+    serialNo: r.serial_no,
+    baseAmount: Number(r.base_amount),
+  };
+}
+
+/**
+ * Load the items for a page of quotations in ONE query rather than per row.
+ *
+ * A quotation with no rows in the child table can only be one written by a build older
+ * than 053 that has not been backfilled; it falls back to the parent columns so the sheet
+ * still prints rather than coming out blank.
+ */
+async function attachLineItems(quotations: Quotation[]): Promise<Quotation[]> {
+  if (quotations.length === 0) return quotations;
+
+  const result = await query<LineItemDbRow>(
+    `SELECT quotation_id::TEXT AS quotation_id, service_description, product_description,
+            model_no, serial_no, base_amount::TEXT AS base_amount
+       FROM quotation_line_items
+      WHERE quotation_id = ANY($1::uuid[])
+      ORDER BY quotation_id, position, created_at`,
+    [quotations.map((q) => q.id)],
+  );
+
+  const byQuotation = new Map<string, QuotationLineItem[]>();
+  for (const row of result.rows) {
+    const list = byQuotation.get(row.quotation_id) ?? [];
+    list.push(mapLineItem(row));
+    byQuotation.set(row.quotation_id, list);
+  }
+
+  for (const quotation of quotations) {
+    const items = byQuotation.get(quotation.id);
+    quotation.lineItems =
+      items && items.length > 0
+        ? items
+        : [
+            {
+              serviceDescription: quotation.serviceDescription,
+              productDescription: quotation.productDescription,
+              modelNo: quotation.modelNo,
+              serialNo: quotation.serialNo,
+              baseAmount: quotation.baseAmount,
+            },
+          ];
+  }
+  return quotations;
+}
+
 function mapQuotation(r: QuotationDbRow): Quotation {
   return {
     id: r.id,
@@ -93,6 +173,8 @@ function mapQuotation(r: QuotationDbRow): Quotation {
     cgstPercent: Number(r.cgst_percent),
     createdBy: r.created_by,
     createdAt: r.created_at,
+    // Filled by attachLineItems; never left empty by the time a caller sees it.
+    lineItems: [],
   };
 }
 
@@ -139,6 +221,13 @@ export async function createQuotation(
     const seq = seqResult.rows[0]!.last_seq;
     const quotationNo = `RTPL/${finYear}/QEN/${seq}`;
 
+    // The parent row mirrors the items: `base_amount` is the SUBTOTAL, so the list view's
+    // Total column keeps working without being touched, and the four description columns
+    // carry the first item so a reader that predates line items still sees a real row.
+    const items = input.lineItems;
+    const first = items[0];
+    const subtotal = items.reduce((sum, item) => sum + item.baseAmount, 0);
+
     const result = await client.query<QuotationDbRow>(
       `INSERT INTO quotations (
          quotation_no, quotation_date, case_id, order_number,
@@ -163,19 +252,40 @@ export async function createQuotation(
         input.customerPincode,
         input.customerPhone,
         input.customerEmail,
-        input.serviceDescription,
-        input.productDescription,
-        input.modelNo,
-        input.serialNo,
-        input.baseAmount,
+        first?.serviceDescription ?? "",
+        first?.productDescription ?? "",
+        first?.modelNo ?? "",
+        first?.serialNo ?? "",
+        subtotal,
         input.sgstPercent,
         input.cgstPercent,
         input.createdBy,
       ],
     );
 
+    const quotationId = result.rows[0]!.id;
+    for (const [index, item] of items.entries()) {
+      await client.query(
+        `INSERT INTO quotation_line_items (
+           quotation_id, position, service_description, product_description,
+           model_no, serial_no, base_amount
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [
+          quotationId,
+          index,
+          item.serviceDescription,
+          item.productDescription,
+          item.modelNo,
+          item.serialNo,
+          item.baseAmount,
+        ],
+      );
+    }
+
     await client.query("COMMIT");
-    return mapQuotation(result.rows[0]!);
+    // Straight from the input: the rows were just written in this transaction, so a
+    // re-read would only be a round trip to learn what we already know.
+    return { ...mapQuotation(result.rows[0]!), lineItems: items };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -227,7 +337,7 @@ export async function listQuotations(input: {
   );
 
   return {
-    items: rowsResult.rows.map(mapQuotation),
+    items: await attachLineItems(rowsResult.rows.map(mapQuotation)),
     total,
     page,
     perPage,
@@ -241,5 +351,7 @@ export async function findQuotationById(id: string): Promise<Quotation | null> {
     [id],
   );
   const row = result.rows[0];
-  return row ? mapQuotation(row) : null;
+  if (!row) return null;
+  const [quotation] = await attachLineItems([mapQuotation(row)]);
+  return quotation ?? null;
 }
