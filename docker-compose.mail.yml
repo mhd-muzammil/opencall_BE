@@ -1,0 +1,30 @@
+# Customer-email ingest worker — the full service definition lives in
+# docker-compose.yml behind the `mail` profile (Dokploy deploys a single compose
+# file, so the base file must carry the service; enable it there with
+# COMPOSE_PROFILES=mail).
+#
+# This overlay is the manual/CLI entry point:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mail.yml up -d --build mail-worker
+#
+# Naming the service explicitly auto-activates its profile; the :? guards below make the
+# CLI route fail fast when the mailbox secrets are missing from the deploy environment
+# (.env) — NEVER commit them.
+
+name: opencall-backend
+
+services:
+  mail-worker:
+    environment:
+      # --- Mail server — REQUIRED ---
+      MAIL_IMAP_HOST: ${MAIL_IMAP_HOST:?set MAIL_IMAP_HOST}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:?set MAIL_PASSWORD}
+      MAIL_SMTP_HOST: ${MAIL_SMTP_HOST:-${MAIL_IMAP_HOST}}
+      # --- At least one mailbox must be set or the worker has nothing to poll ---
+      MAIL_SALEM: ${MAIL_SALEM:-}
+      MAIL_VELLORE: ${MAIL_VELLORE:-}
+      MAIL_KANCHIPURAM: ${MAIL_KANCHIPURAM:-}
+      MAIL_CHENNAI: ${MAIL_CHENNAI:-}
+      MAIL_HOSUR: ${MAIL_HOSUR:-}
+      MAIL_POLL_MINUTES: ${MAIL_POLL_MINUTES:-3}
+      TZ: ${TZ:-Asia/Kolkata}

@@ -52,6 +52,10 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyClosureSyncRunsMigration", // 042 closure sync runs
   "applyCustomerAddressMigration", // 044 flex_wip_records address columns
   "applyWorkOrderGeocodingMigration", // 045 geocode_cache + work_order_geocodes
+  "applyInboundEmailMigration", // 047 customer email ingest (own tables, no FKs)
+  "applyInboundEmailBodyMigration", // 048 full body for the reading pane
+  "applyInboundEmailEscalationMigration", // 049 escalation flag
+  "applyEmailRepliesMigration", // 050 replies (FKs inbound_emails + users)
 ];
 
 /**

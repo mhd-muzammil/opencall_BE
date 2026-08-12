@@ -167,6 +167,56 @@ services:
     mem_limit: ${FIELDEZ_WORKER_MEM_LIMIT:-2g}
     cpus: ${FIELDEZ_WORKER_CPUS:-1.0}
 
+  # Customer-email ingest worker. Polls each region mailbox over IMAP, stores new mail and
+  # matches it to a call. Behind the `mail` profile so the base stack is unchanged unless
+  # it is switched on (COMPOSE_PROFILES=mail, or naming the service on the CLI).
+  #
+  # SAFETY: the worker only ever reads mail received AFTER the watermark stamped when a
+  # mailbox is first registered, so the years of history in these mailboxes are never
+  # touched. It does not send: replies go out only from the API, on a human click.
+  mail-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.mail-worker
+    container_name: opencall-mail-worker
+    profiles: ["mail"]
+    restart: unless-stopped
+    init: true
+    # Let an in-flight mailbox sweep finish rather than killing it mid-fetch.
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Reads and writes its own tables directly; it does not go through the API.
+      DATABASE_URL: postgres://${POSTGRES_USER:-opencall}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-opencall}
+      # --- Mailboxes (cPanel IMAP) ---
+      MAIL_IMAP_HOST: ${MAIL_IMAP_HOST:-}
+      MAIL_IMAP_PORT: ${MAIL_IMAP_PORT:-993}
+      MAIL_SMTP_HOST: ${MAIL_SMTP_HOST:-}
+      MAIL_SMTP_PORT: ${MAIL_SMTP_PORT:-465}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      # A blank address simply means that region is not polled — chennai/hosur stay off
+      # until their mailbox password is confirmed.
+      MAIL_CHENNAI: ${MAIL_CHENNAI:-}
+      MAIL_SALEM: ${MAIL_SALEM:-}
+      MAIL_HOSUR: ${MAIL_HOSUR:-}
+      MAIL_VELLORE: ${MAIL_VELLORE:-}
+      MAIL_KANCHIPURAM: ${MAIL_KANCHIPURAM:-}
+      MAIL_POLL_MINUTES: ${MAIL_POLL_MINUTES:-3}
+      TZ: ${TZ:-Asia/Kolkata}
+    networks:
+      # `app` for egress to the mail server, `data` to reach postgres.
+      - app
+      - data
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+    pids_limit: 256
+    mem_reservation: 128m
+    mem_limit: ${MAIL_WORKER_MEM_LIMIT:-512m}
+    cpus: ${MAIL_WORKER_CPUS:-0.5}
+
 networks:
   app:
     name: opencall-backend-app
