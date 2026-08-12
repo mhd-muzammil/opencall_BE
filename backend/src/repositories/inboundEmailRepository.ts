@@ -89,6 +89,9 @@ export interface InboundEmailInput {
   subject: string;
   bodyPreview: string;
   bodyText: string;
+  /** The sender's own HTML, sanitised at ingest. Empty when the mail was plain text only. */
+  bodyHtml: string;
+  hasAttachments: boolean;
   receivedAt: string;
   matchedTicketId: string;
   matchedCaseId: string;
@@ -99,17 +102,23 @@ export interface InboundEmailInput {
   escalationReasons: string;
 }
 
-/** Insert a message; a re-poll of the same message is a no-op. Returns true when new. */
+/**
+ * Insert a message; a re-poll of the same message is a no-op.
+ *
+ * Returns the new row's id, or null when the message was already stored. The id is what
+ * the attachment rows hang off, so a duplicate poll cannot double-store the bytes either.
+ */
 export async function insertInboundEmail(
   input: InboundEmailInput,
-): Promise<boolean> {
+): Promise<string | null> {
   const result = await query<{ id: string }>(
     `INSERT INTO inbound_emails (
        mailbox_email, region_code, message_id, imap_uid,
-       from_email, from_name, subject, body_preview, body_text, received_at,
+       from_email, from_name, subject, body_preview, body_text, body_html,
+       has_attachments, received_at,
        matched_ticket_id, matched_case_id, match_method, match_confidence, is_auto_reply,
        escalation_level, escalation_reasons
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
      ON CONFLICT (mailbox_email, message_id) DO NOTHING
      RETURNING id::TEXT`,
     [
@@ -122,6 +131,8 @@ export async function insertInboundEmail(
       input.subject,
       input.bodyPreview,
       input.bodyText,
+      input.bodyHtml,
+      input.hasAttachments,
       input.receivedAt,
       input.matchedTicketId,
       input.matchedCaseId,
@@ -132,7 +143,108 @@ export async function insertInboundEmail(
       input.escalationReasons,
     ],
   );
-  return result.rows.length > 0;
+  return result.rows[0]?.id ?? null;
+}
+
+export interface InboundAttachmentInput {
+  contentId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  isInline: boolean;
+  content: Buffer;
+}
+
+/**
+ * Store a message's files. Called only with the id of a row that was just inserted, so
+ * there is no duplicate path; a failure here leaves the message itself readable.
+ */
+export async function insertInboundEmailAttachments(
+  inboundEmailId: string,
+  attachments: readonly InboundAttachmentInput[],
+): Promise<number> {
+  let stored = 0;
+  for (const attachment of attachments) {
+    await query(
+      `INSERT INTO inbound_email_attachments
+         (inbound_email_id, content_id, filename, mime_type, size_bytes, is_inline, content)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        inboundEmailId,
+        attachment.contentId,
+        attachment.filename,
+        attachment.mimeType,
+        attachment.sizeBytes,
+        attachment.isInline,
+        attachment.content,
+      ],
+    );
+    stored += 1;
+  }
+  return stored;
+}
+
+export interface InboundAttachmentRow {
+  id: string;
+  contentId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  isInline: boolean;
+}
+
+/** Metadata only — the bytes are fetched one at a time by the download route. */
+export async function findAttachmentsForEmail(
+  inboundEmailId: string,
+): Promise<InboundAttachmentRow[]> {
+  const result = await query<{
+    id: string;
+    content_id: string;
+    filename: string;
+    mime_type: string;
+    size_bytes: number;
+    is_inline: boolean;
+  }>(
+    `SELECT id::TEXT, content_id, filename, mime_type, size_bytes, is_inline
+       FROM inbound_email_attachments
+      WHERE inbound_email_id = $1
+      ORDER BY is_inline, created_at`,
+    [inboundEmailId],
+  );
+  return result.rows.map((row) => ({
+    id: String(row.id),
+    contentId: String(row.content_id),
+    filename: String(row.filename),
+    mimeType: String(row.mime_type),
+    sizeBytes: Number(row.size_bytes) || 0,
+    isInline: Boolean(row.is_inline),
+  }));
+}
+
+/**
+ * One attachment's bytes, scoped by its parent message.
+ *
+ * The message id is part of the WHERE on purpose: the download route already checked the
+ * caller may see that message, and this makes an attachment id from another region useless
+ * even if one were guessed.
+ */
+export async function findAttachmentContent(
+  inboundEmailId: string,
+  attachmentId: string,
+): Promise<{ filename: string; mimeType: string; content: Buffer } | null> {
+  const result = await query<{ filename: string; mime_type: string; content: Buffer }>(
+    `SELECT filename, mime_type, content
+       FROM inbound_email_attachments
+      WHERE inbound_email_id = $1 AND id = $2`,
+    [inboundEmailId, attachmentId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    filename: String(row.filename),
+    mimeType: String(row.mime_type),
+    content: Buffer.isBuffer(row.content) ? row.content : Buffer.from(row.content ?? []),
+  };
 }
 
 export interface InboundEmailRow extends InboundEmailInput {
@@ -161,7 +273,7 @@ export async function listInboundEmails(params: {
 
   const result = await query<Record<string, never>>(
     `SELECT id::TEXT, mailbox_email, region_code, message_id, imap_uid,
-            from_email, from_name, subject, body_preview, body_text,
+            from_email, from_name, subject, body_preview, body_text, has_attachments,
             received_at::TEXT, matched_ticket_id, matched_case_id,
             match_method, match_confidence, is_auto_reply,
             escalation_level, escalation_reasons, status, created_at::TEXT
@@ -185,6 +297,8 @@ export async function listInboundEmails(params: {
       subject: String(row.subject),
       bodyPreview: String(row.body_preview),
       bodyText: String(row.body_text ?? ""),
+      bodyHtml: String(row.body_html ?? ""),
+      hasAttachments: Boolean(row.has_attachments),
       receivedAt: String(row.received_at),
       matchedTicketId: String(row.matched_ticket_id),
       matchedCaseId: String(row.matched_case_id),
@@ -257,7 +371,7 @@ export async function findInboundEmailById(
 ): Promise<InboundEmailRow | null> {
   const result = await query<Record<string, never>>(
     `SELECT id::TEXT, mailbox_email, region_code, message_id, imap_uid,
-            from_email, from_name, subject, body_preview, body_text,
+            from_email, from_name, subject, body_preview, body_text, body_html, has_attachments,
             received_at::TEXT, matched_ticket_id, matched_case_id,
             match_method, match_confidence, is_auto_reply,
             escalation_level, escalation_reasons, status, created_at::TEXT
@@ -277,6 +391,8 @@ export async function findInboundEmailById(
     subject: String(r.subject),
     bodyPreview: String(r.body_preview),
     bodyText: String(r.body_text ?? ""),
+    bodyHtml: String(r.body_html ?? ""),
+    hasAttachments: Boolean(r.has_attachments),
     receivedAt: String(r.received_at),
     matchedTicketId: String(r.matched_ticket_id),
     matchedCaseId: String(r.matched_case_id),

@@ -10,6 +10,7 @@ import {
   findInboundEmailById,
 } from "../../repositories/inboundEmailRepository.js";
 import { blockedReason, draftBody, replySubject } from "./replyDrafter.js";
+import { archiveToSentFolder, buildRawMessage } from "./sentFolderArchiver.js";
 import { forbidden, notFound, unprocessableEntity } from "../../utils/httpError.js";
 
 /**
@@ -132,7 +133,10 @@ export async function sendReply(input: {
   });
 
   try {
-    await transport.sendMail({
+    // Compiled once, then sent and filed, so the copy in the mailbox's Sent folder is
+    // byte-for-byte the mail the customer received. Filing is best effort and deliberately
+    // not awaited — the reply has already gone by then.
+    const raw = await buildRawMessage({
       from: inbound.mailboxEmail,
       to: draft.toEmail,
       subject: draft.subject,
@@ -141,6 +145,11 @@ export async function sendReply(input: {
       inReplyTo: inbound.messageId,
       references: inbound.messageId,
     });
+    await transport.sendMail({
+      raw,
+      envelope: { from: inbound.mailboxEmail, to: [draft.toEmail] },
+    });
+    void archiveToSentFolder({ mailboxEmail: inbound.mailboxEmail, raw });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await markReplySent({ id: draft.id, status: "FAILED", approvedBy: null, error: message });
