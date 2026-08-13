@@ -49,6 +49,12 @@ export interface PersistedReportRowSnapshot extends PersistedReportRowMetadata {
    * the same-day Evening rules need this one.
    */
   eveningUpdatedAt: string | null;
+  /**
+   * Manual fields a user DELIBERATELY emptied on this row. A blank value alone
+   * cannot say that — it reads identically to "never filled in", which is what
+   * let regeneration re-carry a cleared engineer straight back (migration 046).
+   */
+  manuallyClearedFields: ManualCarryForwardField[];
   isExcluded: boolean;
 }
 
@@ -74,6 +80,7 @@ interface PersistedReportRowSnapshotDbRow {
   manual_fields_missing: ManualCarryForwardField[];
   updated_at: string | null;
   evening_updated_at: string | null;
+  manually_cleared_fields: ManualCarryForwardField[] | null;
   updated_by: string | null;
   is_excluded: boolean;
 }
@@ -104,6 +111,15 @@ export interface ReportRowEditPayload {
   hpOwnerStatus?: string | null;
   part?: string | null;
   clearedCarryForwardFields?: readonly ManualCarryForwardField[];
+  /**
+   * Manual fields this edit DELIBERATELY emptied, and the ones it gave a real
+   * value to. Together they maintain `manually_cleared_fields`: a clear is
+   * recorded so regeneration leaves the blank standing, and re-assigning a
+   * value drops the field back out. Absent (both undefined) = leave the stored
+   * list untouched, which is what every caller predating migration 046 does.
+   */
+  manuallyClearedFields?: readonly ManualCarryForwardField[];
+  manuallySetFields?: readonly ManualCarryForwardField[];
   manualFieldsCompleted: boolean;
   manualFieldsMissing: readonly ManualCarryForwardField[];
   updatedBy: string | null;
@@ -437,6 +453,7 @@ function mapPersistedReportRowMetadata(
     manualFieldsMissing: row.manual_fields_missing,
     updatedAt: row.updated_at,
     eveningUpdatedAt: row.evening_updated_at ?? null,
+    manuallyClearedFields: row.manually_cleared_fields ?? [],
     updatedBy: row.updated_by,
     isExcluded: row.is_excluded,
   };
@@ -668,6 +685,7 @@ export async function findDailyCallPlanReportRowMetadataByReportId(
         -- NOT COALESCEd onto updated_at: see the same column in
         -- findPreviousFinalReportRowsForManualCarryForward.
         evening_rtpl_status_updated_at::TEXT AS evening_updated_at,
+        manually_cleared_fields,
         updated_by::TEXT AS updated_by,
         is_excluded
       FROM daily_call_plan_report_rows
@@ -1244,6 +1262,23 @@ export async function updateDailyCallPlanReportRowManualFields(
           ),
           '[]'::jsonb
         ),
+        -- The user's clear/assign intent, not a guess from the value: fields
+        -- this edit emptied are added, fields it gave a value to are removed.
+        -- applyPersistedRowMetadata reads this to keep a deliberate blank
+        -- blank instead of re-carrying the previous report's value over it.
+        manually_cleared_fields = COALESCE(
+          (
+            SELECT jsonb_agg(merged.field)
+            FROM (
+              SELECT field
+              FROM jsonb_array_elements_text(rows.manually_cleared_fields) AS field
+              WHERE NOT (field = ANY($24::text[]))
+              UNION
+              SELECT unnest($23::text[])
+            ) AS merged(field)
+          ),
+          '[]'::jsonb
+        ),
         manual_fields_completed = $16,
         manual_fields_missing = $17::text[],
         updated_at = NOW(),
@@ -1305,6 +1340,8 @@ export async function updateDailyCallPlanReportRowManualFields(
       edit.updatedBySpecialAccess ?? null,
       edit.updatedByVendorAccess ?? null,
       edit.eveningRtplStatusEdited ?? false,
+      edit.manuallyClearedFields ?? [],
+      edit.manuallySetFields ?? [],
     ],
   );
 

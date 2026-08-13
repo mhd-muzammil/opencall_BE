@@ -48,6 +48,7 @@
     "migrate:evening-status-edited-at": "tsx src/scripts/applyEveningStatusEditTimestampMigration.ts",
     "engineer:remap-name": "tsx src/scripts/remapEngineerName.ts",
     "migrate:renewal-leads": "tsx src/scripts/applyRenewalLeadsMigration.ts",
+    "migrate:manually-cleared-fields": "tsx src/scripts/applyManuallyClearedFieldsMigration.ts",
     "migrate:inbound-email": "tsx src/scripts/applyInboundEmailMigration.ts",
     "migrate:inbound-email-body": "tsx src/scripts/applyInboundEmailBodyMigration.ts",
     "migrate:inbound-email-escalation": "tsx src/scripts/applyInboundEmailEscalationMigration.ts",

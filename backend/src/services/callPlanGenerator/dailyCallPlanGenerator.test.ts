@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PoolClient } from "pg";
 import type { MatchedCallPlanRecord } from "../../types/matching.js";
 import type { FinalReportManualCarryForwardRow } from "../../repositories/dailyCallPlanReportRepository.js";
+import { MANUAL_ENTRY_REQUIRED } from "./dailyCallPlanFormatter.js";
 
 const mocks = vi.hoisted(() => ({
   withTransaction: vi.fn(),
@@ -305,6 +306,153 @@ describe("generateDailyCallPlanReport", () => {
         rtplStatus: "Part Pending",
       }),
     );
+  });
+
+  it("keeps a deliberately cleared engineer blank instead of re-carrying it", async () => {
+    // The Records-page bug this exists to stop: an admin disables an engineer,
+    // sets that engineer's open calls back to "Entry" and saves. Every page
+    // load re-runs generation, and a blank persisted engineer used to fall
+    // through to the carried-forward name from the previous report — which was
+    // then written back into the row, so the disabled engineer reappeared
+    // instantly, in incognito, for everyone.
+    const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
+    const client = {} as PoolClient;
+
+    mocks.withTransaction.mockImplementation(async (callback) => callback(client));
+    mocks.validateReportGenerationTransaction.mockResolvedValue("report-1");
+    mocks.findFlexWipRecordsByBatchId.mockResolvedValue([{ ticketId: "WO-123", rowNumber: 1 }]);
+    mocks.findRenderwaysRecordsByBatchId.mockResolvedValue([]);
+    mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
+    mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
+    mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.findRegionOfficesByAspCode.mockResolvedValue(new Map());
+    mocks.findPincodeCoordinates.mockResolvedValue(new Map());
+    mocks.findRoadDistances.mockResolvedValue(new Map());
+    mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
+    // The source report still holds the (now disabled) engineer.
+    mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([
+      previousFinalRow(),
+    ]);
+    mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
+    mocks.findDailyCallPlanReportRowMetadataByReportId.mockResolvedValue([
+      {
+        id: "row-1",
+        serialNo: 1,
+        ticketId: "WO-123",
+        caseCreatedTime: null,
+        wipAging: "1",
+        statusAging: null,
+        hpOwnerStatus: null,
+        rtplStatus: "Part Pending",
+        segment: "",
+        engineer: null,
+        location: null,
+        customerMail: null,
+        rca: null,
+        remarks: null,
+        manualNotes: null,
+        carriedForwardFields: [],
+        manualFieldsCompleted: false,
+        manualFieldsMissing: ["engineer"],
+        manuallyClearedFields: ["engineer"],
+        updatedAt: null,
+        updatedBy: null,
+        isExcluded: false,
+      },
+    ]);
+    mocks.findOrCreateCompletedHistorySessionForReport.mockResolvedValue({
+      id: "session-1",
+    });
+    mocks.findPreviousCompletedComparisonSession.mockResolvedValue(null);
+
+    const report = await generateDailyCallPlanReport({
+      reportDate: "2026-05-26",
+      generatedBy: "user-1",
+      regionId: "region-1",
+      flexUploadBatchId: "batch-flex",
+    });
+
+    expect(report.rows[0]?.enriched.engineer).toBeNull();
+    expect(report.rows[0]?.output.Engineer).toBe(MANUAL_ENTRY_REQUIRED);
+    expect(report.rows[0]?.carryForward.carriedForwardFields).not.toContain(
+      "engineer",
+    );
+    // Nothing may be written back over the clear either — the repair path is
+    // how the old name reached the database in the first place.
+    expect(
+      mocks.backfillMissingDailyCallPlanReportRowCarryForward,
+    ).not.toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({ engineer: "Priya" }),
+    );
+    expect(mocks.overwriteCarriedForwardFieldValues).not.toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({ engineer: "Priya" }),
+    );
+  });
+
+  it("re-carries a field again once the user gives it a value back", async () => {
+    // The clear is remembered, not permanent: assigning a real engineer drops
+    // the field out of the cleared list at save time, so the row behaves like
+    // any other from then on. Here the list is empty and the blank is a plain
+    // "never filled in", which must still inherit.
+    const { generateDailyCallPlanReport } = await import("./dailyCallPlanGenerator.js");
+    const client = {} as PoolClient;
+
+    mocks.withTransaction.mockImplementation(async (callback) => callback(client));
+    mocks.validateReportGenerationTransaction.mockResolvedValue("report-1");
+    mocks.findFlexWipRecordsByBatchId.mockResolvedValue([{ ticketId: "WO-123", rowNumber: 1 }]);
+    mocks.findRenderwaysRecordsByBatchId.mockResolvedValue([]);
+    mocks.findCallPlanRecordsByBatchId.mockResolvedValue([]);
+    mocks.findActiveSlaHoursByCategory.mockResolvedValue(new Map());
+    mocks.findAreaNameByPincode.mockResolvedValue(new Map());
+    mocks.findRegionOfficesByAspCode.mockResolvedValue(new Map());
+    mocks.findPincodeCoordinates.mockResolvedValue(new Map());
+    mocks.findRoadDistances.mockResolvedValue(new Map());
+    mocks.matchSourceRecords.mockReturnValue([currentMatch()]);
+    mocks.findPreviousFinalReportRowsForManualCarryForward.mockResolvedValue([
+      previousFinalRow(),
+    ]);
+    mocks.findFlexStatusHistoryForUnchangedDays.mockResolvedValue([]);
+    mocks.findDailyCallPlanReportRowMetadataByReportId.mockResolvedValue([
+      {
+        id: "row-1",
+        serialNo: 1,
+        ticketId: "WO-123",
+        caseCreatedTime: null,
+        wipAging: "1",
+        statusAging: null,
+        hpOwnerStatus: null,
+        rtplStatus: "Part Pending",
+        segment: "",
+        engineer: null,
+        location: null,
+        customerMail: null,
+        rca: null,
+        remarks: null,
+        manualNotes: null,
+        carriedForwardFields: [],
+        manualFieldsCompleted: false,
+        manualFieldsMissing: ["engineer"],
+        manuallyClearedFields: [],
+        updatedAt: null,
+        updatedBy: null,
+        isExcluded: false,
+      },
+    ]);
+    mocks.findOrCreateCompletedHistorySessionForReport.mockResolvedValue({
+      id: "session-1",
+    });
+    mocks.findPreviousCompletedComparisonSession.mockResolvedValue(null);
+
+    const report = await generateDailyCallPlanReport({
+      reportDate: "2026-05-26",
+      generatedBy: "user-1",
+      regionId: "region-1",
+      flexUploadBatchId: "batch-flex",
+    });
+
+    expect(report.rows[0]?.enriched.engineer).toBe("Priya");
   });
 
   it("refreshes an inherited field when the source report now holds a newer value", async () => {

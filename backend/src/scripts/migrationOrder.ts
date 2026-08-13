@@ -60,6 +60,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyInboundEmailHtmlMigration", // 051 body_html + inline/attached files
   "applyOutboundEmailsMigration", // 052 compose (FKs inbound_emails + users)
   "applyQuotationLineItemsMigration", // 053 several line items per quotation (FK quotations)
+  "applyManuallyClearedFieldsMigration", // 046 deliberately-cleared manual fields (free slot; runs last, plain ALTER)
 ];
 
 /**

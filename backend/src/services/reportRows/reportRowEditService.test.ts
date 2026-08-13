@@ -110,6 +110,65 @@ describe("updateReportRowManualFields", () => {
     expect(payload.clearedCarryForwardFields).toEqual(["rtpl_status"]);
   });
 
+  it("records an emptied engineer as a deliberate clear", async () => {
+    const current = editedRow();
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(current);
+    mocks.updateDailyCallPlanReportRowManualFields.mockResolvedValue(
+      editedRow({ engineer: null }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { engineer: null },
+    });
+
+    const [, payload] = mocks.updateDailyCallPlanReportRowManualFields.mock
+      .calls[0] as [string, ReportRowEditPayload];
+    // Without this the blank is indistinguishable from "never filled in", and
+    // the next regeneration carries the old engineer back over it.
+    expect(payload.manuallyClearedFields).toEqual(["engineer"]);
+    expect(payload.manuallySetFields).toEqual([]);
+  });
+
+  it("drops a field back out of the cleared list when it is given a value", async () => {
+    const current = editedRow({ engineer: null });
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(current);
+    mocks.updateDailyCallPlanReportRowManualFields.mockResolvedValue(
+      editedRow({ engineer: "Mike" }),
+    );
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { engineer: "Mike" },
+    });
+
+    const [, payload] = mocks.updateDailyCallPlanReportRowManualFields.mock
+      .calls[0] as [string, ReportRowEditPayload];
+    expect(payload.manuallySetFields).toEqual(["engineer"]);
+    expect(payload.manuallyClearedFields).toEqual([]);
+  });
+
+  it("leaves fields this edit never touched out of both intent lists", async () => {
+    const current = editedRow();
+    mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(current);
+    mocks.updateDailyCallPlanReportRowManualFields.mockResolvedValue(current);
+
+    await updateReportRowManualFields({
+      rowId: "row-1",
+      user: superAdmin,
+      values: { engineer: "Mike" },
+    });
+
+    const [, payload] = mocks.updateDailyCallPlanReportRowManualFields.mock
+      .calls[0] as [string, ReportRowEditPayload];
+    // Location/RCA are blank-or-set on the row but absent from the PATCH, so
+    // this edit must say nothing about them either way.
+    expect(payload.manuallyClearedFields).toEqual([]);
+    expect(payload.manuallySetFields).toEqual(["engineer"]);
+  });
+
   it("does not create an RTPL change entry for no-op or non-RTPL edits", async () => {
     const current = editedRow();
     mocks.findDailyCallPlanReportRowForEdit.mockResolvedValue(current);

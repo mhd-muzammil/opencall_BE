@@ -98,6 +98,28 @@ const MANUAL_FIELD_BY_EDITABLE_FIELD: Partial<
   hpOwnerStatus: "hp_owner_status",
 };
 
+/**
+ * Manual fields where emptying the box is taken at face value and remembered
+ * (migration 046), so regeneration cannot re-carry the previous report's value
+ * back over the blank.
+ *
+ * The three excluded fields are the ones the generator — not the user — owns
+ * the blank of: `segment` and `status_aging` are recomputed from the source
+ * file on every run, and `rtpl_status` (Morning) is governed by the day-boundary
+ * promotion and its own comparison fallback. Recording a clear for those would
+ * freeze a column the pipeline is supposed to keep refreshing.
+ */
+const CLEARABLE_MANUAL_FIELDS: ReadonlySet<ManualCarryForwardField> = new Set([
+  "engineer",
+  "location",
+  "case_created_time",
+  "hp_owner_status",
+  "customer_mail",
+  "rca",
+  "remarks",
+  "manual_notes",
+]);
+
 const PLACEHOLDER_VALUES = new Set([
   "",
   "manual entry required",
@@ -135,6 +157,26 @@ function manualFieldsMissing(values: EditedReportRow): ManualCarryForwardField[]
     const valueField = REQUIRED_MANUAL_FIELD_VALUE_BY_RESPONSE_FIELD[field];
     return !isCarryForwardValue(values[valueField]);
   });
+}
+
+/** The merged row's value for a manual carry-forward field. */
+function mergedManualFieldValue(
+  values: EditedReportRow,
+  field: ManualCarryForwardField,
+): string | null {
+  const requiredKey =
+    REQUIRED_MANUAL_FIELD_VALUE_BY_RESPONSE_FIELD[
+      field as (typeof MANUAL_CARRY_FORWARD_FIELDS)[number]
+    ];
+  if (requiredKey) {
+    return values[requiredKey];
+  }
+
+  const optionalKey =
+    OPTIONAL_FIELD_VALUE_BY_RESPONSE_FIELD[
+      field as (typeof OPTIONAL_MANUAL_CARRY_FORWARD_FIELDS)[number]
+    ];
+  return optionalKey ? values[optionalKey] : null;
 }
 
 function mergeRowValues(
@@ -320,6 +362,27 @@ export async function applyReportRowManualFieldEdit(input: {
     }
   }
 
+  // Clear/assign intent for this edit, read AFTER every rule above has had its
+  // say (the scheduling remark and the Customer-Pending RCA append both rewrite
+  // `merged`, so a field that arrived blank may hold a real value by now).
+  const manuallyClearedFields: ManualCarryForwardField[] = [];
+  const manuallySetFields: ManualCarryForwardField[] = [];
+  for (const [editableField, manualField] of Object.entries(
+    MANUAL_FIELD_BY_EDITABLE_FIELD,
+  ) as [EditableReportRowField, ManualCarryForwardField | undefined][]) {
+    if (!manualField || !CLEARABLE_MANUAL_FIELDS.has(manualField)) {
+      continue;
+    }
+    if (!hasEditedField(values, editableField)) {
+      continue;
+    }
+    if (isCarryForwardValue(mergedManualFieldValue(merged, manualField))) {
+      manuallySetFields.push(manualField);
+    } else {
+      manuallyClearedFields.push(manualField);
+    }
+  }
+
   const missing = manualFieldsMissing(merged);
 
   const updated = await updateDailyCallPlanReportRowManualFields(rowId, {
@@ -343,6 +406,8 @@ export async function applyReportRowManualFieldEdit(input: {
     hpOwnerStatus: merged.hpOwnerStatus,
     part: merged.part,
     clearedCarryForwardFields,
+    manuallyClearedFields,
+    manuallySetFields,
     manualFieldsCompleted: missing.length === 0,
     manualFieldsMissing: missing,
     updatedBy: editor.kind === "USER" ? editor.id : null,

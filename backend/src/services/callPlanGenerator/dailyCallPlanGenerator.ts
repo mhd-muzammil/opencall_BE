@@ -528,6 +528,10 @@ async function applyPersistedRowMetadata(
     const carriedForwardFields = new Set<ManualCarryForwardField>(
       persisted.carriedForwardFields,
     );
+    // Defensive `?? []`: report generation runs on every page load, so a row
+    // snapshot that predates migration 046 must degrade to the old behaviour
+    // rather than take the whole Records page down.
+    const manuallyClearedFields = persisted.manuallyClearedFields ?? [];
     const repairedFields: ManualCarryForwardField[] = [];
     // Inherited-only fields whose value changed at the source (the latest prior
     // report) since this report was generated. These must be overwritten in the
@@ -563,6 +567,21 @@ async function applyPersistedRowMetadata(
           continue;
         }
 
+        setManualFieldValue(row, field, null);
+        carriedForwardFields.delete(field);
+        continue;
+      }
+
+      // A field the user DELIBERATELY emptied on this row stays empty. Every
+      // branch below reads a blank persisted value as "never filled in" and
+      // hands the row to the carried-forward value from the previous report —
+      // correct for an untouched row, and the reason an engineer set back to
+      // "Entry" reappeared on the very next page load (each load re-runs
+      // generation) and was written back to the row by the repair path below.
+      // Recorded per row at save time (migration 046), so it costs nothing on
+      // rows nobody has cleared, and it expires with the row: tomorrow's report
+      // inserts fresh rows and carries the (now blank) source value.
+      if (manuallyClearedFields.includes(field)) {
         setManualFieldValue(row, field, null);
         carriedForwardFields.delete(field);
         continue;
