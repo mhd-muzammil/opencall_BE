@@ -33,17 +33,7 @@ export interface PayrollSyncResult {
   message?: string;
 }
 
-/**
- * @param options.mirror Whether this push is authoritative for the CURRENT plan.
- *   Payroll mirrors an authoritative push by cancelling every synced case absent
- *   from it. True is right for the scheduled sync of today; a sync of some other
- *   date speaks only for that date, so it must pass false or it retracts the
- *   live cases engineers are working right now.
- */
-export async function syncAssignedCasesForDate(
-  workingDate: string,
-  options: { mirror?: boolean } = {},
-): Promise<PayrollSyncResult> {
+export async function syncAssignedCasesForDate(workingDate: string): Promise<PayrollSyncResult> {
   if (!isPayrollConfigured()) {
     return {
       configured: false,
@@ -76,12 +66,6 @@ export async function syncAssignedCasesForDate(
   // Each engineer's Assigned tickets, merged across regions by name — the same
   // aggregation the productivity table does.
   const assignedByEngineer = new Map<string, Set<string>>();
-  // Tickets the day's plan records as CLOSED. Assigned is the whole plan, and
-  // engineerProductivity pushes every bucket into assignedTickets — closed ones
-  // included — so without this set a call the engineer already finished keeps
-  // being pushed as "assigned" and sits on their Payroll list looking like
-  // outstanding work.
-  const closedTickets = new Set<string>();
   for (const region of productivity.regions) {
     for (const engineer of region.productivity.list) {
       const name = engineer.name.trim();
@@ -97,12 +81,6 @@ export async function syncAssignedCasesForDate(
         const trimmed = ticket.trim();
         if (trimmed) {
           tickets.add(trimmed);
-        }
-      }
-      for (const ticket of engineer.closedTickets ?? []) {
-        const trimmed = ticket.trim();
-        if (trimmed) {
-          closedTickets.add(trimmed);
         }
       }
     }
@@ -136,12 +114,7 @@ export async function syncAssignedCasesForDate(
         external_ref: ticket,
         title: `Service call (${ticket})`.slice(0, 200),
         engineer_name: name,
-        // Tell Payroll the truth about the call instead of always saying
-        // "assigned": a ticket the plan already records as closed must land as
-        // completed, or the engineer keeps seeing finished work on their list.
-        // Payroll treats a terminal status as authoritative over the field
-        // status, so this also settles a case the engineer never closed there.
-        status: closedTickets.has(ticket) ? "completed" : "assigned",
+        status: "assigned",
       };
       if (location) {
         input.address = location;
@@ -170,11 +143,6 @@ export async function syncAssignedCasesForDate(
     };
   }
 
-  // Omit the flag entirely when the caller did not choose, so Payroll's default
-  // stands (exactOptionalPropertyTypes forbids passing an explicit undefined).
-  const payroll = await bulkDispatchCases(
-    cases,
-    options.mirror === undefined ? {} : { mirror: options.mirror },
-  );
+  const payroll = await bulkDispatchCases(cases);
   return { configured: true, workingDate, rowsWithEngineer: cases.length, payroll };
 }

@@ -175,10 +175,6 @@ export interface PayrollBulkResult {
   skipped: number;
   // Previously-synced cases no longer in the pushed set, marked cancelled (not deleted).
   cancelled?: number;
-  // The refs behind those two counts. Named, because a count alone means a
-  // ticket can leave an engineer's list with nothing anywhere identifying it.
-  cancelled_refs?: string[];
-  skipped_refs?: string[];
   total: number;
   // Engineer names Payroll has no employee for — their tickets were skipped, so
   // these people need onboarding before their cases can appear.
@@ -202,21 +198,10 @@ export interface PayrollBulkResult {
  * duplicates. Payroll resolves each engineer by id/email/phone/name and skips
  * (reports) any it can't match rather than failing the whole batch.
  */
-export async function bulkDispatchCases(
-  cases: PayrollBulkCaseInput[],
-  options: { mirror?: boolean } = {},
-): Promise<PayrollBulkResult> {
-  // mirror defaults ON in Payroll, and it CANCELS every previously-synced case
-  // absent from the push — correct for the scheduled sync of today's plan, which
-  // is authoritative, and wrong for anything partial. A push that does not speak
-  // for the whole current plan must pass mirror: false or it retracts live work.
-  const body: { cases: PayrollBulkCaseInput[]; mirror?: boolean } = { cases };
-  if (options.mirror !== undefined) {
-    body.mirror = options.mirror;
-  }
+export async function bulkDispatchCases(cases: PayrollBulkCaseInput[]): Promise<PayrollBulkResult> {
   return authed<PayrollBulkResult>("/api/cases/bulk_dispatch/", {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify({ cases }),
   });
 }
 
