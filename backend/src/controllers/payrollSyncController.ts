@@ -17,6 +17,10 @@ export const syncAssignedCasesToPayrollController: RequestHandler = asyncHandler
     requireCurrentUser(request.currentUser);
     const workingDate = workingDateSchema.parse(request.params.date);
 
-    response.json({ data: await syncAssignedCasesForDate(workingDate) });
+    // An admin can trigger this for ANY date, and a past date's plan does not
+    // describe what engineers are working now — so this push is never
+    // authoritative. Without mirror: false it would cancel every live case that
+    // the chosen date's plan happens not to contain.
+    response.json({ data: await syncAssignedCasesForDate(workingDate, { mirror: false }) });
   },
 );

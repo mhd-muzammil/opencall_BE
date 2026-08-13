@@ -25,7 +25,14 @@ async function runOnce(): Promise<void> {
   try {
     const result = await syncAssignedCasesForDate(date);
     if (result.payroll && result.payroll.assigned + result.payroll.skipped > 0) {
-      const { assigned, skipped, cancelled, unmatched_engineers: unmatched } = result.payroll;
+      const {
+        assigned,
+        skipped,
+        cancelled,
+        unmatched_engineers: unmatched,
+        skipped_refs: skippedRefs,
+        cancelled_refs: cancelledRefs,
+      } = result.payroll;
       console.log(
         `[payroll] auto-sync ${date}: assigned=${assigned} skipped=${skipped} ` +
           `cancelled=${cancelled ?? 0} rows=${result.rowsWithEngineer}` +
@@ -34,6 +41,17 @@ async function runOnce(): Promise<void> {
           // healthy one and there is nothing to act on.
           (unmatched?.length ? ` unmatched=[${unmatched.join(", ")}]` : ""),
       );
+      // The tickets themselves, not just how many. A single call going missing
+      // from one engineer's list used to be indistinguishable from a healthy
+      // "skipped=37", and took a database query to identify.
+      if (skippedRefs?.length) {
+        console.log(`[payroll] auto-sync ${date}: reached nobody -> ${skippedRefs.join(", ")}`);
+      }
+      if (cancelledRefs?.length) {
+        console.log(
+          `[payroll] auto-sync ${date}: retracted (not in today's plan) -> ${cancelledRefs.join(", ")}`,
+        );
+      }
     } else {
       // Nothing was pushed. ALWAYS say why — a silent no-op here is exactly how
       // "the dashboard shows 56 assigned but Payroll is empty" goes unnoticed.
