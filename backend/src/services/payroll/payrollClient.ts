@@ -258,10 +258,16 @@ export async function getLiveEngineers(): Promise<LiveEngineer[]> {
  * can still be opened and reviewed.
  */
 export interface RosterEngineer {
-  engineer_id: number;
+  // Null when Payroll has no employee answering to the name we asked under —
+  // the same gap that makes that engineer's cases get skipped.
+  engineer_id: number | null;
+  // The name WE asked under, so the board reads the way our users know them.
   engineer_name: string;
+  // The Payroll record it resolved to, for when the two spellings differ.
+  payroll_name: string | null;
+  matched: boolean;
   branch: string | null;
-  state: "on_duty" | "checked_out" | "absent";
+  state: "on_duty" | "checked_out" | "absent" | "unmatched";
   on_duty: boolean;
   duty_started_at: string | null;
   duty_ended_at: string | null;
@@ -279,11 +285,26 @@ export interface RosterEngineer {
   active_case_number: string | null;
 }
 
-export async function getRoster(date?: string): Promise<RosterEngineer[]> {
-  const q = new URLSearchParams();
-  if (date) q.set("date", date);
-  const suffix = q.toString() ? `?${q.toString()}` : "";
-  return authed<RosterEngineer[]>(`/api/tracking/roster/${suffix}`);
+/**
+ * Duty state for the engineers we name, resolved by PAYROLL.
+ *
+ * The names come from our own register, but the matching is deliberately not
+ * done here: Payroll owns the alias table and the rules that decide where a case
+ * goes, so asking it to resolve means an engineer who can receive a case can
+ * always be tracked. Matching on this side instead lost the duty state for any
+ * name only the alias table could resolve — the engineer read as off duty while
+ * standing in a customer's shop.
+ *
+ * Payroll returns a row per name asked for, including the ones it cannot match.
+ */
+export async function getRosterFor(
+  names: string[],
+  date?: string,
+): Promise<RosterEngineer[]> {
+  return authed<RosterEngineer[]>("/api/tracking/roster/", {
+    method: "POST",
+    body: JSON.stringify(date ? { names, date } : { names }),
+  });
 }
 
 /** One engineer's whole day: route, distance, time on duty, stops, timeline. */

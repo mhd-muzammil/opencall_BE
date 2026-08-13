@@ -6,7 +6,7 @@ import {
   getEngineerDay,
   getEngineerPath,
   getLiveEngineers,
-  getRoster,
+  getRosterFor,
   isPayrollConfigured,
 } from "../services/payroll/payrollClient.js";
 
@@ -36,77 +36,49 @@ export const getEngineerPathController: RequestHandler = asyncHandler(
   },
 );
 
-/** Loose enough to survive the spelling drift between the two systems. */
-function nameKey(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
 /**
  * Every engineer and their state for a day — the board you pick from.
  *
- * The LIST is OpenCall's "Add Engineers" register, not Payroll's staff table:
- * asking Payroll who the engineers are filled the board with office staff and HR,
- * who are never going out on a call. Payroll supplies the duty state, position
- * and kilometres for whichever of those people it can match.
+ * The LIST is our Add Engineers register, not Payroll's staff table: asking
+ * Payroll who the engineers are filled the board with office staff and HR who
+ * were never going out on a call.
  *
- * An engineer OpenCall knows but Payroll cannot match is still listed, flagged
- * `linked: false` — that is precisely the person whose cases are being skipped,
- * so the board is the right place to notice them rather than a container log.
+ * The MATCHING is Payroll's, not ours. It owns the alias table and the rules
+ * that decide where a case goes, so we hand it the register names and it answers
+ * per name — including the ones it cannot resolve, which are exactly the people
+ * whose cases are being skipped. Doing this matching here instead cost us the
+ * duty state of anyone only an alias could resolve.
  */
 export const getRosterController: RequestHandler = asyncHandler(async (request, response) => {
-  const engineers = await listEngineersForDropdown(null);
-
   if (!isPayrollConfigured()) {
     response.json({ data: { configured: false, engineers: [] } });
     return;
   }
 
+  const engineers = await listEngineersForDropdown(null);
+  const names = engineers.map((engineer) => engineer.engineerName);
+  if (names.length === 0) {
+    response.json({ data: { configured: true, engineers: [] } });
+    return;
+  }
+
   const date = typeof request.query.date === "string" ? request.query.date : undefined;
-  const payrollRows = await getRoster(date);
+  const rows = await getRosterFor(names, date);
 
-  const byExactName = new Map(payrollRows.map((row) => [nameKey(row.engineer_name), row]));
-  const matchPayroll = (engineerName: string) => {
-    const key = nameKey(engineerName);
-    const exact = byExactName.get(key);
-    if (exact) return exact;
-    // Payroll often carries a trailing initial or surname the register omits
-    // ("Praveen" here, "Praveen S" there). Only accept it when exactly one row
-    // matches, so real namesakes are never guessed at.
-    const prefixed = payrollRows.filter((row) => nameKey(row.engineer_name).startsWith(`${key} `));
-    return prefixed.length === 1 ? prefixed[0] : undefined;
-  };
-
-  const rows = engineers.map((engineer) => {
-    const payroll = matchPayroll(engineer.engineerName);
-    if (!payroll) {
-      return {
-        engineer_id: null,
-        engineer_name: engineer.engineerName,
-        branch: engineer.regionName ?? null,
-        linked: false,
-        state: "unlinked" as const,
-        on_duty: false,
-        duty_started_at: null,
-        duty_ended_at: null,
-        duty_minutes: 0,
-        auto_closed: false,
-        distance_km: 0,
-        stale: false,
-        last_seen_minutes: null,
-        latitude: null,
-        longitude: null,
-        accuracy: null,
-        status: "",
-        timestamp: null,
-        active_case_id: null,
-        active_case_number: null,
-      };
-    }
-    // Keep the register's name — that is the one the office uses.
-    return { ...payroll, engineer_name: engineer.engineerName, linked: true };
+  // The register's region is a better label than a blank when Payroll has no
+  // branch for them, which is every unmatched row.
+  const regionByName = new Map(
+    engineers.map((engineer) => [engineer.engineerName, engineer.regionName ?? null]),
+  );
+  response.json({
+    data: {
+      configured: true,
+      engineers: rows.map((row) => ({
+        ...row,
+        branch: row.branch ?? regionByName.get(row.engineer_name) ?? null,
+      })),
+    },
   });
-
-  response.json({ data: { configured: true, engineers: rows } });
 });
 
 /** Everything one engineer did on one day — the "what did they actually do" view. */
