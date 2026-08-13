@@ -1,6 +1,7 @@
 import { ImapFlow } from "imapflow";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type Mail from "nodemailer/lib/mailer/index.js";
+import { mailboxPassword } from "./mailboxCredentials.js";
 
 /**
  * Put a copy of every mail this system sends into the mailbox's own Sent folder.
@@ -64,7 +65,7 @@ export async function archiveToSentFolder(input: {
 }): Promise<boolean> {
   const host = process.env.MAIL_IMAP_HOST ?? "";
   const port = Number(process.env.MAIL_IMAP_PORT ?? 993);
-  const pass = process.env.MAIL_PASSWORD ?? "";
+  const pass = mailboxPassword(input.mailboxEmail);
   if (!host || !pass) return false;
 
   const client = new ImapFlow({

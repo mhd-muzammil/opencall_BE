@@ -21,6 +21,7 @@ import {
   NO_MATCH,
 } from "./emailMatcher.js";
 import { detectEscalation } from "./escalationDetector.js";
+import { mailboxPassword } from "./mailboxCredentials.js";
 
 /**
  * Customer email ingest — Stage 1: READ ONLY.
@@ -98,7 +99,8 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
 
   const host = process.env.MAIL_IMAP_HOST ?? "";
   const port = Number(process.env.MAIL_IMAP_PORT ?? 993);
-  const pass = process.env.MAIL_PASSWORD ?? "";
+  // This mailbox's own password when it has one — hosur's differs from the rest.
+  const pass = mailboxPassword(mailbox.email);
   if (!host || !pass) {
     result.error = "MAIL_IMAP_HOST / MAIL_PASSWORD not configured";
     await markMailboxPolled(mailbox.email, result.error);

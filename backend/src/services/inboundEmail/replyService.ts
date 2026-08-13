@@ -11,6 +11,7 @@ import {
 } from "../../repositories/inboundEmailRepository.js";
 import { blockedReason, draftBody, replySubject } from "./replyDrafter.js";
 import { archiveToSentFolder, buildRawMessage } from "./sentFolderArchiver.js";
+import { mailboxPassword } from "./mailboxCredentials.js";
 import { forbidden, notFound, unprocessableEntity } from "../../utils/httpError.js";
 
 /**
@@ -118,7 +119,7 @@ export async function sendReply(input: {
 
   const host = process.env.MAIL_SMTP_HOST ?? "";
   const port = Number(process.env.MAIL_SMTP_PORT ?? 465);
-  const pass = process.env.MAIL_PASSWORD ?? "";
+  const pass = mailboxPassword(inbound.mailboxEmail);
   if (!host || !pass) {
     throw unprocessableEntity("MAIL_SMTP_HOST / MAIL_PASSWORD are not configured");
   }

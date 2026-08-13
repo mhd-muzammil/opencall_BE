@@ -12,6 +12,7 @@ import {
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
 import { checkCompose } from "./composeValidator.js";
 import { archiveToSentFolder, buildRawMessage } from "./sentFolderArchiver.js";
+import { mailboxPassword } from "./mailboxCredentials.js";
 
 /**
  * Compose — send a mail from a region mailbox to anyone.
@@ -106,7 +107,7 @@ export async function sendComposedEmail(
 
   const host = process.env.MAIL_SMTP_HOST ?? "";
   const port = Number(process.env.MAIL_SMTP_PORT ?? 465);
-  const pass = process.env.MAIL_PASSWORD ?? "";
+  const pass = mailboxPassword(mailbox.email);
   if (!host || !pass) {
     throw unprocessableEntity("MAIL_SMTP_HOST / MAIL_PASSWORD are not configured");
   }
