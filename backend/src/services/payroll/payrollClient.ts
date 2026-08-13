@@ -252,6 +252,40 @@ export async function getLiveEngineers(): Promise<LiveEngineer[]> {
   return authed<LiveEngineer[]>("/api/tracking/live/");
 }
 
+/**
+ * One row per engineer for a day, whatever state they are in. Unlike
+ * getLiveEngineers this keeps someone who has finished their shift, so their day
+ * can still be opened and reviewed.
+ */
+export interface RosterEngineer {
+  engineer_id: number;
+  engineer_name: string;
+  branch: string | null;
+  state: "on_duty" | "checked_out" | "absent";
+  on_duty: boolean;
+  duty_started_at: string | null;
+  duty_ended_at: string | null;
+  duty_minutes: number;
+  auto_closed: boolean;
+  distance_km: number;
+  stale: boolean;
+  last_seen_minutes: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  accuracy: number | null;
+  status: string;
+  timestamp: string | null;
+  active_case_id: number | null;
+  active_case_number: string | null;
+}
+
+export async function getRoster(date?: string): Promise<RosterEngineer[]> {
+  const q = new URLSearchParams();
+  if (date) q.set("date", date);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return authed<RosterEngineer[]>(`/api/tracking/roster/${suffix}`);
+}
+
 /** One engineer's whole day: route, distance, time on duty, stops, timeline. */
 export interface EngineerDay {
   engineer_id: number;

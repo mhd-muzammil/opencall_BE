@@ -5,6 +5,7 @@ import {
   getEngineerDay,
   getEngineerPath,
   getLiveEngineers,
+  getRoster,
   isPayrollConfigured,
 } from "../services/payroll/payrollClient.js";
 
@@ -33,6 +34,16 @@ export const getEngineerPathController: RequestHandler = asyncHandler(
     response.json({ data: path });
   },
 );
+
+/** Every engineer and their state for a day — the board you pick from. */
+export const getRosterController: RequestHandler = asyncHandler(async (request, response) => {
+  if (!isPayrollConfigured()) {
+    response.json({ data: { configured: false, engineers: [] } });
+    return;
+  }
+  const date = typeof request.query.date === "string" ? request.query.date : undefined;
+  response.json({ data: { configured: true, engineers: await getRoster(date) } });
+});
 
 /** Everything one engineer did on one day — the "what did they actually do" view. */
 export const getEngineerDayController: RequestHandler = asyncHandler(
