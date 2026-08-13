@@ -252,6 +252,51 @@ export async function getLiveEngineers(): Promise<LiveEngineer[]> {
   return authed<LiveEngineer[]>("/api/tracking/live/");
 }
 
+/** One engineer's whole day: route, distance, time on duty, stops, timeline. */
+export interface EngineerDay {
+  engineer_id: number;
+  engineer_name: string;
+  branch: string | null;
+  date: string;
+  total_km: number;
+  duty_minutes: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  stop_count: number;
+  stops: Array<{
+    latitude: number;
+    longitude: number;
+    arrived_at: string;
+    left_at: string;
+    minutes: number;
+    fixes: number;
+    case_id: number | null;
+    case_number: string | null;
+  }>;
+  events: Array<{
+    at: string;
+    type: string;
+    label: string;
+    minutes?: number;
+    latitude?: number;
+    longitude?: number;
+    case_number?: string | null;
+  }>;
+  points: Array<{
+    latitude: number;
+    longitude: number;
+    timestamp: string;
+    accuracy: number | null;
+    status: string;
+  }>;
+}
+
+export async function getEngineerDay(engineerId: number, date?: string): Promise<EngineerDay> {
+  const q = new URLSearchParams({ engineer: String(engineerId) });
+  if (date) q.set("date", date);
+  return authed<EngineerDay>(`/api/tracking/day/?${q.toString()}`);
+}
+
 export async function getEngineerPath(engineerId: number, date?: string): Promise<TrackPath> {
   const q = new URLSearchParams({ engineer: String(engineerId) });
   if (date) q.set("date", date);

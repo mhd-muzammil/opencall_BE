@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   getCasePathController,
+  getEngineerDayController,
   getEngineerPathController,
   getLiveEngineersController,
 } from "../controllers/payrollTrackingController.js";
@@ -16,3 +17,6 @@ payrollTrackingRouter.get("/live", getLiveEngineersController);
 payrollTrackingRouter.get("/path/engineer/:engineerId", getEngineerPathController);
 // One case's trail + total km: /path/case/:caseId
 payrollTrackingRouter.get("/path/case/:caseId", getCasePathController);
+// One engineer's whole day — route, km, duty time, stops, timeline:
+// /day/engineer/:engineerId?date=YYYY-MM-DD
+payrollTrackingRouter.get("/day/engineer/:engineerId", getEngineerDayController);

@@ -2,6 +2,7 @@ import type { RequestHandler } from "express";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import {
   getCasePath,
+  getEngineerDay,
   getEngineerPath,
   getLiveEngineers,
   isPayrollConfigured,
@@ -30,6 +31,15 @@ export const getEngineerPathController: RequestHandler = asyncHandler(
     const date = typeof request.query.date === "string" ? request.query.date : undefined;
     const path = await getEngineerPath(engineerId, date);
     response.json({ data: path });
+  },
+);
+
+/** Everything one engineer did on one day — the "what did they actually do" view. */
+export const getEngineerDayController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const engineerId = Number(request.params.engineerId);
+    const date = typeof request.query.date === "string" ? request.query.date : undefined;
+    response.json({ data: await getEngineerDay(engineerId, date) });
   },
 );
 
