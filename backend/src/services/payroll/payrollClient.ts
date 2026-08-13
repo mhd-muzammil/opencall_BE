@@ -166,6 +166,10 @@ export interface PayrollBulkCaseInput {
   engineer_email?: string | null;
   engineer_phone?: string | null;
   engineer_name?: string | null;
+  // Everything the engineer needs on site, stored by Payroll as-is. Sent as a
+  // bag rather than named columns so a new report column reaches their phone
+  // without a migration on the Payroll side.
+  details?: Record<string, string>;
 }
 
 export interface PayrollBulkResult {

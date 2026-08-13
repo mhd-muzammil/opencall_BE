@@ -11,8 +11,8 @@
  * (never throws) when the Payroll integration isn't configured.
  */
 import {
-  findProductivityRowsByReportId,
-  type ProductivityPersistedRow,
+  findTicketDetailsByReportId,
+  type TicketDetailRow,
 } from "../../repositories/dailyCallPlanReportRepository.js";
 import { findLatestCompletedSessionByReportDate } from "../../repositories/historyRepository.js";
 import { findEngineerContactByName } from "../../repositories/engineerRepository.js";
@@ -86,17 +86,13 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
     }
   }
 
-  // Best-effort Work Location per ticket, from the day's persisted rows.
-  const rowByTicket = new Map<string, ProductivityPersistedRow>();
+  // The engineer-facing detail for each ticket, from the very row the call was
+  // assigned on: customer, contact, product, and the postal address that tells
+  // them where to actually go.
+  let detailByTicket = new Map<string, TicketDetailRow>();
   const session = await findLatestCompletedSessionByReportDate(workingDate);
   if (session?.daily_call_plan_report_id) {
-    const persisted = await findProductivityRowsByReportId(session.daily_call_plan_report_id);
-    for (const row of persisted) {
-      const ticket = (row.ticketId ?? "").trim();
-      if (ticket) {
-        rowByTicket.set(ticket, row);
-      }
-    }
+    detailByTicket = await findTicketDetailsByReportId(session.daily_call_plan_report_id);
   }
 
   // Resolve each engineer's email + phone once (reliable Payroll match keys).
@@ -109,15 +105,54 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
   for (const [name, tickets] of assignedByEngineer) {
     const contact = contactByName.get(name);
     for (const ticket of tickets) {
-      const location = (rowByTicket.get(ticket)?.workLocation ?? "").trim();
+      // A ticket with no row in the day's report is still pushed, so the count
+      // keeps matching the Assigned column — it just carries no detail.
+      const detail = detailByTicket.get(ticket);
       const input: PayrollBulkCaseInput = {
         external_ref: ticket,
         title: `Service call (${ticket})`.slice(0, 200),
         engineer_name: name,
         status: "assigned",
       };
-      if (location) {
-        input.address = location;
+      if (detail) {
+        // The address the engineer travels to. Common Address is the more
+        // complete of the two on most rows and is present where Customer
+        // Address is blank, so it leads; the ASP work-location code is only a
+        // last resort because it is not somewhere you can navigate to.
+        const address = detail.commonAddress || detail.customerAddress || detail.workLocation;
+        if (address) {
+          input.address = detail.customerPincode
+            ? `${address} - ${detail.customerPincode}`
+            : address;
+        }
+        if (detail.customerName) {
+          input.customer_name = detail.customerName;
+        }
+        if (detail.contact) {
+          input.customer_phone = detail.contact;
+        }
+        // Only non-empty values, so the engineer's screen never shows a row
+        // with a blank beside it.
+        input.details = Object.fromEntries(
+          Object.entries({
+            ticket_id: detail.ticketId,
+            case_id: detail.caseId,
+            wip_aging: detail.wipAging,
+            location: detail.location,
+            engineer: detail.engineer,
+            product_name: detail.productName,
+            product_serial_no: detail.productSerialNo,
+            product_line_name: detail.productLineName,
+            work_location: detail.workLocation,
+            account_name: detail.accountName,
+            customer_name: detail.customerName,
+            contact: detail.contact,
+            customer_mail: detail.customerMail,
+            common_address: detail.commonAddress,
+            customer_address: detail.customerAddress,
+            customer_pincode: detail.customerPincode,
+          }).filter(([, value]) => value !== ""),
+        );
       }
       if (contact?.email) {
         input.engineer_email = contact.email;

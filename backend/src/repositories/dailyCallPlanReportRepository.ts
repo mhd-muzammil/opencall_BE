@@ -699,6 +699,119 @@ export interface ProductivityPersistedRow {
   sameDayClosedRow: boolean;
 }
 
+/** Everything about a ticket that a field engineer needs on their phone. */
+export interface TicketDetailRow {
+  ticketId: string;
+  caseId: string;
+  wipAging: string;
+  location: string;
+  engineer: string;
+  productName: string;
+  productSerialNo: string;
+  productLineName: string;
+  workLocation: string;
+  accountName: string;
+  customerName: string;
+  contact: string;
+  customerMail: string;
+  // Only the Flex WIP record carries these, and they are the ones that actually
+  // say where to go — the report's own Work Location is an ASP code.
+  customerAddress: string;
+  commonAddress: string;
+  customerPincode: string;
+}
+
+/**
+ * Per-ticket detail for the day's report, keyed by ticket id.
+ *
+ * The report row holds the operational columns; the postal address and pincode
+ * live only on the Flex WIP record, so the latest one per ticket is joined in.
+ * The join normalises the ticket id the same way the matching engine does
+ * (upper case, non-alphanumerics stripped) rather than trusting the raw text.
+ */
+export async function findTicketDetailsByReportId(
+  reportId: string,
+): Promise<Map<string, TicketDetailRow>> {
+  const result = await query<{
+    ticket_id: string | null;
+    case_id: string | null;
+    wip_aging: string | null;
+    location: string | null;
+    engineer: string | null;
+    product: string | null;
+    product_serial_no: string | null;
+    product_line_name: string | null;
+    work_location: string | null;
+    account_name: string | null;
+    customer_name: string | null;
+    contact: string | null;
+    customer_mail: string | null;
+    customer_address: string | null;
+    common_address: string | null;
+    customer_pincode: string | null;
+  }>(
+    `
+      SELECT
+        r.ticket_id,
+        r.case_id,
+        r.wip_aging,
+        r.location,
+        r.engineer,
+        r.product,
+        r.product_serial_no,
+        r.product_line_name,
+        r.work_location,
+        r.account_name,
+        r.customer_name,
+        r.contact,
+        r.customer_mail,
+        f.customer_address,
+        f.common_address,
+        f.customer_pincode
+      FROM daily_call_plan_report_rows r
+      LEFT JOIN LATERAL (
+        SELECT customer_address, common_address, customer_pincode
+        FROM flex_wip_records w
+        WHERE w.normalized_ticket_id =
+          regexp_replace(UPPER(COALESCE(r.ticket_id, '')), '[^A-Z0-9]', '', 'g')
+        ORDER BY w.created_at DESC
+        LIMIT 1
+      ) f ON TRUE
+      WHERE r.report_id = $1 AND NOT r.is_excluded
+      ORDER BY r.serial_no ASC, r.id ASC
+    `,
+    [reportId],
+  );
+
+  const text = (value: string | null) => (value ?? "").trim();
+  const byTicket = new Map<string, TicketDetailRow>();
+  for (const row of result.rows) {
+    const ticketId = text(row.ticket_id);
+    if (!ticketId) {
+      continue;
+    }
+    byTicket.set(ticketId, {
+      ticketId,
+      caseId: text(row.case_id),
+      wipAging: text(row.wip_aging),
+      location: text(row.location),
+      engineer: text(row.engineer),
+      productName: text(row.product),
+      productSerialNo: text(row.product_serial_no),
+      productLineName: text(row.product_line_name),
+      workLocation: text(row.work_location),
+      accountName: text(row.account_name),
+      customerName: text(row.customer_name),
+      contact: text(row.contact),
+      customerMail: text(row.customer_mail),
+      customerAddress: text(row.customer_address),
+      commonAddress: text(row.common_address),
+      customerPincode: text(row.customer_pincode),
+    });
+  }
+  return byTicket;
+}
+
 export async function findProductivityRowsByReportId(
   reportId: string,
 ): Promise<ProductivityPersistedRow[]> {
