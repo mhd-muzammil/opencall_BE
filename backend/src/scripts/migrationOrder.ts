@@ -61,6 +61,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyOutboundEmailsMigration", // 052 compose (FKs inbound_emails + users)
   "applyQuotationLineItemsMigration", // 053 several line items per quotation (FK quotations)
   "applyManuallyClearedFieldsMigration", // 046 deliberately-cleared manual fields (free slot; runs last, plain ALTER)
+  "applyRegionOfficesSeedMigration", // 054 the four remaining branch offices (region_offices -> after 043)
 ];
 
 /**

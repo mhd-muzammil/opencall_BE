@@ -25,11 +25,27 @@ const xlsx: typeof XLSX =
 
 const DEFAULT_DIRECTORY = "data/ALL INDIA PINCODE.csv";
 
-// Mirrors the seed in migration 043. Kept here so the check runs without a DB.
+// Mirrors the seeds in migrations 043 + 054. Kept here so the check runs without a DB.
 const OFFICES: Record<string, { label: string; point: GeoPoint }> = {
   ASPS01461: {
     label: "Chennai - Maduravoyal",
     point: { latitude: 13.054517, longitude: 80.177834 },
+  },
+  ASPS01463: {
+    label: "Vellore",
+    point: { latitude: 12.968108, longitude: 79.150375 },
+  },
+  ASPS01465: {
+    label: "Salem",
+    point: { latitude: 11.670312, longitude: 78.142258 },
+  },
+  ASPS01489: {
+    label: "Kanchipuram",
+    point: { latitude: 12.818904, longitude: 79.695457 },
+  },
+  ASPS01511: {
+    label: "Hosur",
+    point: { latitude: 12.724307, longitude: 77.825411 },
   },
 };
 
