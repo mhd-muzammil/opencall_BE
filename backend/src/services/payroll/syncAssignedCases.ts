@@ -178,6 +178,6 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
     };
   }
 
-  const payroll = await bulkDispatchCases(cases);
+  const payroll = await bulkDispatchCases(cases, workingDate);
   return { configured: true, workingDate, rowsWithEngineer: cases.length, payroll };
 }

@@ -15,7 +15,10 @@ import { istTodayIso } from "@opencall/shared";
 import { isPayrollConfigured } from "./payrollClient.js";
 import { syncAssignedCasesForDate } from "./syncAssignedCases.js";
 
-const INTERVAL_MS = 5 * 60 * 1000; // run every 5 minutes
+// Every 2 minutes. The push is idempotent on ticket id and a whole day is only a
+// few dozen rows, so the cost is negligible next to an engineer sitting in front
+// of a customer while their newly booked call has not arrived yet.
+const INTERVAL_MS = 2 * 60 * 1000;
 const INITIAL_DELAY_MS = 30 * 1000; // first run 30s after boot (let it settle)
 
 async function runOnce(): Promise<void> {

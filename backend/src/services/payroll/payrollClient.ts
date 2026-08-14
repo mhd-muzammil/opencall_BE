@@ -202,10 +202,16 @@ export interface PayrollBulkResult {
  * duplicates. Payroll resolves each engineer by id/email/phone/name and skips
  * (reports) any it can't match rather than failing the whole batch.
  */
-export async function bulkDispatchCases(cases: PayrollBulkCaseInput[]): Promise<PayrollBulkResult> {
+export async function bulkDispatchCases(
+  cases: PayrollBulkCaseInput[],
+  /** The plan day this batch speaks for (YYYY-MM-DD). Payroll stamps it on every
+   *  case so an engineer's list can show today's plan and let yesterday's drop
+   *  off on its own, without depending on a sweep having run. */
+  planDate?: string,
+): Promise<PayrollBulkResult> {
   return authed<PayrollBulkResult>("/api/cases/bulk_dispatch/", {
     method: "POST",
-    body: JSON.stringify({ cases }),
+    body: JSON.stringify(planDate ? { cases, plan_date: planDate } : { cases }),
   });
 }
 
