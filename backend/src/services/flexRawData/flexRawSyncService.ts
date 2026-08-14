@@ -5,7 +5,11 @@ import {
   type FlexRawRecordInput,
   type FlexRawStatusGroup,
 } from "../../repositories/flexRawRecordRepository.js";
-import { classifyRawStatus, normalizeMonthKey } from "./flexRawClassify.js";
+import {
+  classifyRawStatus,
+  normalizeClosedOn,
+  normalizeMonthKey,
+} from "./flexRawClassify.js";
 
 /**
  * Pulls the Flex raw closed-call rows from the standalone raw-data project's API
@@ -31,6 +35,8 @@ interface RawApiRow {
   workLocation?: unknown;
   callStatus?: unknown;
   month?: unknown;
+  /** ISO WO Closed date; older raw-API deploys simply omit it. */
+  closedOn?: unknown;
 }
 
 export function isFlexRawSyncConfigured(): boolean {
@@ -101,6 +107,7 @@ export async function syncFlexRawDataFromApi(): Promise<FlexRawSyncResult> {
       statusGroup,
       startDate: null,
       sourceMonth: normalizeMonthKey(row.month),
+      closedOn: normalizeClosedOn(row.closedOn),
     });
   }
 

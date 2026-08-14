@@ -56,13 +56,17 @@ export const syncFlexRawDataController: RequestHandler = asyncHandler(
 
 /**
  * Per-ASP, per-month closed counts from the imported raw data, for the Closed Calls
- * region cards. Readable by any authenticated principal, but scoped to the regions
- * that principal is granted — it previously returned every region's aggregate to a
- * two-region special-access credential.
+ * region cards. Optional `from`/`to` (YYYY-MM-DD) scope the counts to WO Closed
+ * dates in that range, day-precise — the response says `dayPrecise: true` when
+ * that filtering actually ran, so the frontend can keep its month fallback
+ * against an older backend. Readable by any authenticated principal, but scoped
+ * to the regions that principal is granted — it previously returned every
+ * region's aggregate to a two-region special-access credential.
  */
 export const getFlexRawSummaryController: RequestHandler = asyncHandler(
   async (request, response) => {
-    const summary = await summarizeFlexRawRecords();
+    const { from, to } = monthRange(request.query.from, request.query.to);
+    const summary = await summarizeFlexRawRecords({ dateFrom: from, dateTo: to });
     const allowed = await allowedAspCodesForRequest(request);
 
     if (allowed === null) {
@@ -81,6 +85,9 @@ export const getFlexRawSummaryController: RequestHandler = asyncHandler(
         // with the cards rather than reporting the whole state's numbers.
         total: byAsp.reduce((sum, e) => sum + e.total, 0),
         closed: byAsp.reduce((sum, e) => sum + e.closed, 0),
+        // A store-wide count; a region-scoped principal gets 0 the same way the
+        // closure summary zeroes its unmatched rows.
+        undatedClosed: 0,
       },
     });
   },
@@ -88,15 +95,21 @@ export const getFlexRawSummaryController: RequestHandler = asyncHandler(
 
 /**
  * The raw records behind a card's "Raw data closed" count. Query params:
- *   asp    — ASP code, or "" for every region
- *   from   — earliest "YYYY-MM" (inclusive), or "" for no lower bound
- *   to     — latest "YYYY-MM" (inclusive), or "" for no upper bound
- *   status — status group (defaults to "closed"), or "" for every status
+ *   asp      — ASP code, or "" for every region
+ *   from     — earliest "YYYY-MM" (inclusive), or "" for no lower bound
+ *   to       — latest "YYYY-MM" (inclusive), or "" for no upper bound
+ *   dateFrom — earliest WO Closed "YYYY-MM-DD" (inclusive), or "" (needs 056)
+ *   dateTo   — latest WO Closed "YYYY-MM-DD" (inclusive), or "" (needs 056)
+ *   status   — status group (defaults to "closed"), or "" for every status
  */
 export const listFlexRawRecordsController: RequestHandler = asyncHandler(
   async (request, response) => {
     const asp = String(request.query.asp ?? "").trim().toUpperCase();
     const { from, to } = monthRange(request.query.from, request.query.to);
+    const { from: dateFrom, to: dateTo } = monthRange(
+      request.query.dateFrom,
+      request.query.dateTo,
+    );
     const statusRaw = request.query.status;
     const statusGroup =
       statusRaw === undefined ? "closed" : String(statusRaw).trim().toLowerCase();
@@ -114,6 +127,8 @@ export const listFlexRawRecordsController: RequestHandler = asyncHandler(
       aspCode: asp,
       monthFrom: from,
       monthTo: to,
+      dateFrom,
+      dateTo,
       statusGroup,
       allowedAspCodes: aspScopeToArray(allowed),
     });

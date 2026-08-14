@@ -21,6 +21,21 @@ export function classifyRawStatus(callStatus: unknown): FlexRawStatusGroup {
   return "open";
 }
 
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Normalises the raw API's closedOn value to "YYYY-MM-DD", or null.
+ *
+ * The source column carries 'YES'/'NO'/blank in a minority of rows (the same
+ * junk StartDate has), and an ISO timestamp would also be tolerated by taking
+ * the first ten characters. Anything that is not a real ISO day after that is
+ * rejected — a fabricated date would silently misfile the row in day counts.
+ */
+export function normalizeClosedOn(value: unknown): string | null {
+  const text = String(value ?? "").trim().slice(0, 10);
+  return ISO_DAY.test(text) ? text : null;
+}
+
 const MONTH_ABBR: Record<string, string> = {
   jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
   jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
