@@ -24,8 +24,15 @@ import {
   mapLocation,
 } from "./enrichmentHelpers.js";
 import { calculateWipAging } from "./wipAgingCalculator.js";
-import { officeDistance, type OfficeDistance } from "../../utils/geo.js";
-import { roadDistanceKey } from "../../repositories/geoRepository.js";
+import {
+  officeDistance,
+  passesPincodeGate,
+  type OfficeDistance,
+} from "../../utils/geo.js";
+import {
+  addressRoadDistanceKey,
+  roadDistanceKey,
+} from "../../repositories/geoRepository.js";
 import { parseCustomDate } from "../../utils/dateParser.js";
 
 interface IndexedLookup<TRecord> {
@@ -305,14 +312,25 @@ function buildEnrichedRow(
 
 /**
  * Distance and direction from the branch office that owns this call to the
- * customer's pincode centroid.
+ * customer — the geocoded ADDRESS when one is available, routed and sane,
+ * otherwise the pincode centroid.
  *
  * The origin is chosen by the row's own Work Location (the ASP code), not by the
  * report's region: a Chennai work order raised against a Vellore address must
  * report its real 110km, because that distance is exactly what makes the
  * misfiling visible. Suppressing it would hide the problem behind a blank cell.
+ *
+ * The exact-address tier engages only when ALL THREE hold, each load-bearing:
+ *  - the ticket has a provider geocode (not a centroid re-statement);
+ *  - that coordinate passes the pincode sanity gate — a geocoder answers the
+ *    written address, and one measured row's address sits 85 km from the site;
+ *  - its ROAD distance is already computed. Without it the tier would swap a
+ *    routed centroid figure for a straight-line guess: a better coordinate but
+ *    a worse number, so the row waits on the pincode tier instead.
+ *
+ * Exported for its tests; production callers go through matchSourceRecords.
  */
-function resolveOfficeDistance(
+export function resolveOfficeDistance(
   flexWip: FlexWipParsedRecord | null,
   input: MatchedCallPlanInput,
 ): { distanceKm: number; bearing: string; routed: boolean } | null {
@@ -326,10 +344,29 @@ function resolveOfficeDistance(
     return null;
   }
 
-  const geometry: OfficeDistance | null = officeDistance(
-    input.officeByAspCode.get(aspCode),
-    input.coordinatesByPincode.get(pincode),
-  );
+  const office = input.officeByAspCode.get(aspCode);
+  const centroid = input.coordinatesByPincode.get(pincode);
+
+  const ticketKey = normalizeTicketId(flexWip?.ticketId);
+  const precise = ticketKey ? input.preciseCoordByTicketId?.get(ticketKey) : undefined;
+  if (office && precise && centroid && passesPincodeGate(precise, centroid)) {
+    const addressRoutedKm = input.roadDistanceByOfficeAddress?.get(
+      addressRoadDistanceKey(aspCode, precise.addressKey),
+    );
+    if (addressRoutedKm != null) {
+      const preciseGeometry = officeDistance(office, precise);
+      if (preciseGeometry) {
+        return {
+          distanceKm: addressRoutedKm,
+          bearing: preciseGeometry.bearing,
+          routed: true,
+        };
+      }
+    }
+    // No route for this address yet — fall through to the pincode tier.
+  }
+
+  const geometry: OfficeDistance | null = officeDistance(office, centroid);
   if (!geometry) {
     return null;
   }

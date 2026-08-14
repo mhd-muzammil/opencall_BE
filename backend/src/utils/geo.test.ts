@@ -7,6 +7,7 @@ import {
   formatOfficeDistance,
   haversineKm,
   officeDistance,
+  passesPincodeGate,
 } from "./geo.js";
 
 // The Maduravoyal branch office, and pincode centroids resolved from the All
@@ -128,6 +129,20 @@ describe("formatOfficeDistance", () => {
   it("still renders a distance that lost its bearing", () => {
     expect(formatDistanceCell(13.8, null, true)).toBe("13.8 km");
     expect(formatDistanceCell(13.8, "", false)).toBe("~13.8 km");
+  });
+});
+
+describe("passesPincodeGate", () => {
+  const centroid = { latitude: 13.05, longitude: 80.18 };
+
+  it("accepts a coordinate inside its own pincode area", () => {
+    // ~3 km — a rooftop a neighbourhood over from the pincode's centre.
+    expect(passesPincodeGate({ latitude: 13.07, longitude: 80.2 }, centroid)).toBe(true);
+  });
+
+  it("rejects a billing-address answer far from the row's pincode", () => {
+    // ~85 km — the measured Guindy-vs-Pallipattu trap this gate exists for.
+    expect(passesPincodeGate({ latitude: 13.4, longitude: 79.5 }, centroid)).toBe(false);
   });
 });
 

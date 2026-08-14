@@ -1,6 +1,8 @@
 import { DAILY_CALL_PLAN_COLUMNS, regionNameForAspCode } from "@opencall/shared";
 import {
+  findAddressRoadDistances,
   findPincodeCoordinates,
+  findPreciseWorkOrderCoordinates,
   findRegionOfficesByAspCode,
   findRoadDistances,
 } from "../../repositories/geoRepository.js";
@@ -856,6 +858,12 @@ export async function generateDailyCallPlanReport(
     const officeByAspCode = await findRegionOfficesByAspCode(client);
     const coordinatesByPincode = await findPincodeCoordinates(client);
     const roadDistanceByOfficePincode = await findRoadDistances(client);
+    // The exact-address tier: provider geocodes per ticket plus routed
+    // distances per (office, address). Both stay empty until a geocoding
+    // provider is configured and its worker has run — rows then use the
+    // pincode tier above, the entire pre-geocoding behaviour.
+    const preciseCoordByTicketId = await findPreciseWorkOrderCoordinates(client);
+    const roadDistanceByOfficeAddress = await findAddressRoadDistances(client);
     const matches = matchSourceRecords({
       flexWip: flexWipHeaders,
       renderways: dedupedRenderways.dedupedRows,
@@ -865,6 +873,8 @@ export async function generateDailyCallPlanReport(
       officeByAspCode,
       coordinatesByPincode,
       roadDistanceByOfficePincode,
+      preciseCoordByTicketId,
+      roadDistanceByOfficeAddress,
     });
     const matchedMatches = matches.filter((match) => match.flexWip !== null);
     

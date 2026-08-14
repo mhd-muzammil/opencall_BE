@@ -138,6 +138,28 @@ export function formatOfficeDistance(
 }
 
 /**
+ * The billing-address trap gate: a provider-geocoded coordinate is only trusted
+ * when it lands within this many km of the row's own pincode centroid.
+ *
+ * The failure it exists for is real and measured: one live row's written
+ * address is in Guindy while the service site is Pallipattu, 85 km away — a
+ * geocoder answers the ADDRESS, and the address is sometimes a billing office,
+ * a head office, or a typo. A pincode area is a few km across, so a coordinate
+ * further than this from its own pincode's centre is more likely a wrong-place
+ * answer than a right one; the row then keeps the centroid distance, which is
+ * at worst ~2 km off rather than 85.
+ */
+export const PINCODE_SANITY_GATE_KM = 7;
+
+/** True when a geocoded point is plausibly inside its own pincode area. */
+export function passesPincodeGate(
+  point: GeoPoint,
+  pincodeCentroid: GeoPoint,
+): boolean {
+  return haversineKm(point, pincodeCentroid) <= PINCODE_SANITY_GATE_KM;
+}
+
+/**
  * Coarse band used for the records-grid column filter, which matches on exact
  * string values — a continuous kilometre figure would produce one filter entry
  * per pincode and be unusable.

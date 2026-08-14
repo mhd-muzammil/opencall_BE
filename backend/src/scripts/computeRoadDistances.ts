@@ -13,6 +13,7 @@
 //   ... --refresh           recompute pairs that already have a distance
 //   ... --limit 50          cap the work (useful against the public server)
 import { closeDatabasePool, pool } from "../config/database.js";
+import { routeProviderAddressDistances } from "../services/geo/addressRoutingService.js";
 import { OsrmRoadDistanceProvider } from "../services/geo/roadDistanceProvider.js";
 
 interface Pair {
@@ -120,6 +121,23 @@ async function run(): Promise<void> {
   }
 
   console.log(`\nWrote ${written} routed distances.`);
+
+  // The same pass for geocoded ADDRESSES (office_address_distances). A manual
+  // backfill must cover both tables, or freshly geocoded rows sit invisible
+  // until the worker's next sweep.
+  const addressRouting = await routeProviderAddressDistances({
+    provider,
+    refresh,
+    aspCode: aspFilter,
+  });
+  if (addressRouting.available) {
+    console.log(
+      `Address routing: examined=${addressRouting.examined} routed=${addressRouting.routed} ` +
+        `unreachable=${addressRouting.unreachable} gate-skipped=${addressRouting.skippedByGate}`,
+    );
+  } else {
+    console.log("office_address_distances is not migrated yet — address routing skipped.");
+  }
 }
 
 run()

@@ -100,7 +100,12 @@ vi.mock("../../repositories/geoRepository.js", () => ({
   findRegionOfficesByAspCode: mocks.findRegionOfficesByAspCode,
   findPincodeCoordinates: mocks.findPincodeCoordinates,
   findRoadDistances: mocks.findRoadDistances,
+  // The exact-address tier stays empty here: these tests exercise carry-forward
+  // and matching, and an empty map is exactly the no-provider production state.
+  findPreciseWorkOrderCoordinates: async () => new Map(),
+  findAddressRoadDistances: async () => new Map(),
   roadDistanceKey: (asp: string, pin: string) => `${asp.trim().toUpperCase()}|${pin}`,
+  addressRoadDistanceKey: (asp: string, key: string) => `${asp.trim().toUpperCase()}|${key}`,
 }));
 
 function previousFinalRow(): FinalReportManualCarryForwardRow {

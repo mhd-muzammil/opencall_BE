@@ -58,6 +58,7 @@
     "migrate:outbound-emails": "tsx src/scripts/applyOutboundEmailsMigration.ts",
     "migrate:quotation-line-items": "tsx src/scripts/applyQuotationLineItemsMigration.ts",
     "migrate:region-offices": "tsx src/scripts/applyRegionOfficesSeedMigration.ts",
+    "migrate:office-address-distances": "tsx src/scripts/applyOfficeAddressDistancesMigration.ts",
     "migrate:all": "tsx src/scripts/applyAllMigrations.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "fieldez:worker": "tsx src/worker/fieldezSyncWorker.ts",

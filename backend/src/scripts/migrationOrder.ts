@@ -62,6 +62,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyQuotationLineItemsMigration", // 053 several line items per quotation (FK quotations)
   "applyManuallyClearedFieldsMigration", // 046 deliberately-cleared manual fields (free slot; runs last, plain ALTER)
   "applyRegionOfficesSeedMigration", // 054 the four remaining branch offices (region_offices -> after 043)
+  "applyOfficeAddressDistancesMigration", // 055 office->address road routes (FKs geocode_cache -> after 045)
 ];
 
 /**

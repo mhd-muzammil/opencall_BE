@@ -41,6 +41,21 @@ export interface MatchedCallPlanInput {
   coordinatesByPincode?: ReadonlyMap<string, GeoPoint>;
   /** Routed road distances keyed by roadDistanceKey(aspCode, pincode). */
   roadDistanceByOfficePincode?: ReadonlyMap<string, number>;
+  /**
+   * Provider-geocoded coordinates keyed by NORMALIZED ticket id — the
+   * exact-address tier. Optional like the maps above; a ticket without an
+   * entry (or one whose coordinate fails the pincode sanity gate) stays on
+   * the pincode tier.
+   */
+  preciseCoordByTicketId?: ReadonlyMap<string, PreciseWorkOrderCoordinate>;
+  /** Routed road distances keyed by addressRoadDistanceKey(aspCode, addressKey). */
+  roadDistanceByOfficeAddress?: ReadonlyMap<string, number>;
+}
+
+/** A work order's provider-geocoded coordinate (the exact-address tier). */
+export interface PreciseWorkOrderCoordinate extends GeoPoint {
+  /** geocode_cache key its address resolved under — routes are stored per address. */
+  addressKey: string;
 }
 
 export interface EnrichedCallPlanRow {

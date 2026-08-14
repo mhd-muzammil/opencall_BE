@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import type { GeoPoint } from "../utils/geo.js";
+import type { PreciseWorkOrderCoordinate } from "../types/matching.js";
 import { normalizePincode } from "../services/normalization/valueNormalizer.js";
 
 interface RegionOfficeRow {
@@ -103,4 +104,89 @@ export async function findRoadDistances(
       Number(row.road_km),
     ]),
   );
+}
+
+/** Key for the per-address routed-distance map: one branch office against one cached address. */
+export function addressRoadDistanceKey(aspCode: string, addressKey: string): string {
+  return `${aspCode.trim().toUpperCase()}|${addressKey}`;
+}
+
+/**
+ * Provider-geocoded coordinates per work order — the exact-address tier.
+ *
+ * Only source='provider' rows qualify: the centroid rows in the same table are
+ * exactly what the pincode tier already computes, so loading them would say
+ * nothing new. The sanity gate against the row's own pincode centroid is NOT
+ * applied here but in the matching engine, next to the centroid map it needs —
+ * one implementation, unit-testable without a database.
+ *
+ * Tolerates the table not existing (a push deploys BEFORE its migration can
+ * run — the 2026-08-06 lesson): the map is empty and every row keeps its
+ * pincode distance, which is exactly the pre-geocoding behaviour.
+ */
+export async function findPreciseWorkOrderCoordinates(
+  client: PoolClient,
+): Promise<Map<string, PreciseWorkOrderCoordinate>> {
+  try {
+    const result = await client.query<{
+      normalized_ticket_id: string;
+      address_key: string;
+      latitude: string;
+      longitude: string;
+    }>(
+      `SELECT normalized_ticket_id, address_key, latitude, longitude
+         FROM work_order_geocodes
+        WHERE source = 'provider'
+          AND address_key IS NOT NULL
+          AND latitude IS NOT NULL
+          AND longitude IS NOT NULL`,
+    );
+
+    return new Map(
+      result.rows.map((row) => [
+        row.normalized_ticket_id,
+        {
+          latitude: Number(row.latitude),
+          longitude: Number(row.longitude),
+          addressKey: row.address_key,
+        },
+      ]),
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code === "42P01") {
+      return new Map();
+    }
+    throw error;
+  }
+}
+
+/**
+ * Routed road distances per (office, geocoded address) — the precise tier's
+ * counterpart of `findRoadDistances`. Same missing-table tolerance as above:
+ * migration 055 lands only after the code that reads it has deployed.
+ */
+export async function findAddressRoadDistances(
+  client: PoolClient,
+): Promise<Map<string, number>> {
+  try {
+    const result = await client.query<{
+      asp_code: string;
+      address_key: string;
+      road_km: string;
+    }>(
+      `SELECT asp_code, address_key, road_km FROM office_address_distances`,
+    );
+
+    return new Map(
+      result.rows.map((row) => [
+        addressRoadDistanceKey(row.asp_code, row.address_key),
+        Number(row.road_km),
+      ]),
+    );
+  } catch (error) {
+    if ((error as { code?: string }).code === "42P01") {
+      return new Map();
+    }
+    throw error;
+  }
 }

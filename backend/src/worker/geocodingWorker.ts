@@ -12,6 +12,7 @@ import {
   type GeocodeQueueItem,
 } from "../repositories/geocodeRepository.js";
 import { runGeocodeSweep } from "../services/geo/geocodingService.js";
+import { routeProviderAddressDistances } from "../services/geo/addressRoutingService.js";
 import { resolveGeocodeProvider } from "../services/geo/providerRegistry.js";
 import { GeocodeProviderError, type GeocodeProvider } from "../services/geo/geocodeTypes.js";
 
@@ -229,6 +230,24 @@ async function housekeepingLane(): Promise<void> {
         const requeued = await retryFailedAddresses(config.maxAttempts);
         if (requeued > 0) {
           console.log(`[geocode] requeued ${requeued} previously failed address(es)`);
+        }
+
+        // Route freshly geocoded addresses. The matching engine only uses a
+        // provider coordinate once its ROAD distance exists, so an address
+        // resolved but never routed would stay invisible forever. OSRM being
+        // down must not kill the worker — the next sweep simply retries.
+        try {
+          const routing = await routeProviderAddressDistances();
+          if (routing.available && routing.examined > 0) {
+            console.log(
+              `[geocode] address routing: routed=${routing.routed} ` +
+                `unreachable=${routing.unreachable} gate-skipped=${routing.skippedByGate}`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `[geocode] address routing failed (retries next sweep) — ${errorMessage(error)}`,
+          );
         }
 
         const coverage = await getGeocodeCoverage();
