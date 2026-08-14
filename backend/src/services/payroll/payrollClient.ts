@@ -303,13 +303,25 @@ export interface RosterEngineer {
  *
  * Payroll returns a row per name asked for, including the ones it cannot match.
  */
+/** How an engineer is identified to Payroll. Email and phone are unique there and
+ *  are what actually resolves a person; the name alone is ambiguous. */
+export interface RosterEngineerRef {
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+}
+
 export async function getRosterFor(
-  names: string[],
+  engineers: RosterEngineerRef[],
   date?: string,
 ): Promise<RosterEngineer[]> {
+  // The SAME three keys the case dispatch sends. Sending only the name made the
+  // board disagree with the cases: a ticket reached Praveen because Payroll
+  // matched his email, while the roster asked by name, could not choose between
+  // the Praveens, and reported nobody on duty while he was out on a call.
   return authed<RosterEngineer[]>("/api/tracking/roster/", {
     method: "POST",
-    body: JSON.stringify(date ? { names, date } : { names }),
+    body: JSON.stringify(date ? { engineers, date } : { engineers }),
   });
 }
 

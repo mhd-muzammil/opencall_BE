@@ -1,5 +1,8 @@
 import type { RequestHandler } from "express";
-import { listEngineersForDropdown } from "../repositories/engineerRepository.js";
+import {
+  findEngineerContactByName,
+  listEngineersForDropdown,
+} from "../repositories/engineerRepository.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import {
   getCasePath,
@@ -56,14 +59,27 @@ export const getRosterController: RequestHandler = asyncHandler(async (request, 
   }
 
   const engineers = await listEngineersForDropdown(null);
-  const names = engineers.map((engineer) => engineer.engineerName);
-  if (names.length === 0) {
+  if (engineers.length === 0) {
     response.json({ data: { configured: true, engineers: [] } });
     return;
   }
 
+  // Email and phone are what actually resolve a person in Payroll — the same
+  // keys the case dispatch sends. Looked up here so the board and the cases can
+  // never disagree about who someone is.
+  const refs = await Promise.all(
+    engineers.map(async (engineer) => {
+      const contact = await findEngineerContactByName(engineer.engineerName);
+      return {
+        name: engineer.engineerName,
+        email: contact?.email ?? null,
+        phone: contact?.phone ?? null,
+      };
+    }),
+  );
+
   const date = typeof request.query.date === "string" ? request.query.date : undefined;
-  const rows = await getRosterFor(names, date);
+  const rows = await getRosterFor(refs, date);
 
   // The register's region is a better label than a blank when Payroll has no
   // branch for them, which is every unmatched row.
