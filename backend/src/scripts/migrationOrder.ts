@@ -67,6 +67,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyInboundEmailMatchIndexesMigration", // 057 expression indexes for the email ingest's WO/sender lookups
   "applyInboundEmailMatchIndexesOrderedMigration", // 058 same indexes carrying id, so ORDER BY id DESC LIMIT 1 is served
   "applyInboundEmailMatchIndexesPlainMigration", // 059 rebuilds 058 plainly — the concurrent build never finished
+  "applyQuotationEditAuditMigration", // 060 who last edited a quotation, and when
 ];
 
 /**

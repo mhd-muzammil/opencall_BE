@@ -38,6 +38,9 @@ export interface Quotation {
   cgstPercent: number;
   createdBy: string;
   createdAt: string;
+  /** Null until someone corrects the sheet — an unedited quotation has no edit to report. */
+  updatedAt: string | null;
+  updatedBy: string;
   /** Every priced row, in entry order. Never empty — a pre-053 quotation has exactly one. */
   lineItems: QuotationLineItem[];
 }
@@ -63,8 +66,19 @@ export interface CreateQuotationInput {
   createdBy: string;
 }
 
+/**
+ * Everything a quotation can become. Deliberately the same shape as creating one — the
+ * form is the same form — minus the two things an edit must never touch: the running
+ * number and who issued it.
+ */
+export type UpdateQuotationInput = Omit<CreateQuotationInput, "createdBy"> & {
+  updatedBy: string;
+};
+
 interface QuotationDbRow {
   id: string;
+  updated_at: string | null;
+  updated_by: string | null;
   quotation_no: string;
   quotation_date: string;
   case_id: string;
@@ -173,6 +187,8 @@ function mapQuotation(r: QuotationDbRow): Quotation {
     cgstPercent: Number(r.cgst_percent),
     createdBy: r.created_by,
     createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    updatedBy: r.updated_by ?? "",
     // Filled by attachLineItems; never left empty by the time a caller sees it.
     lineItems: [],
   };
@@ -183,7 +199,8 @@ const QUOTATION_COLUMNS = `
   customer_name, customer_address, customer_city, customer_state, customer_pincode,
   customer_phone, customer_email, service_description, product_description, model_no,
   serial_no, base_amount::TEXT AS base_amount, sgst_percent::TEXT AS sgst_percent,
-  cgst_percent::TEXT AS cgst_percent, created_by, created_at::TEXT AS created_at
+  cgst_percent::TEXT AS cgst_percent, created_by, created_at::TEXT AS created_at,
+  updated_at::TEXT AS updated_at, updated_by
 `;
 
 /** Indian financial year label for a date, e.g. 2026-05-04 → "26-27". */
@@ -286,6 +303,119 @@ export async function createQuotation(
     // Straight from the input: the rows were just written in this transaction, so a
     // re-read would only be a round trip to learn what we already know.
     return { ...mapQuotation(result.rows[0]!), lineItems: items };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Correct an existing quotation in place.
+ *
+ * THE RUNNING NUMBER DOES NOT MOVE. `quotation_no` is what the customer has on the sheet
+ * already, and `quotation_sequences` is never touched here — correcting a typo must not
+ * burn a number or issue a second one for the same work. `created_by` and `created_at`
+ * stay put for the same reason: they record who raised it, which an edit does not change.
+ *
+ * Line items are replaced wholesale rather than diffed. The form hands back the list it
+ * has, rows can be added, removed and reordered in one edit, and matching them up to
+ * decide which are "the same row" would be guesswork over a set that has no stable id in
+ * the UI. Delete-then-insert inside the transaction is exact, and `position` comes out
+ * matching the order on screen.
+ *
+ * Returns null when the id does not exist, so the caller can answer 404 rather than
+ * silently succeed at nothing.
+ */
+export async function updateQuotation(
+  id: string,
+  input: UpdateQuotationInput,
+): Promise<Quotation | null> {
+  const client: PoolClient = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Same mirroring as createQuotation: the parent keeps the SUBTOTAL and the first
+    // item's descriptions, so the list view and any reader predating line items still see
+    // a whole row.
+    const items = input.lineItems;
+    const first = items[0];
+    const subtotal = items.reduce((sum, item) => sum + item.baseAmount, 0);
+
+    const result = await client.query<QuotationDbRow>(
+      `UPDATE quotations SET
+         quotation_date = $2::date,
+         case_id = $3,
+         order_number = $4,
+         customer_name = $5,
+         customer_address = $6,
+         customer_city = $7,
+         customer_state = $8,
+         customer_pincode = $9,
+         customer_phone = $10,
+         customer_email = $11,
+         service_description = $12,
+         product_description = $13,
+         model_no = $14,
+         serial_no = $15,
+         base_amount = $16,
+         sgst_percent = $17,
+         cgst_percent = $18,
+         updated_by = $19,
+         updated_at = NOW()
+       WHERE id = $1
+       RETURNING ${QUOTATION_COLUMNS}`,
+      [
+        id,
+        input.quotationDate,
+        input.caseId,
+        input.orderNumber,
+        input.customerName,
+        input.customerAddress,
+        input.customerCity,
+        input.customerState,
+        input.customerPincode,
+        input.customerPhone,
+        input.customerEmail,
+        first?.serviceDescription ?? "",
+        first?.productDescription ?? "",
+        first?.modelNo ?? "",
+        first?.serialNo ?? "",
+        subtotal,
+        input.sgstPercent,
+        input.cgstPercent,
+        input.updatedBy,
+      ],
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    await client.query(`DELETE FROM quotation_line_items WHERE quotation_id = $1`, [id]);
+    for (const [index, item] of items.entries()) {
+      await client.query(
+        `INSERT INTO quotation_line_items (
+           quotation_id, position, service_description, product_description,
+           model_no, serial_no, base_amount
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [
+          id,
+          index,
+          item.serviceDescription,
+          item.productDescription,
+          item.modelNo,
+          item.serialNo,
+          item.baseAmount,
+        ],
+      );
+    }
+
+    await client.query("COMMIT");
+    return { ...mapQuotation(row), lineItems: items };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

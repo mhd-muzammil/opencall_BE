@@ -1,11 +1,12 @@
 import { z } from "zod";
 import type { Request, RequestHandler } from "express";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { badRequest, forbidden } from "../utils/httpError.js";
+import { badRequest, forbidden, notFound } from "../utils/httpError.js";
 import {
   createQuotation,
   findQuotationById,
   listQuotations,
+  updateQuotation,
 } from "../repositories/quotationRepository.js";
 import { autofillQuotation } from "../services/quotations/quotationAutofillService.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
@@ -77,44 +78,58 @@ const createSchema = z.object({
   cgstPercent: z.number().min(0).max(100).optional().default(9),
 });
 
+/**
+ * The create and edit bodies are the same body — the edit form is the create form with the
+ * values already in it — so they parse against the same schema and normalise the same way.
+ * Returns the priced rows, or throws the same refusals the create path throws.
+ */
+function readQuotationBody(body: unknown): {
+  rest: Omit<z.infer<typeof createSchema>, "lineItems" | "serviceDescription" | "productDescription" | "modelNo" | "serialNo" | "baseAmount">;
+  items: { serviceDescription: string; productDescription: string; modelNo: string; serialNo: string; baseAmount: number }[];
+} {
+  const parsed = createSchema.safeParse(body);
+  if (!parsed.success) {
+    throw badRequest("Invalid quotation", parsed.error.flatten());
+  }
+
+  const {
+    lineItems,
+    serviceDescription,
+    productDescription,
+    modelNo,
+    serialNo,
+    baseAmount,
+    ...rest
+  } = parsed.data;
+
+  // One shape from here on. A pre-053 caller sending the flat fields becomes a
+  // one-item quotation, which is exactly what it always was.
+  const items =
+    lineItems && lineItems.length > 0
+      ? lineItems
+      : [
+          {
+            serviceDescription,
+            productDescription,
+            modelNo,
+            serialNo,
+            baseAmount: baseAmount ?? 0,
+          },
+        ];
+
+  // The sheet is priced work; a quotation of nothing is a mistake worth refusing rather
+  // than issuing a running number for.
+  if (items.every((item) => item.baseAmount <= 0)) {
+    throw badRequest("Enter an amount greater than 0 on at least one line item");
+  }
+
+  return { rest, items };
+}
+
 export const createQuotationController: RequestHandler = asyncHandler(
   async (request, response) => {
     const actor = requireQuotationAccess(request);
-    const parsed = createSchema.safeParse(request.body);
-    if (!parsed.success) {
-      throw badRequest("Invalid quotation", parsed.error.flatten());
-    }
-
-    const {
-      lineItems,
-      serviceDescription,
-      productDescription,
-      modelNo,
-      serialNo,
-      baseAmount,
-      ...rest
-    } = parsed.data;
-
-    // One shape from here on. A pre-053 caller sending the flat fields becomes a
-    // one-item quotation, which is exactly what it always was.
-    const items =
-      lineItems && lineItems.length > 0
-        ? lineItems
-        : [
-            {
-              serviceDescription,
-              productDescription,
-              modelNo,
-              serialNo,
-              baseAmount: baseAmount ?? 0,
-            },
-          ];
-
-    // The sheet is priced work; a quotation of nothing is a mistake worth refusing rather
-    // than issuing a running number for.
-    if (items.every((item) => item.baseAmount <= 0)) {
-      throw badRequest("Enter an amount greater than 0 on at least one line item");
-    }
+    const { rest, items } = readQuotationBody(request.body);
 
     const quotation = await createQuotation({
       ...rest,
@@ -175,6 +190,55 @@ export const getQuotationController: RequestHandler = asyncHandler(
     if (!quotation) {
       throw badRequest("Quotation not found");
     }
+    response.json({ data: quotation });
+  },
+);
+
+/**
+ * Correct an existing quotation.
+ *
+ * The running number is not reissued and `created_by` is left alone — this replaces the
+ * contents of a sheet that already exists, it does not raise a new one. A 404 rather than
+ * a silent success when the id is unknown, so a stale tab cannot look like it saved.
+ */
+export const updateQuotationController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const actor = requireQuotationAccess(request);
+    const id = String(request.params.id ?? "").trim();
+    if (!id) throw badRequest("Missing quotation id");
+
+    const { rest, items } = readQuotationBody(request.body);
+
+    const quotation = await updateQuotation(id, {
+      ...rest,
+      lineItems: items,
+      updatedBy: actor,
+    });
+    if (!quotation) throw notFound("Quotation not found", { id });
+
+    recordActivity({
+      eventType: "UPLOAD_CREATED",
+      actorEmailFallback: actor,
+      ...(request.currentUser
+        ? {
+            actor: {
+              id: request.currentUser.id,
+              email: request.currentUser.email,
+              role: request.currentUser.role,
+            },
+            regionId: request.currentUser.regionId ?? null,
+          }
+        : {}),
+      targetType: "quotation",
+      targetId: quotation.id,
+      metadata: {
+        kind: "QUOTATION_UPDATED",
+        quotationNo: quotation.quotationNo,
+        caseId: quotation.caseId,
+      },
+      request,
+    });
+
     response.json({ data: quotation });
   },
 );

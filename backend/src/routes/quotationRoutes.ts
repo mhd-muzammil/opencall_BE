@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   autofillQuotationController,
   createQuotationController,
+  updateQuotationController,
   getQuotationController,
   listQuotationsController,
 } from "../controllers/quotationController.js";
@@ -18,3 +19,5 @@ quotationRouter.get("/autofill", requirePrincipal, autofillQuotationController);
 quotationRouter.get("/", requirePrincipal, listQuotationsController);
 quotationRouter.get("/:id", requirePrincipal, getQuotationController);
 quotationRouter.post("/", requirePrincipal, createQuotationController);
+// Correcting a sheet that already exists: same body as create, same running number.
+quotationRouter.put("/:id", requirePrincipal, updateQuotationController);

@@ -63,6 +63,7 @@
     "migrate:email-match-indexes": "tsx src/scripts/applyInboundEmailMatchIndexesMigration.ts",
     "migrate:email-match-indexes-ordered": "tsx src/scripts/applyInboundEmailMatchIndexesOrderedMigration.ts",
     "migrate:email-match-indexes-plain": "tsx src/scripts/applyInboundEmailMatchIndexesPlainMigration.ts",
+    "migrate:quotation-edit-audit": "tsx src/scripts/applyQuotationEditAuditMigration.ts",
     "migrate:all": "tsx src/scripts/applyAllMigrations.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "fieldez:worker": "tsx src/worker/fieldezSyncWorker.ts",
