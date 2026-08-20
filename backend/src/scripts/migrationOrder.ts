@@ -66,6 +66,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyFlexRawClosedOnMigration", // 056 WO Closed date on raw records (flex_raw_records -> after 036)
   "applyInboundEmailMatchIndexesMigration", // 057 expression indexes for the email ingest's WO/sender lookups
   "applyInboundEmailMatchIndexesOrderedMigration", // 058 same indexes carrying id, so ORDER BY id DESC LIMIT 1 is served
+  "applyInboundEmailMatchIndexesPlainMigration", // 059 rebuilds 058 plainly — the concurrent build never finished
 ];
 
 /**
