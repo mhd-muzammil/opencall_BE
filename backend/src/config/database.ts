@@ -1,11 +1,26 @@
 import pg from "pg";
 import { env } from "./env.js";
 
+/**
+ * Server-side session settings, verbatim, for processes that want a query to fail rather
+ * than wait for ever — `-c lock_timeout=15s -c statement_timeout=120s`, say.
+ *
+ * `connectionTimeoutMillis` below bounds only the wait for a free connection; once a query
+ * is running, node-postgres will wait on it indefinitely. A query blocked behind a lock
+ * therefore produces no error, no log line and no progress — a process that looks alive and
+ * is doing nothing, which is exactly how the mail worker presented.
+ *
+ * Unset by default, so the API keeps its current unbounded behaviour and its long report
+ * queries are untouched. Only a process whose environment asks for a ceiling gets one.
+ */
+const sessionOptions = process.env.PG_SESSION_OPTIONS?.trim();
+
 export const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
   max: 10,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
+  ...(sessionOptions ? { options: sessionOptions } : {}),
 });
 
 export async function query<T extends pg.QueryResultRow>(

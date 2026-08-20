@@ -40,12 +40,17 @@ async function sweep(): Promise<void> {
     // Reported per mailbox as each one lands, not collected and printed at the end: a
     // sweep working through a backlog takes minutes, and a silent log for the whole of it
     // reads exactly like a hung worker.
-    const results = await pollAllMailboxes((r) => {
-      console.log(
-        `[mailWorker ${stamp()}] ${r.mailbox} — since-watermark ${r.fetched}, pending ${r.pending}, stored ${r.stored}, matched ${r.matched}` +
-          (r.error ? ` — ERROR: ${r.error}` : ""),
-      );
-    });
+    const results = await pollAllMailboxes(
+      (r) => {
+        console.log(
+          `[mailWorker ${stamp()}] ${r.mailbox} — since-watermark ${r.fetched}, pending ${r.pending}, stored ${r.stored}, matched ${r.matched}` +
+            (r.error ? ` — ERROR: ${r.error}` : ""),
+        );
+      },
+      // Printed before the step runs, so the last line in the log names whatever the worker
+      // is currently inside. Silence after a step line is where it stopped.
+      (step) => console.log(`[mailWorker ${stamp()}] ... ${step}`),
+    );
     if (results.length === 0) {
       console.log(`[mailWorker ${stamp()}] no mailboxes configured (set MAIL_* in .env)`);
       return;

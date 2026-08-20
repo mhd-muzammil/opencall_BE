@@ -404,11 +404,19 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
  */
 export async function pollAllMailboxes(
   onResult?: (result: PollResult) => void,
+  onStep?: (step: string) => void,
 ): Promise<PollResult[]> {
+  // Announced BEFORE each step, not after. Reporting only on completion cannot distinguish
+  // a step that is working from one that will never finish — and a sweep that stalled in
+  // the registration query looked identical to one that had not been reached yet.
+  onStep?.("registering mailboxes");
   await registerConfiguredMailboxes();
+  onStep?.("listing mailboxes");
   const mailboxes = await listActiveMailboxes();
+
   const results: PollResult[] = [];
   for (const mailbox of mailboxes) {
+    onStep?.(`polling ${mailbox.email}`);
     const result = await pollMailbox(mailbox);
     results.push(result);
     onResult?.(result);
