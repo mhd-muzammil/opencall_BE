@@ -279,10 +279,24 @@ export interface InboundEmailRow extends InboundEmailInput {
   createdAt: string;
 }
 
+/**
+ * A page of stored mail, newest first.
+ *
+ * `offset` skips that many of the newest before returning `limit`, which is what lets the
+ * reader ask for older mail without re-loading — and without carrying the whole mailbox in
+ * one response, since each row carries its full body text.
+ *
+ * The tiebreak on id is what makes paging safe. Mail arriving in the same second is common
+ * — a batch reply, a mailing list — and `received_at DESC` alone leaves their order up to
+ * the planner, so the same message could appear on two pages while another appeared on
+ * none. Ordering is unchanged for every other purpose: ties simply resolve newest-stored
+ * first instead of arbitrarily.
+ */
 export async function listInboundEmails(params: {
   status?: string;
   regionCodes?: string[] | null;
   limit: number;
+  offset?: number;
 }): Promise<InboundEmailRow[]> {
   const conditions: string[] = [];
   const values: unknown[] = [];
@@ -296,6 +310,9 @@ export async function listInboundEmails(params: {
     conditions.push(`UPPER(region_code) = ANY($${values.length}::TEXT[])`);
   }
   values.push(params.limit);
+  const limitAt = values.length;
+  values.push(Math.max(0, Math.trunc(params.offset ?? 0)));
+  const offsetAt = values.length;
 
   const result = await query<Record<string, never>>(
     `SELECT id::TEXT, mailbox_email, region_code, message_id, imap_uid,
@@ -305,8 +322,8 @@ export async function listInboundEmails(params: {
             escalation_level, escalation_reasons, status, created_at::TEXT
        FROM inbound_emails
       ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
-      ORDER BY received_at DESC
-      LIMIT $${values.length}`,
+      ORDER BY received_at DESC, id DESC
+      LIMIT $${limitAt} OFFSET $${offsetAt}`,
     values,
   );
 

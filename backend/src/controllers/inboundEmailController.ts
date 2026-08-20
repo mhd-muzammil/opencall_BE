@@ -38,8 +38,15 @@ export const listInboundEmailsController: RequestHandler = asyncHandler(
       ? Math.min(Math.max(Math.trunc(parsedLimit), 1), 500)
       : 100;
 
+    // How many of the newest to skip — the reader's "load older" walks this forward a page
+    // at a time. Absent means 0, so every existing caller behaves exactly as before.
+    const parsedOffset = Number(request.query.offset ?? 0);
+    const offset = Number.isFinite(parsedOffset)
+      ? Math.max(Math.trunc(parsedOffset), 0)
+      : 0;
+
     const [rows, mailboxes] = await Promise.all([
-      listInboundEmails({ status, regionCodes, limit }),
+      listInboundEmails({ status, regionCodes, limit, offset }),
       listActiveMailboxes(),
     ]);
 
