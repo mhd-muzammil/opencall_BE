@@ -279,6 +279,60 @@ export interface InboundEmailRow extends InboundEmailInput {
   createdAt: string;
 }
 
+/** One cell of the count matrix: how much mail sits at this status in this region. */
+export interface InboundEmailCount {
+  status: string;
+  regionCode: string;
+  total: number;
+  escalations: number;
+}
+
+/**
+ * How much mail is actually held, grouped by status and region.
+ *
+ * The reader used to count the rows it had loaded, so every tally in the header was really
+ * "how many of the newest page are these" — the totals sat at the page size and stopped
+ * moving, which reads as a cap on what is kept rather than on what is shown. These counts
+ * are of the whole table, so a page of 200 can honestly say there are 743.
+ *
+ * Returned as a matrix rather than pre-summed: the status tabs want it summed across
+ * regions, the region chips want one status' slice, and the escalation filter wants the
+ * flagged subset of whichever of those is showing. One GROUP BY answers all three.
+ */
+export async function countInboundEmails(
+  regionCodes: string[] | null,
+): Promise<InboundEmailCount[]> {
+  const values: unknown[] = [];
+  let where = "";
+  if (regionCodes) {
+    values.push(regionCodes);
+    where = `WHERE UPPER(region_code) = ANY($${values.length}::TEXT[])`;
+  }
+
+  const result = await query<{
+    status: string;
+    region_code: string;
+    total: string;
+    escalations: string;
+  }>(
+    `SELECT status,
+            UPPER(region_code) AS region_code,
+            COUNT(*)::TEXT AS total,
+            COUNT(*) FILTER (WHERE escalation_level <> 'NONE')::TEXT AS escalations
+       FROM inbound_emails
+       ${where}
+      GROUP BY status, UPPER(region_code)`,
+    values,
+  );
+
+  return result.rows.map((r) => ({
+    status: String(r.status),
+    regionCode: String(r.region_code),
+    total: Number(r.total) || 0,
+    escalations: Number(r.escalations) || 0,
+  }));
+}
+
 /**
  * A page of stored mail, newest first.
  *

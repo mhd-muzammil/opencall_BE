@@ -6,6 +6,7 @@ import {
   listActiveMailboxes,
   listInboundEmails,
   setInboundEmailStatus,
+  countInboundEmails,
 } from "../repositories/inboundEmailRepository.js";
 import { pollAllMailboxes } from "../services/inboundEmail/inboundEmailService.js";
 import { resolveInlineImages } from "../services/inboundEmail/htmlSanitizer.js";
@@ -45,14 +46,18 @@ export const listInboundEmailsController: RequestHandler = asyncHandler(
       ? Math.max(Math.trunc(parsedOffset), 0)
       : 0;
 
-    const [rows, mailboxes] = await Promise.all([
+    const [rows, mailboxes, counts] = await Promise.all([
       listInboundEmails({ status, regionCodes, limit, offset }),
       listActiveMailboxes(),
+      // Of everything held, not of this page — the header's tallies are about the mailbox,
+      // and a page that shows 200 of 743 should say so.
+      countInboundEmails(regionCodes),
     ]);
 
     response.json({
       data: {
         rows,
+        counts,
         mailboxes: mailboxes.filter(
           (m) => !regionCodes || regionCodes.includes(m.regionCode.toUpperCase()),
         ),
