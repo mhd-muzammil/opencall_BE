@@ -7,6 +7,7 @@ import {
   listInboundEmails,
   setInboundEmailStatus,
   countInboundEmails,
+  countInboundEmailsByTicket,
 } from "../repositories/inboundEmailRepository.js";
 import { pollAllMailboxes } from "../services/inboundEmail/inboundEmailService.js";
 import { resolveInlineImages } from "../services/inboundEmail/htmlSanitizer.js";
@@ -46,8 +47,12 @@ export const listInboundEmailsController: RequestHandler = asyncHandler(
       ? Math.max(Math.trunc(parsedOffset), 0)
       : 0;
 
+    // One work order's mail only — what the report row's envelope marker opens. Filtered
+    // in SQL, not in the reader: that WO's mail can be older than the page the list holds.
+    const ticketId = String(request.query.ticketId ?? "").trim();
+
     const [rows, mailboxes, counts] = await Promise.all([
-      listInboundEmails({ status, regionCodes, limit, offset }),
+      listInboundEmails({ status, regionCodes, limit, offset, ticketId }),
       listActiveMailboxes(),
       // Of everything held, not of this page — the header's tallies are about the mailbox,
       // and a page that shows 200 of 743 should say so.
@@ -174,5 +179,24 @@ export const getInboundEmailAttachmentController: RequestHandler = asyncHandler(
     // Attacker-supplied bytes: never let a browser re-interpret the declared type.
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.send(file.content);
+  },
+);
+
+/**
+ * Which work orders have mail against them.
+ *
+ * For the report table's envelope marker: nine hundred rows asking "has the customer
+ * written about this case?" is one grouped query the client turns into a lookup, never a
+ * request per row. Region-scoped like the list, so a Region Admin's report is marked from
+ * their own mail only.
+ */
+export const listInboundEmailWoSummaryController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const user = requireCurrentUser(request.currentUser);
+    const regions = await findAllowedRegionsForUser(user);
+    const regionCodes =
+      regions === null ? null : regions.map((r) => r.name.trim().toUpperCase());
+
+    response.json({ data: { rows: await countInboundEmailsByTicket(regionCodes) } });
   },
 );

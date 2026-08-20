@@ -5,6 +5,7 @@ import {
   listInboundEmailsController,
   pollInboundEmailsController,
   setInboundEmailStatusController,
+  listInboundEmailWoSummaryController,
 } from "../controllers/inboundEmailController.js";
 import {
   composeEmailController,
@@ -67,6 +68,15 @@ inboundEmailRouter.post(
   requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
   composeAttachmentMiddleware,
   composeEmailController,
+);
+
+// --- Which work orders have mail, for the report table's envelope marker ---
+// Also BEFORE "/:id", or "wo-summary" is read as a message id.
+inboundEmailRouter.get(
+  "/wo-summary",
+  requireAuthenticatedUser,
+  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
+  listInboundEmailWoSummaryController,
 );
 
 // --- One message, for the reading pane: original HTML + attachment list ---

@@ -333,6 +333,61 @@ export async function countInboundEmails(
   }));
 }
 
+/** Mail held against one work order, for the marker on the report row. */
+export interface InboundEmailWoSummary {
+  ticketId: string;
+  total: number;
+  escalations: number;
+  /** Newest message for this WO, so the row can say how recently the customer wrote. */
+  lastReceivedAt: string;
+}
+
+/**
+ * Which work orders have mail against them, and how much.
+ *
+ * Answers the report table's question — "has this customer written about this case?" — in
+ * one query rather than one per row. A report is nine hundred rows and the answer for most
+ * of them is "no", so it has to be a single GROUP BY the client turns into a lookup, not a
+ * join onto the report or a request per ticket.
+ *
+ * Only matched mail counts. `matched_ticket_id` is set when a WO number in the subject or
+ * body was found in the report, so a blank one is mail we could not place and has no row
+ * to mark.
+ */
+export async function countInboundEmailsByTicket(
+  regionCodes: string[] | null,
+): Promise<InboundEmailWoSummary[]> {
+  const values: unknown[] = [];
+  let regionClause = "";
+  if (regionCodes) {
+    values.push(regionCodes);
+    regionClause = ` AND UPPER(region_code) = ANY($${values.length}::TEXT[])`;
+  }
+
+  const result = await query<{
+    ticket_id: string;
+    total: string;
+    escalations: string;
+    last_received_at: string;
+  }>(
+    `SELECT UPPER(TRIM(matched_ticket_id)) AS ticket_id,
+            COUNT(*)::TEXT AS total,
+            COUNT(*) FILTER (WHERE escalation_level <> 'NONE')::TEXT AS escalations,
+            MAX(received_at)::TEXT AS last_received_at
+       FROM inbound_emails
+      WHERE TRIM(COALESCE(matched_ticket_id, '')) <> ''${regionClause}
+      GROUP BY UPPER(TRIM(matched_ticket_id))`,
+    values,
+  );
+
+  return result.rows.map((r) => ({
+    ticketId: String(r.ticket_id),
+    total: Number(r.total) || 0,
+    escalations: Number(r.escalations) || 0,
+    lastReceivedAt: String(r.last_received_at),
+  }));
+}
+
 /**
  * A page of stored mail, newest first.
  *
@@ -351,6 +406,8 @@ export async function listInboundEmails(params: {
   regionCodes?: string[] | null;
   limit: number;
   offset?: number;
+  /** One work order's mail only — what the report row's envelope marker opens. */
+  ticketId?: string;
 }): Promise<InboundEmailRow[]> {
   const conditions: string[] = [];
   const values: unknown[] = [];
@@ -362,6 +419,14 @@ export async function listInboundEmails(params: {
   if (params.regionCodes) {
     values.push(params.regionCodes);
     conditions.push(`UPPER(region_code) = ANY($${values.length}::TEXT[])`);
+  }
+  // Filtered in SQL rather than in the reader: the mail for one WO can be older than the
+  // page the list happens to hold, and a filter over the loaded page would show nothing
+  // and look like there was no mail.
+  const ticketId = params.ticketId?.trim();
+  if (ticketId) {
+    values.push(ticketId);
+    conditions.push(`UPPER(TRIM(matched_ticket_id)) = UPPER(TRIM($${values.length}))`);
   }
   values.push(params.limit);
   const limitAt = values.length;
