@@ -79,6 +79,32 @@ export async function markMailboxPolled(
   );
 }
 
+/**
+ * The IMAP UIDs already stored for one mailbox.
+ *
+ * The watermark never moves, so every sweep's SEARCH re-offers the whole range since
+ * `ingest_from` — hundreds of messages once a mailbox falls a few days behind. The
+ * message_id conflict below still guards the INSERT, but it only fires after the message
+ * has been downloaded and parsed, which is the expensive half. Subtracting what is already
+ * held lets a bounded batch move forward through the backlog instead of re-reading the
+ * same oldest mail on every pass.
+ */
+export async function listStoredImapUids(mailboxEmail: string): Promise<Set<number>> {
+  const result = await query<{ imap_uid: string }>(
+    `SELECT imap_uid
+       FROM inbound_emails
+      WHERE lower(mailbox_email) = lower($1)
+        AND imap_uid IS NOT NULL`,
+    [mailboxEmail],
+  );
+  const uids = new Set<number>();
+  for (const row of result.rows) {
+    const uid = Number(row.imap_uid);
+    if (Number.isFinite(uid)) uids.add(uid);
+  }
+  return uids;
+}
+
 export interface InboundEmailInput {
   mailboxEmail: string;
   regionCode: string;

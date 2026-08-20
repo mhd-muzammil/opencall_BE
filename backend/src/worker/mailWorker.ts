@@ -44,7 +44,7 @@ async function sweep(): Promise<void> {
     }
     for (const r of results) {
       console.log(
-        `[mailWorker ${stamp()}] ${r.mailbox} — since-watermark ${r.fetched}, stored ${r.stored}, matched ${r.matched}` +
+        `[mailWorker ${stamp()}] ${r.mailbox} — since-watermark ${r.fetched}, pending ${r.pending}, stored ${r.stored}, matched ${r.matched}` +
           (r.error ? ` — ERROR: ${r.error}` : ""),
       );
     }

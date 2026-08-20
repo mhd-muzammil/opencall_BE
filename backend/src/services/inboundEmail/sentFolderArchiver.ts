@@ -78,6 +78,17 @@ export async function archiveToSentFolder(input: {
     tls: { rejectUnauthorized: false },
   });
 
+  // Filing the copy is best effort, but only the awaited path below is inside the try:
+  // ImapFlow emits 'error' asynchronously, and an 'error' with no listener is fatal to the
+  // process. This one runs inside the API, so an unlucky socket here would take the whole
+  // of OpenCall down over a Sent-folder copy. Logged and dropped instead.
+  client.on("error", (error: unknown) => {
+    console.error(
+      `[sentFolder] IMAP error on ${input.mailboxEmail}:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  });
+
   try {
     await client.connect();
     const folder = await resolveSentFolder(client);

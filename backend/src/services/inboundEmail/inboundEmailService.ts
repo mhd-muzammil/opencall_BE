@@ -6,6 +6,7 @@ import {
   insertInboundEmail,
   insertInboundEmailAttachments,
   listActiveMailboxes,
+  listStoredImapUids,
   markMailboxPolled,
   type RegionMailbox,
 } from "../../repositories/inboundEmailRepository.js";
@@ -37,6 +38,53 @@ import { mailboxPassword } from "./mailboxCredentials.js";
  * the back catalogue is never read and — when replies do arrive — no historical customer can
  * be answered years late.
  */
+
+/**
+ * How many messages one sweep will read from one mailbox.
+ *
+ * A sweep holds the IMAP connection open while every message in it is downloaded whole,
+ * parsed, matched against the report and written to the database with its attachments, so
+ * the work per message is measured in seconds, not milliseconds. Left unbounded, a mailbox
+ * that has fallen a few days behind hands the sweep hundreds of messages, the connection
+ * passes its idle ceiling part-way through, and the batch dies with nothing to show for the
+ * messages it had not yet reached. Bounded, a backlog simply takes several sweeps to drain
+ * and every sweep leaves the mailbox strictly further ahead than it found it.
+ */
+const MAX_MESSAGES_PER_SWEEP = (() => {
+  const raw = Number(process.env.MAIL_MAX_PER_SWEEP);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 40;
+})();
+
+/**
+ * Idle ceiling for the IMAP socket. imapflow's own default is five minutes, which a slow
+ * batch used to reach; this is the margin around the cap above, not a substitute for it.
+ */
+const SOCKET_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * The UIDs a sweep still owes work for: everything the server offered, minus what is
+ * already stored, oldest first.
+ *
+ * Oldest first is the point. The batch is taken off the front of this list, so a mailbox
+ * that has fallen behind catches up in arrival order and the reading pane fills in from
+ * where it stopped rather than from both ends at once.
+ */
+export function pendingUids(
+  offered: Array<number | string>,
+  known: Set<number>,
+): number[] {
+  const seen = new Set<number>();
+  const pending: number[] = [];
+  for (const raw of offered) {
+    // IMAP UIDs start at 1, so the `> 0` test is what rejects a blank entry — Number("")
+    // is 0, which is finite, and a fetch for UID 0 asks the server for nothing.
+    const uid = Number(raw);
+    if (!Number.isInteger(uid) || uid <= 0 || known.has(uid) || seen.has(uid)) continue;
+    seen.add(uid);
+    pending.push(uid);
+  }
+  return pending.sort((a, b) => a - b);
+}
 
 export interface MailboxConfig {
   regionCode: string;
@@ -79,6 +127,8 @@ function firstAddress(
 export interface PollResult {
   mailbox: string;
   fetched: number;
+  /** Of those, the ones not yet held — the backlog still to drain, batch cap aside. */
+  pending: number;
   stored: number;
   matched: number;
   error: string;
@@ -92,6 +142,7 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
   const result: PollResult = {
     mailbox: mailbox.email,
     fetched: 0,
+    pending: 0,
     stored: 0,
     matched: 0,
     error: "",
@@ -115,6 +166,18 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
     logger: false,
     // The mailboxes are on shared hosting with a self-signed chain on some hostnames.
     tls: { rejectUnauthorized: false },
+    socketTimeout: SOCKET_TIMEOUT_MS,
+  });
+
+  // ImapFlow is an EventEmitter, and a socket that times out or drops emits 'error'
+  // ASYNCHRONOUSLY — off the await chain below, where the try/catch cannot see it. Node
+  // treats an 'error' with no listener as fatal and takes the process down with it, so a
+  // single slow batch used to kill the worker outright, and the restart met the same
+  // backlog and died the same way. Listening demotes it to a failure of this one mailbox.
+  let socketError = "";
+  client.on("error", (error: unknown) => {
+    socketError = error instanceof Error ? error.message : String(error);
+    console.error(`[mailWorker] IMAP error on ${mailbox.email}: ${socketError}`);
   });
 
   try {
@@ -127,11 +190,21 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
       const list = Array.isArray(uids) ? uids : [];
       result.fetched = list.length;
 
-      if (list.length > 0) {
+      // The SEARCH re-offers the entire range on every sweep, so subtract what is already
+      // held before choosing a batch. Without this the cap below would re-read the same
+      // oldest messages for ever and never reach today's mail.
+      const known = await listStoredImapUids(mailbox.email);
+      const pending = pendingUids(list, known);
+      result.pending = pending.length;
+
+      // Oldest first so the backlog drains in the order it arrived.
+      const batch = pending.slice(0, MAX_MESSAGES_PER_SWEEP);
+
+      if (batch.length > 0) {
         // The whole message, not just its text part: the reading pane shows the sender's
         // own HTML and their inline pictures, and both live in parts a "text" fetch skips.
         for await (const message of client.fetch(
-          list,
+          batch,
           { uid: true, envelope: true, source: true },
           { uid: true },
         )) {
@@ -235,7 +308,10 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
     }
     await markMailboxPolled(mailbox.email, "");
   } catch (error) {
-    result.error = error instanceof Error ? error.message : String(error);
+    const thrown = error instanceof Error ? error.message : String(error);
+    // A dropped socket surfaces here as a generic abort; the emitted event carried the
+    // real reason, so prefer it when there is one.
+    result.error = socketError || thrown;
     await markMailboxPolled(mailbox.email, result.error);
   } finally {
     try {
