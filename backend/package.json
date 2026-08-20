@@ -60,6 +60,7 @@
     "migrate:region-offices": "tsx src/scripts/applyRegionOfficesSeedMigration.ts",
     "migrate:office-address-distances": "tsx src/scripts/applyOfficeAddressDistancesMigration.ts",
     "migrate:flex-raw-closed-on": "tsx src/scripts/applyFlexRawClosedOnMigration.ts",
+    "migrate:email-match-indexes": "tsx src/scripts/applyInboundEmailMatchIndexesMigration.ts",
     "migrate:all": "tsx src/scripts/applyAllMigrations.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "fieldez:worker": "tsx src/worker/fieldezSyncWorker.ts",

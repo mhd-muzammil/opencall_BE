@@ -42,24 +42,50 @@ import { mailboxPassword } from "./mailboxCredentials.js";
 /**
  * How many messages one sweep will read from one mailbox.
  *
- * A sweep holds the IMAP connection open while every message in it is downloaded whole,
- * parsed, matched against the report and written to the database with its attachments, so
- * the work per message is measured in seconds, not milliseconds. Left unbounded, a mailbox
- * that has fallen a few days behind hands the sweep hundreds of messages, the connection
- * passes its idle ceiling part-way through, and the batch dies with nothing to show for the
- * messages it had not yet reached. Bounded, a backlog simply takes several sweeps to drain
- * and every sweep leaves the mailbox strictly further ahead than it found it.
+ * A backlog is drained in bites rather than swallowed. Left unbounded, a mailbox a few days
+ * behind hands the sweep several hundred whole messages at once — too much to hold and too
+ * long to read — and the sweep dies with nothing to show for it, restarts, and meets the
+ * same backlog. Bounded, a backlog takes several sweeps to clear and every sweep leaves the
+ * mailbox strictly further ahead than it found it.
  */
 const MAX_MESSAGES_PER_SWEEP = (() => {
   const raw = Number(process.env.MAIL_MAX_PER_SWEEP);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 40;
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 20;
 })();
 
 /**
- * Idle ceiling for the IMAP socket. imapflow's own default is five minutes, which a slow
- * batch used to reach; this is the margin around the cap above, not a substitute for it.
+ * Ceiling on the bytes one sweep holds from one mailbox.
+ *
+ * The count above bounds the batch by message; this bounds it by size, which is the one
+ * that matters for a worker with a memory limit. Twenty messages is a small batch until one
+ * of them carries a 20 MB report, and the worker has already been OOM-killed once for
+ * assuming otherwise. Reaching this stops the read early — the messages not read were never
+ * stored, so they are still pending and the next sweep takes them.
+ */
+const MAX_SWEEP_BYTES = (() => {
+  const raw = Number(process.env.MAIL_MAX_SWEEP_MB);
+  const mb = Number.isFinite(raw) && raw > 0 ? raw : 48;
+  return Math.floor(mb * 1024 * 1024);
+})();
+
+/**
+ * Idle ceiling for the IMAP socket. imapflow's own default is five minutes, which the old
+ * read-and-store-together sweep used to reach; the two phases below are what keep a sweep
+ * clear of it, and this is only the margin around them.
  */
 const SOCKET_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * One message as it comes off the wire, before anything is made of it.
+ *
+ * Deliberately raw: holding the parsed form would mean parsing with the connection still
+ * open, which is the coupling the two phases exist to break.
+ */
+interface CollectedMessage {
+  uid: number | null;
+  envelope: { date?: Date; subject?: string; messageId?: string; from?: { address?: string; name?: string }[] } | undefined;
+  source: Buffer;
+}
 
 /**
  * The UIDs a sweep still owes work for: everything the server offered, minus what is
@@ -180,12 +206,27 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
     console.error(`[mailWorker] IMAP error on ${mailbox.email}: ${socketError}`);
   });
 
+  // ---- Phase 1: READ. The connection is open only for this. ----------------------
+  //
+  // Nothing that touches the database happens while the socket is live. imapflow's idle
+  // ceiling counts silence on the socket, and the per-message work below — parsing, two
+  // report lookups, an insert, attachment bytes — is slow enough that a full batch of it
+  // used to leave the connection silent for minutes and the server hung up mid-sweep.
+  // Reading is pure network and finishes quickly; the slow half runs once it is over.
+  const since = new Date(mailbox.ingestFrom);
+  const collected: CollectedMessage[] = [];
+  let readError = "";
+
+  // Read before connecting. It is one query rather than one per message, but it is still
+  // database work, and the whole point of the split below is that none of that happens
+  // with the socket open and counting silence against us.
+  const known = await listStoredImapUids(mailbox.email);
+
   try {
     await client.connect();
     const lock = await client.getMailboxLock("INBOX");
     try {
       // THE GUARD: only mail at or after the watermark is even asked for.
-      const since = new Date(mailbox.ingestFrom);
       const uids = await client.search({ since }, { uid: true });
       const list = Array.isArray(uids) ? uids : [];
       result.fetched = list.length;
@@ -193,7 +234,6 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
       // The SEARCH re-offers the entire range on every sweep, so subtract what is already
       // held before choosing a batch. Without this the cap below would re-read the same
       // oldest messages for ever and never reach today's mail.
-      const known = await listStoredImapUids(mailbox.email);
       const pending = pendingUids(list, known);
       result.pending = pending.length;
 
@@ -203,116 +243,35 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
       if (batch.length > 0) {
         // The whole message, not just its text part: the reading pane shows the sender's
         // own HTML and their inline pictures, and both live in parts a "text" fetch skips.
+        // Holding those whole messages is what the byte budget is for — twenty of them is
+        // a modest batch by count and an unbounded one by size, and the worker has been
+        // OOM-killed by exactly that before.
+        let budget = MAX_SWEEP_BYTES;
         for await (const message of client.fetch(
           batch,
           { uid: true, envelope: true, source: true },
           { uid: true },
         )) {
-          const envelope = message.envelope;
-          const receivedAt = envelope?.date ?? new Date();
-          // Belt and braces: the server filter is inclusive of the day, so re-check.
-          if (receivedAt < since) continue;
-
-          const parsed = await parseMessageSource(message.source ?? Buffer.from([]));
-          const headers = parsed.headers;
-
-          // Envelope values win when the parse came back blank — a malformed body must not
-          // cost us the sender or the subject, which is what triage runs on.
-          const envelopeFrom = firstAddress(envelope?.from);
-          const from = {
-            email: parsed.fromEmail || envelopeFrom.email,
-            name: parsed.fromName || envelopeFrom.name,
-          };
-          const subject = (parsed.subject || envelope?.subject || "").trim();
-
-          // Matching and escalation keep reading FLATTENED PLAIN TEXT. Those rules were
-          // tuned against it — feeding them markup would change what counts as an
-          // escalation — so the HTML is carried alongside for display only.
-          const plainSource = parsed.text.trim() ? parsed.text : parsed.html;
-          const preview = toPreview(plainSource);
-          const fullText = toFullText(plainSource);
-          const bodyHtml = sanitizeEmailHtml(parsed.html);
-
-          // --- match ---
-          let match = NO_MATCH;
-          const wos = extractWoNumbers(`${subject} ${preview}`);
-          let woRow: { ticketId: string; caseId: string } | null = null;
-          for (const wo of wos) {
-            const found = await findRowByTicketId(wo);
-            if (found) {
-              woRow = { ticketId: found.ticketId, caseId: found.caseId };
-              break;
-            }
-          }
-          const senderRow = woRow ? null : await findRowByCustomerEmail(from.email);
-          match = resolveMatch({ woInReport: woRow, senderRow });
-
-          // Machine mail is never an escalation, so the auto flag is decided first.
-          const autoFlag = isAutoGenerated(headers) || isNoReplySender(from.email);
-          const escalation = detectEscalation({ subject, body: fullText, isAutoReply: autoFlag });
-
-          const storedId = await insertInboundEmail({
-            mailboxEmail: mailbox.email,
-            regionCode: mailbox.regionCode,
-            messageId: envelope?.messageId ?? `uid-${message.uid}@${mailbox.email}`,
-            imapUid: Number(message.uid) || null,
-            fromEmail: from.email,
-            fromName: from.name,
-            subject,
-            bodyPreview: preview,
-            bodyText: fullText,
-            bodyHtml,
-            hasAttachments: parsed.attachments.some((a) => !a.isInline),
-            receivedAt: receivedAt.toISOString(),
-            matchedTicketId: match.ticketId,
-            matchedCaseId: match.caseId,
-            matchMethod: match.method,
-            matchConfidence: match.confidence,
-            // Either flag bars the message from any future reply path.
-            isAutoReply: autoFlag,
-            escalationLevel: escalation.level,
-            escalationReasons: escalation.reasons.join(" | "),
+          const source = message.source ?? Buffer.from([]);
+          collected.push({
+            uid: Number(message.uid) || null,
+            envelope: message.envelope,
+            source,
           });
-
-          if (storedId) {
-            result.stored += 1;
-            if (match.method !== "NONE") result.matched += 1;
-
-            // Files are secondary to the message: a mail whose attachments fail to store
-            // is still readable and still triageable, so this must not abort the sweep.
-            if (parsed.attachments.length > 0) {
-              try {
-                await insertInboundEmailAttachments(
-                  storedId,
-                  parsed.attachments.map((a) => ({
-                    contentId: a.contentId,
-                    filename: a.filename,
-                    mimeType: a.mimeType,
-                    sizeBytes: a.sizeBytes,
-                    isInline: a.isInline,
-                    content: a.content,
-                  })),
-                );
-              } catch (error) {
-                console.error(
-                  `[mailWorker] attachments failed for ${mailbox.email} uid ${String(message.uid)}:`,
-                  error,
-                );
-              }
-            }
-          }
+          budget -= source.byteLength;
+          // Stopping here costs nothing: what was not read was never stored, so it is
+          // still pending and the next sweep takes it.
+          if (budget <= 0) break;
         }
       }
     } finally {
       lock.release();
     }
-    await markMailboxPolled(mailbox.email, "");
   } catch (error) {
     const thrown = error instanceof Error ? error.message : String(error);
     // A dropped socket surfaces here as a generic abort; the emitted event carried the
     // real reason, so prefer it when there is one.
-    result.error = socketError || thrown;
-    await markMailboxPolled(mailbox.email, result.error);
+    readError = socketError || thrown;
   } finally {
     try {
       await client.logout();
@@ -321,16 +280,138 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
     }
   }
 
+  // ---- Phase 2: STORE. The connection is closed; nothing here is on a clock. ---------
+  //
+  // Messages read before a failure are still worth keeping — they are what lets a mailbox
+  // that times out mid-read still come out of the sweep further ahead than it went in.
+  for (const message of collected) {
+    try {
+      const envelope = message.envelope;
+      const receivedAt = envelope?.date ?? new Date();
+      // Belt and braces: the server filter is inclusive of the day, so re-check.
+      if (receivedAt < since) continue;
+
+      const parsed = await parseMessageSource(message.source);
+      const headers = parsed.headers;
+
+      // Envelope values win when the parse came back blank — a malformed body must not
+      // cost us the sender or the subject, which is what triage runs on.
+      const envelopeFrom = firstAddress(envelope?.from);
+      const from = {
+        email: parsed.fromEmail || envelopeFrom.email,
+        name: parsed.fromName || envelopeFrom.name,
+      };
+      const subject = (parsed.subject || envelope?.subject || "").trim();
+
+      // Matching and escalation keep reading FLATTENED PLAIN TEXT. Those rules were
+      // tuned against it — feeding them markup would change what counts as an
+      // escalation — so the HTML is carried alongside for display only.
+      const plainSource = parsed.text.trim() ? parsed.text : parsed.html;
+      const preview = toPreview(plainSource);
+      const fullText = toFullText(plainSource);
+      const bodyHtml = sanitizeEmailHtml(parsed.html);
+
+      // --- match ---
+      let match = NO_MATCH;
+      const wos = extractWoNumbers(`${subject} ${preview}`);
+      let woRow: { ticketId: string; caseId: string } | null = null;
+      for (const wo of wos) {
+        const found = await findRowByTicketId(wo);
+        if (found) {
+          woRow = { ticketId: found.ticketId, caseId: found.caseId };
+          break;
+        }
+      }
+      const senderRow = woRow ? null : await findRowByCustomerEmail(from.email);
+      match = resolveMatch({ woInReport: woRow, senderRow });
+
+      // Machine mail is never an escalation, so the auto flag is decided first.
+      const autoFlag = isAutoGenerated(headers) || isNoReplySender(from.email);
+      const escalation = detectEscalation({ subject, body: fullText, isAutoReply: autoFlag });
+
+      const storedId = await insertInboundEmail({
+        mailboxEmail: mailbox.email,
+        regionCode: mailbox.regionCode,
+        messageId: envelope?.messageId ?? `uid-${message.uid}@${mailbox.email}`,
+        imapUid: Number(message.uid) || null,
+        fromEmail: from.email,
+        fromName: from.name,
+        subject,
+        bodyPreview: preview,
+        bodyText: fullText,
+        bodyHtml,
+        hasAttachments: parsed.attachments.some((a) => !a.isInline),
+        receivedAt: receivedAt.toISOString(),
+        matchedTicketId: match.ticketId,
+        matchedCaseId: match.caseId,
+        matchMethod: match.method,
+        matchConfidence: match.confidence,
+        // Either flag bars the message from any future reply path.
+        isAutoReply: autoFlag,
+        escalationLevel: escalation.level,
+        escalationReasons: escalation.reasons.join(" | "),
+      });
+
+      if (storedId) {
+        result.stored += 1;
+        if (match.method !== "NONE") result.matched += 1;
+
+        // Files are secondary to the message: a mail whose attachments fail to store
+        // is still readable and still triageable, so this must not abort the sweep.
+        if (parsed.attachments.length > 0) {
+          try {
+            await insertInboundEmailAttachments(
+              storedId,
+              parsed.attachments.map((a) => ({
+                contentId: a.contentId,
+                filename: a.filename,
+                mimeType: a.mimeType,
+                sizeBytes: a.sizeBytes,
+                isInline: a.isInline,
+                content: a.content,
+              })),
+            );
+          } catch (error) {
+            console.error(
+              `[mailWorker] attachments failed for ${mailbox.email} uid ${String(message.uid)}:`,
+              error,
+            );
+          }
+        }
+      }
+    } catch (error) {
+      // One unreadable message must not cost the rest of the batch. It stays unstored, so
+      // it is offered again next sweep; if it fails for ever it fails alone.
+      console.error(
+        `[mailWorker] message failed for ${mailbox.email} uid ${String(message.uid)}:`,
+        error,
+      );
+    }
+  }
+
+  result.error = readError;
+  await markMailboxPolled(mailbox.email, readError);
   return result;
 }
 
-/** One sweep across every active mailbox. */
-export async function pollAllMailboxes(): Promise<PollResult[]> {
+
+/**
+ * One sweep across every active mailbox.
+ *
+ * `onResult` fires as each mailbox finishes rather than at the end. A sweep draining a
+ * backlog can run for many minutes, and reporting only on completion made a working sweep
+ * indistinguishable from a hung one — the log stayed empty either way.
+ */
+export async function pollAllMailboxes(
+  onResult?: (result: PollResult) => void,
+): Promise<PollResult[]> {
   await registerConfiguredMailboxes();
   const mailboxes = await listActiveMailboxes();
   const results: PollResult[] = [];
   for (const mailbox of mailboxes) {
-    results.push(await pollMailbox(mailbox));
+    const result = await pollMailbox(mailbox);
+    results.push(result);
+    onResult?.(result);
   }
   return results;
 }

@@ -37,17 +37,25 @@ async function sweep(): Promise<void> {
   }
   running = true;
   try {
-    const results = await pollAllMailboxes();
-    if (results.length === 0) {
-      console.log(`[mailWorker ${stamp()}] no mailboxes configured (set MAIL_* in .env)`);
-      return;
-    }
-    for (const r of results) {
+    // Reported per mailbox as each one lands, not collected and printed at the end: a
+    // sweep working through a backlog takes minutes, and a silent log for the whole of it
+    // reads exactly like a hung worker.
+    const results = await pollAllMailboxes((r) => {
       console.log(
         `[mailWorker ${stamp()}] ${r.mailbox} — since-watermark ${r.fetched}, pending ${r.pending}, stored ${r.stored}, matched ${r.matched}` +
           (r.error ? ` — ERROR: ${r.error}` : ""),
       );
+    });
+    if (results.length === 0) {
+      console.log(`[mailWorker ${stamp()}] no mailboxes configured (set MAIL_* in .env)`);
+      return;
     }
+    // The backlog across every mailbox, so one line answers "is this catching up?".
+    const stillPending = results.reduce((total, r) => total + Math.max(0, r.pending - r.stored), 0);
+    console.log(
+      `[mailWorker ${stamp()}] sweep done — stored ${results.reduce((t, r) => t + r.stored, 0)}, ` +
+        `${stillPending === 0 ? "up to date" : `${stillPending} still to fetch`}`,
+    );
   } catch (error) {
     console.error(`[mailWorker ${stamp()}] sweep failed:`, error);
   } finally {
