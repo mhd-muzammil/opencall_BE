@@ -23,6 +23,11 @@ export interface AwaitingQuotation {
    * here, or failing that when it was raised. See the note on the query below.
    */
   watchFrom: string;
+  /**
+   * What the customer owes, tax included. Carried so a screenshot's figure can be checked
+   * against it — the amount is the only thing that tells a part payment from a full one.
+   */
+  expectedTotal: number;
   sentAt: string | null;
   sentTo: string;
   replySeenAt: string | null;
@@ -48,12 +53,14 @@ export async function listQuotationsAwaitingReply(): Promise<AwaitingQuotation[]
     quotation_no: string;
     order_number: string;
     watch_from: string;
+    expected_total: string;
     sent_at: string | null;
     sent_to: string;
     reply_seen_at: string | null;
   }>(
     `SELECT id::TEXT, quotation_no, order_number,
             COALESCE(sent_at, quotation_date::timestamptz)::TEXT AS watch_from,
+            (base_amount * (1 + (sgst_percent + cgst_percent) / 100))::TEXT AS expected_total,
             sent_at::TEXT AS sent_at,
             COALESCE(sent_to, '') AS sent_to, reply_seen_at::TEXT AS reply_seen_at
        FROM quotations
@@ -66,6 +73,7 @@ export async function listQuotationsAwaitingReply(): Promise<AwaitingQuotation[]
     quotationNo: r.quotation_no,
     orderNumber: r.order_number,
     watchFrom: r.watch_from,
+    expectedTotal: Number(r.expected_total) || 0,
     sentAt: r.sent_at,
     sentTo: r.sent_to,
     replySeenAt: r.reply_seen_at,
@@ -125,6 +133,51 @@ export async function listRepliesForQuotation(input: {
     hasAttachments: Boolean(r.has_attachments),
     receivedAt: r.received_at,
     isAutoReply: Boolean(r.is_auto_reply),
+  }));
+}
+
+export interface ReplyImage {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  content: Buffer;
+}
+
+/**
+ * The pictures a reply carried, bytes and all.
+ *
+ * Only real attachments: an inline image is a signature logo or a mail-client decoration,
+ * never the receipt someone meant to send. Only images, because the reader can only read
+ * those, and smallest first — a receipt is a light file and running that one before a
+ * megabyte of photograph gets the answer sooner.
+ *
+ * Fetched one message at a time and only when the text alone was inconclusive; the bytes
+ * are the heaviest thing in this table and there is no reason to hold several at once.
+ */
+export async function listReplyImages(inboundEmailId: string): Promise<ReplyImage[]> {
+  const result = await query<{
+    id: string;
+    filename: string;
+    mime_type: string;
+    size_bytes: number;
+    content: Buffer;
+  }>(
+    `SELECT id::TEXT, filename, mime_type, size_bytes, content
+       FROM inbound_email_attachments
+      WHERE inbound_email_id = $1
+        AND NOT is_inline
+        AND mime_type ILIKE 'image/%'
+      ORDER BY size_bytes
+      LIMIT 5`,
+    [inboundEmailId],
+  );
+  return result.rows.map((r) => ({
+    id: String(r.id),
+    filename: String(r.filename),
+    mimeType: String(r.mime_type),
+    sizeBytes: Number(r.size_bytes) || 0,
+    content: r.content,
   }));
 }
 

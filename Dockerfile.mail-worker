@@ -19,6 +19,15 @@ ENV PNPM_HOME="/pnpm" \
 
 WORKDIR /app
 
+# Tesseract reads the text off a payment screenshot, which is how a quotation settles
+# itself when the customer sends the receipt and writes nothing — the common case.
+#
+# The BINARY, not the JavaScript build: that one ships a WASM engine and downloads its
+# language data at runtime, and both cost memory in a worker that has been OOM-killed once
+# already. This runs in its own process and takes its memory with it when it exits.
+# eng only; a UPI receipt is in English whatever the phone's language is set to.
+RUN apt-get update     && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng     && rm -rf /var/lib/apt/lists/*
+
 RUN npm install -g pnpm@${PNPM_VERSION}
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./

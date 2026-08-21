@@ -1,9 +1,12 @@
 import {
   listQuotationsAwaitingReply,
   listRepliesForQuotation,
+  listReplyImages,
   recordQuotationReplyState,
 } from "../../repositories/quotationWatchRepository.js";
 import { detectPaymentSignal, type PaymentSignalLevel } from "./paymentSignal.js";
+import { readScreenshotPayment } from "./screenshotPayment.js";
+import { isReadableImage, readImageText } from "./screenshotReader.js";
 
 /**
  * Watch for customers answering a quotation, and settle the ones who say they have paid.
@@ -30,10 +33,57 @@ export interface WatchResult {
   repliedNow: number;
   autoPaid: number;
   needsLook: number;
+  /** Screenshots actually read, so the log says whether OCR is doing anything at all. */
+  screenshotsRead: number;
+}
+
+/**
+ * Read the pictures on a reply and see whether one of them is a receipt.
+ *
+ * Reached only when the words were inconclusive, which is the common case: customers who
+ * pay usually send the screenshot and write nothing at all, so the picture IS the message.
+ *
+ * The first image that resolves wins and the rest are left unread — a reply carrying a
+ * receipt and three photographs of the unit should cost one OCR run, not four.
+ */
+async function readScreenshots(input: {
+  emailId: string;
+  expectedTotal: number;
+  quotationNo: string;
+}): Promise<{ read: number; payment: ReturnType<typeof readScreenshotPayment> | null }> {
+  let images;
+  try {
+    images = await listReplyImages(input.emailId);
+  } catch (error) {
+    console.error(`[quotationWatch] could not load images for ${input.quotationNo}:`, error);
+    return { read: 0, payment: null };
+  }
+
+  let read = 0;
+  for (const image of images) {
+    if (!isReadableImage(image.mimeType, image.sizeBytes)) continue;
+    const text = await readImageText({ content: image.content, mimeType: image.mimeType });
+    read += 1;
+    if (!text) continue;
+
+    const payment = readScreenshotPayment({
+      text,
+      expectedTotal: input.expectedTotal > 0 ? input.expectedTotal : null,
+    });
+    // UNCLEAR means this picture was not a receipt; the next one still might be.
+    if (payment.verdict !== "UNCLEAR") return { read, payment };
+  }
+  return { read, payment: null };
 }
 
 export async function runQuotationPaymentWatch(): Promise<WatchResult> {
-  const result: WatchResult = { checked: 0, repliedNow: 0, autoPaid: 0, needsLook: 0 };
+  const result: WatchResult = {
+    checked: 0,
+    repliedNow: 0,
+    autoPaid: 0,
+    needsLook: 0,
+    screenshotsRead: 0,
+  };
 
   const awaiting = await listQuotationsAwaitingReply();
   for (const quotation of awaiting) {
@@ -67,6 +117,44 @@ export async function runQuotationPaymentWatch(): Promise<WatchResult> {
       }
     }
     if (!best) continue;
+
+    // The words were not enough. If a picture came with the best reply, read it — this is
+    // the case the OCR exists for, and the only one it is reached in.
+    let screenshotNote = "";
+    if (best.level !== "STRONG") {
+      const withImage = replies.find((reply) => reply.id === best!.emailId && reply.hasAttachments)
+        ?? replies.find((reply) => reply.hasAttachments);
+      if (withImage) {
+        const { read, payment } = await readScreenshots({
+          emailId: withImage.id,
+          expectedTotal: quotation.expectedTotal,
+          quotationNo: quotation.quotationNo,
+        });
+        result.screenshotsRead += read;
+
+        if (payment) {
+          screenshotNote = `screenshot: ${payment.reasons.join(" · ")}`;
+          if (payment.verdict === "PAID") {
+            // The receipt says the full amount went through. That is stronger evidence
+            // than any wording, so it settles the quotation on its own.
+            best = {
+              level: "STRONG",
+              reasons: [...best.reasons, screenshotNote],
+              emailId: withImage.id,
+            };
+          } else {
+            // PARTIAL and FAILED are the reasons for reading the image rather than
+            // trusting it, and neither may settle anything — a half payment marked paid
+            // means the balance is never chased.
+            best = {
+              level: "WEAK",
+              reasons: [...best.reasons, screenshotNote],
+              emailId: withImage.id,
+            };
+          }
+        }
+      }
+    }
 
     const newest = replies[replies.length - 1]!;
     // Evidence points at the message that earned the level. For an ordinary reply there is

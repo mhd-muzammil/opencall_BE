@@ -65,8 +65,8 @@ async function sweep(): Promise<void> {
       if (watch.repliedNow > 0 || watch.autoPaid > 0 || watch.needsLook > 0) {
         console.log(
           `[mailWorker ${stamp()}] quotations — ${watch.repliedNow} newly replied, ` +
-            `${watch.autoPaid} auto-marked paid, ${watch.needsLook} need a look ` +
-            `(of ${watch.checked} awaiting)`,
+            `${watch.autoPaid} auto-marked paid, ${watch.needsLook} need a look, ` +
+            `${watch.screenshotsRead} screenshot(s) read (of ${watch.checked} awaiting)`,
         );
       }
     } catch (error) {
