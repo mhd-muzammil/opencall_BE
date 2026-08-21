@@ -53,6 +53,15 @@ export interface Quotation {
   paidAt: string | null;
   paidBy: string;
   paymentNote: string;
+  /** 'MANUAL' | 'AUTO' — a person's call, or one a rule inferred from a reply. */
+  paymentSource: string;
+  /** The reply that earned the status, so the badge can say why and the undo is informed. */
+  paymentEvidenceEmailId: string | null;
+  /** Any reply at all, payment-shaped or not. Null while the customer has said nothing. */
+  replySeenAt: string | null;
+  /** 'NONE' | 'WEAK' | 'STRONG' — WEAK still needs a person to look. */
+  paymentSignal: string;
+  paymentSignalReasons: string;
   /** Every priced row, in entry order. Never empty — a pre-053 quotation has exactly one. */
   lineItems: QuotationLineItem[];
 }
@@ -100,6 +109,11 @@ interface QuotationDbRow {
   paid_at: string | null;
   paid_by: string | null;
   payment_note: string | null;
+  payment_source: string | null;
+  payment_evidence_email_id: string | null;
+  reply_seen_at: string | null;
+  payment_signal: string | null;
+  payment_signal_reasons: string | null;
   quotation_no: string;
   quotation_date: string;
   case_id: string;
@@ -219,6 +233,11 @@ function mapQuotation(r: QuotationDbRow): Quotation {
     paidAt: r.paid_at,
     paidBy: r.paid_by ?? "",
     paymentNote: r.payment_note ?? "",
+    paymentSource: r.payment_source ?? "MANUAL",
+    paymentEvidenceEmailId: r.payment_evidence_email_id,
+    replySeenAt: r.reply_seen_at,
+    paymentSignal: r.payment_signal ?? "NONE",
+    paymentSignalReasons: r.payment_signal_reasons ?? "",
     // Filled by attachLineItems; never left empty by the time a caller sees it.
     lineItems: [],
   };
@@ -233,7 +252,9 @@ const QUOTATION_COLUMNS = `
   updated_at::TEXT AS updated_at, updated_by,
   sent_at::TEXT AS sent_at, sent_to, sent_by,
   send_count, last_sent_at::TEXT AS last_sent_at,
-  payment_status, paid_at::TEXT AS paid_at, paid_by, payment_note
+  payment_status, paid_at::TEXT AS paid_at, paid_by, payment_note,
+  payment_source, payment_evidence_email_id::TEXT AS payment_evidence_email_id,
+  reply_seen_at::TEXT AS reply_seen_at, payment_signal, payment_signal_reasons
 `;
 
 /** Indian financial year label for a date, e.g. 2026-05-04 → "26-27". */
@@ -512,7 +533,10 @@ export async function setQuotationPayment(input: {
         SET payment_status = $2,
             payment_note = $3,
             paid_at = CASE WHEN $2 = 'PAID' THEN COALESCE(paid_at, NOW()) ELSE NULL END,
-            paid_by = CASE WHEN $2 = 'PAID' THEN $4 ELSE NULL END
+            paid_by = CASE WHEN $2 = 'PAID' THEN $4 ELSE NULL END,
+            -- Set by hand from here on. Someone has looked, so the badge must stop
+            -- claiming a machine decided it and the watcher must not re-decide.
+            payment_source = 'MANUAL' 
       WHERE id = $1
       RETURNING ${QUOTATION_COLUMNS}`,
     [input.id, input.status, input.note, paid ? input.actor : null],

@@ -69,6 +69,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyInboundEmailMatchIndexesPlainMigration", // 059 rebuilds 058 plainly — the concurrent build never finished
   "applyQuotationEditAuditMigration", // 060 who last edited a quotation, and when
   "applyQuotationDeliveryMigration", // 061 quotation send + payment tracking
+  "applyQuotationPaymentWatchMigration", // 062 what the reply said, and who acted on it
 ];
 
 /**

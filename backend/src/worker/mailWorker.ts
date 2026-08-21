@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { closeDatabasePool } from "../config/database.js";
 import { pollAllMailboxes } from "../services/inboundEmail/inboundEmailService.js";
+import { runQuotationPaymentWatch } from "../services/quotations/quotationPaymentWatch.js";
 
 /**
  * Customer email ingest worker — Stage 1: READ ONLY.
@@ -55,6 +56,23 @@ async function sweep(): Promise<void> {
       console.log(`[mailWorker ${stamp()}] no mailboxes configured (set MAIL_* in .env)`);
       return;
     }
+    // Straight after the sweep, on the mail it has just stored: a customer who answers a
+    // quotation should show as having answered without anyone opening the inbox. Wrapped
+    // separately because this is downstream of the ingest — if it fails, the mail is still
+    // in and the next sweep tries again, and it must not make the sweep look failed.
+    try {
+      const watch = await runQuotationPaymentWatch();
+      if (watch.repliedNow > 0 || watch.autoPaid > 0 || watch.needsLook > 0) {
+        console.log(
+          `[mailWorker ${stamp()}] quotations — ${watch.repliedNow} newly replied, ` +
+            `${watch.autoPaid} auto-marked paid, ${watch.needsLook} need a look ` +
+            `(of ${watch.checked} awaiting)`,
+        );
+      }
+    } catch (error) {
+      console.error(`[mailWorker ${stamp()}] quotation watch failed:`, error);
+    }
+
     // The backlog across every mailbox, so one line answers "is this catching up?".
     const stillPending = results.reduce((total, r) => total + Math.max(0, r.pending - r.stored), 0);
     console.log(
