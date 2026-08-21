@@ -68,6 +68,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyInboundEmailMatchIndexesOrderedMigration", // 058 same indexes carrying id, so ORDER BY id DESC LIMIT 1 is served
   "applyInboundEmailMatchIndexesPlainMigration", // 059 rebuilds 058 plainly — the concurrent build never finished
   "applyQuotationEditAuditMigration", // 060 who last edited a quotation, and when
+  "applyQuotationDeliveryMigration", // 061 quotation send + payment tracking
 ];
 
 /**

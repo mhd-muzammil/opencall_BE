@@ -40,6 +40,13 @@ export interface ComposeRequest {
   cc: string;
   subject: string;
   body: string;
+  /**
+   * A rich version of the same message, when the caller has one — a quotation is a laid-out
+   * document and reads badly as plain text. `body` stays the source of truth for validation
+   * and for the audit copy, and is what a mail client without HTML shows, so this can only
+   * ever change how the same content looks.
+   */
+  bodyHtml?: string;
   inReplyToId: string | null;
   attachments: readonly ComposeAttachment[];
   /** Null when the caller is unrestricted (Super Admin); otherwise their region names. */
@@ -148,6 +155,7 @@ export async function sendComposedEmail(
     ...(check.cc.length > 0 ? { cc: check.cc.join(", ") } : {}),
     subject: request.subject.trim(),
     text: request.body,
+    ...(request.bodyHtml ? { html: request.bodyHtml } : {}),
     ...(inReplyToMessageId
       ? { inReplyTo: inReplyToMessageId, references: inReplyToMessageId }
       : {}),

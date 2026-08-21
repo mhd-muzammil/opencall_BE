@@ -3,6 +3,8 @@ import {
   autofillQuotationController,
   createQuotationController,
   updateQuotationController,
+  sendQuotationController,
+  setQuotationPaymentController,
   getQuotationController,
   listQuotationsController,
 } from "../controllers/quotationController.js";
@@ -21,3 +23,7 @@ quotationRouter.get("/:id", requirePrincipal, getQuotationController);
 quotationRouter.post("/", requirePrincipal, createQuotationController);
 // Correcting a sheet that already exists: same body as create, same running number.
 quotationRouter.put("/:id", requirePrincipal, updateQuotationController);
+// Mail the sheet to the customer through the region mailbox Customer Emails uses.
+quotationRouter.post("/:id/send", requirePrincipal, sendQuotationController);
+// What the customer did about it — a person's call, not something read out of a reply.
+quotationRouter.patch("/:id/payment", requirePrincipal, setQuotationPaymentController);

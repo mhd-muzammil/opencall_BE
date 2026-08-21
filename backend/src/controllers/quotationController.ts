@@ -1,12 +1,21 @@
 import { z } from "zod";
 import type { Request, RequestHandler } from "express";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { badRequest, forbidden, notFound } from "../utils/httpError.js";
+import { badRequest, forbidden, notFound, unprocessableEntity } from "../utils/httpError.js";
+import { findAllowedRegionsForUser } from "../services/rbac/regionAccessService.js";
+import { sendComposedEmail } from "../services/inboundEmail/composeService.js";
+import {
+  quotationMailHtml,
+  quotationMailText,
+  quotationSubject,
+} from "../services/quotations/quotationMailer.js";
 import {
   createQuotation,
   findQuotationById,
   listQuotations,
   updateQuotation,
+  markQuotationSent,
+  setQuotationPayment,
 } from "../repositories/quotationRepository.js";
 import { autofillQuotation } from "../services/quotations/quotationAutofillService.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
@@ -240,5 +249,167 @@ export const updateQuotationController: RequestHandler = asyncHandler(
     });
 
     response.json({ data: quotation });
+  },
+);
+
+/**
+ * Mail the quotation to the customer, through the region mailbox Customer Emails uses.
+ *
+ * Deliberately the same send path as Compose: one place that puts mail on the wire, one
+ * audit row in `outbound_emails`, one copy filed in the mailbox's own Sent folder. A
+ * separate sender here would be a second thing to keep honest.
+ *
+ * The record is stamped only AFTER the mail has gone, so a failed send leaves the quotation
+ * reading "not sent" rather than claiming a delivery that never happened.
+ */
+const sendSchema = z.object({
+  regionCode: z.string().trim().min(1, "Choose which mailbox to send from"),
+  to: z.string().trim().max(300).optional().default(""),
+  note: z.string().trim().max(2000).optional().default(""),
+});
+
+export const sendQuotationController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const actor = requireQuotationAccess(request);
+    const id = String(request.params.id ?? "").trim();
+    if (!id) throw badRequest("Missing quotation id");
+
+    const parsed = sendSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid send request", parsed.error.flatten());
+    }
+
+    const quotation = await findQuotationById(id);
+    if (!quotation) throw notFound("Quotation not found", { id });
+
+    // The address on the quotation unless the sender overrides it — a customer who gave a
+    // different address for billing should not need the sheet edited to be mailed.
+    const to = (parsed.data.to || quotation.customerEmail).trim();
+    if (!to) {
+      throw unprocessableEntity(
+        "This quotation has no customer email. Add one with Edit, or type an address to send to.",
+      );
+    }
+
+    // Region scope is enforced inside the send path itself, against the server's own
+    // mailbox list — the region named here cannot widen what this login may send as.
+    const regions = request.currentUser
+      ? await findAllowedRegionsForUser(request.currentUser)
+      : null;
+    const allowedRegionCodes =
+      regions === null ? null : regions.map((r) => r.name.trim().toUpperCase());
+
+    const note = parsed.data.note.trim();
+    const text = note
+      ? `${note}\n\n${quotationMailText(quotation)}`
+      : quotationMailText(quotation);
+    const html = note
+      ? `<p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;">${note
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\n/g, "<br>")}</p>${quotationMailHtml(quotation)}`
+      : quotationMailHtml(quotation);
+
+    await sendComposedEmail({
+      regionCode: parsed.data.regionCode,
+      to,
+      cc: "",
+      subject: quotationSubject(quotation),
+      body: text,
+      bodyHtml: html,
+      inReplyToId: null,
+      attachments: [],
+      allowedRegionCodes,
+      sentByUserId: request.currentUser?.id ?? "",
+    });
+
+    const sent = await markQuotationSent({ id, sentTo: to, sentBy: actor });
+    if (!sent) throw notFound("Quotation not found", { id });
+
+    recordActivity({
+      eventType: "UPLOAD_CREATED",
+      actorEmailFallback: actor,
+      ...(request.currentUser
+        ? {
+            actor: {
+              id: request.currentUser.id,
+              email: request.currentUser.email,
+              role: request.currentUser.role,
+            },
+            regionId: request.currentUser.regionId ?? null,
+          }
+        : {}),
+      targetType: "quotation",
+      targetId: sent.id,
+      metadata: {
+        kind: "QUOTATION_SENT",
+        quotationNo: sent.quotationNo,
+        to,
+        sendCount: sent.sendCount,
+      },
+      request,
+    });
+
+    response.json({ data: sent });
+  },
+);
+
+/**
+ * Record what the customer did about a quotation.
+ *
+ * A human's call, not something read out of a reply. Customers answer with a screenshot of
+ * a transfer, a part payment, a question or a refusal, and inferring intent from that would
+ * eventually mark an unpaid quotation paid — the one error here that costs money. The reply
+ * is surfaced next to the quotation; the decision is made by the person looking at it.
+ */
+const paymentSchema = z.object({
+  status: z.enum(["PENDING", "PAID", "DECLINED"]),
+  note: z.string().trim().max(2000).optional().default(""),
+});
+
+export const setQuotationPaymentController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const actor = requireQuotationAccess(request);
+    const id = String(request.params.id ?? "").trim();
+    if (!id) throw badRequest("Missing quotation id");
+
+    const parsed = paymentSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid payment update", parsed.error.flatten());
+    }
+
+    const updated = await setQuotationPayment({
+      id,
+      status: parsed.data.status,
+      note: parsed.data.note,
+      actor,
+    });
+    if (!updated) throw notFound("Quotation not found", { id });
+
+    recordActivity({
+      eventType: "UPLOAD_CREATED",
+      actorEmailFallback: actor,
+      ...(request.currentUser
+        ? {
+            actor: {
+              id: request.currentUser.id,
+              email: request.currentUser.email,
+              role: request.currentUser.role,
+            },
+            regionId: request.currentUser.regionId ?? null,
+          }
+        : {}),
+      targetType: "quotation",
+      targetId: updated.id,
+      metadata: {
+        kind: "QUOTATION_PAYMENT",
+        quotationNo: updated.quotationNo,
+        status: updated.paymentStatus,
+      },
+      request,
+    });
+
+    response.json({ data: updated });
   },
 );

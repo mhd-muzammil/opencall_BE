@@ -41,6 +41,18 @@ export interface Quotation {
   /** Null until someone corrects the sheet — an unedited quotation has no edit to report. */
   updatedAt: string | null;
   updatedBy: string;
+  /** Null until the quotation has been mailed from here. Not "sent and undated". */
+  sentAt: string | null;
+  sentTo: string;
+  sentBy: string;
+  /** Every send including follow-ups, so "chased three times" is visible. */
+  sendCount: number;
+  lastSentAt: string | null;
+  /** 'PENDING' | 'PAID' | 'DECLINED' */
+  paymentStatus: string;
+  paidAt: string | null;
+  paidBy: string;
+  paymentNote: string;
   /** Every priced row, in entry order. Never empty — a pre-053 quotation has exactly one. */
   lineItems: QuotationLineItem[];
 }
@@ -79,6 +91,15 @@ interface QuotationDbRow {
   id: string;
   updated_at: string | null;
   updated_by: string | null;
+  sent_at: string | null;
+  sent_to: string | null;
+  sent_by: string | null;
+  send_count: number | string | null;
+  last_sent_at: string | null;
+  payment_status: string | null;
+  paid_at: string | null;
+  paid_by: string | null;
+  payment_note: string | null;
   quotation_no: string;
   quotation_date: string;
   case_id: string;
@@ -189,6 +210,15 @@ function mapQuotation(r: QuotationDbRow): Quotation {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     updatedBy: r.updated_by ?? "",
+    sentAt: r.sent_at,
+    sentTo: r.sent_to ?? "",
+    sentBy: r.sent_by ?? "",
+    sendCount: Number(r.send_count) || 0,
+    lastSentAt: r.last_sent_at,
+    paymentStatus: r.payment_status ?? "PENDING",
+    paidAt: r.paid_at,
+    paidBy: r.paid_by ?? "",
+    paymentNote: r.payment_note ?? "",
     // Filled by attachLineItems; never left empty by the time a caller sees it.
     lineItems: [],
   };
@@ -200,7 +230,10 @@ const QUOTATION_COLUMNS = `
   customer_phone, customer_email, service_description, product_description, model_no,
   serial_no, base_amount::TEXT AS base_amount, sgst_percent::TEXT AS sgst_percent,
   cgst_percent::TEXT AS cgst_percent, created_by, created_at::TEXT AS created_at,
-  updated_at::TEXT AS updated_at, updated_by
+  updated_at::TEXT AS updated_at, updated_by,
+  sent_at::TEXT AS sent_at, sent_to, sent_by,
+  send_count, last_sent_at::TEXT AS last_sent_at,
+  payment_status, paid_at::TEXT AS paid_at, paid_by, payment_note
 `;
 
 /** Indian financial year label for a date, e.g. 2026-05-04 → "26-27". */
@@ -422,6 +455,72 @@ export async function updateQuotation(
   } finally {
     client.release();
   }
+}
+
+/**
+ * Record that a quotation went out.
+ *
+ * Called only after the mail has actually left, so a failed send leaves the quotation
+ * reading "not sent" rather than claiming a delivery that never happened.
+ *
+ * `sent_at` is stamped once and `last_sent_at` every time: the first tells you how long
+ * the customer has had it, which is what "quiet for a week" is measured from, and a
+ * follow-up must not reset that clock or a chased quotation would look brand new.
+ */
+export async function markQuotationSent(input: {
+  id: string;
+  sentTo: string;
+  sentBy: string;
+}): Promise<Quotation | null> {
+  const result = await query<QuotationDbRow>(
+    `UPDATE quotations
+        SET sent_at = COALESCE(sent_at, NOW()),
+            last_sent_at = NOW(),
+            send_count = send_count + 1,
+            sent_to = $2,
+            sent_by = $3
+      WHERE id = $1
+      RETURNING ${QUOTATION_COLUMNS}`,
+    [input.id, input.sentTo, input.sentBy],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const [withItems] = await attachLineItems([mapQuotation(row)]);
+  return withItems ?? null;
+}
+
+/**
+ * Record what the customer did about it.
+ *
+ * Deliberately a human's decision rather than something inferred from a reply. A customer
+ * answers with a screenshot of a transfer, a half-payment, a question, or a refusal, and
+ * reading intent out of that automatically would eventually mark an unpaid quotation paid
+ * — which is the one error that costs money. The reply is surfaced; the call is made here.
+ *
+ * Moving away from PAID clears the payment stamp, so a status set by mistake does not leave
+ * a paid-on date behind claiming otherwise.
+ */
+export async function setQuotationPayment(input: {
+  id: string;
+  status: "PENDING" | "PAID" | "DECLINED";
+  note: string;
+  actor: string;
+}): Promise<Quotation | null> {
+  const paid = input.status === "PAID";
+  const result = await query<QuotationDbRow>(
+    `UPDATE quotations
+        SET payment_status = $2,
+            payment_note = $3,
+            paid_at = CASE WHEN $2 = 'PAID' THEN COALESCE(paid_at, NOW()) ELSE NULL END,
+            paid_by = CASE WHEN $2 = 'PAID' THEN $4 ELSE NULL END
+      WHERE id = $1
+      RETURNING ${QUOTATION_COLUMNS}`,
+    [input.id, input.status, input.note, paid ? input.actor : null],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const [withItems] = await attachLineItems([mapQuotation(row)]);
+  return withItems ?? null;
 }
 
 export interface ListQuotationsResult {
