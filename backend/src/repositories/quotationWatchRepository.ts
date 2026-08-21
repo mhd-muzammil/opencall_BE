@@ -28,6 +28,12 @@ export interface AwaitingQuotation {
    * against it — the amount is the only thing that tells a part payment from a full one.
    */
   expectedTotal: number;
+  /**
+   * Where a reply would come FROM. The address it was sent to when it was sent from here,
+   * falling back to the one on the sheet — for a quotation handed over another way, that
+   * is the only address there is.
+   */
+  customerEmail: string;
   sentAt: string | null;
   sentTo: string;
   replySeenAt: string | null;
@@ -57,12 +63,14 @@ export async function listQuotationsAwaitingReply(): Promise<AwaitingQuotation[]
     sent_at: string | null;
     sent_to: string;
     reply_seen_at: string | null;
+    customer_email: string;
   }>(
     `SELECT id::TEXT, quotation_no, order_number,
             COALESCE(sent_at, quotation_date::timestamptz)::TEXT AS watch_from,
             (base_amount * (1 + (sgst_percent + cgst_percent) / 100))::TEXT AS expected_total,
             sent_at::TEXT AS sent_at,
-            COALESCE(sent_to, '') AS sent_to, reply_seen_at::TEXT AS reply_seen_at
+            COALESCE(sent_to, '') AS sent_to, reply_seen_at::TEXT AS reply_seen_at,
+            LOWER(TRIM(COALESCE(NULLIF(sent_to, ''), customer_email, ''))) AS customer_email
        FROM quotations
       WHERE payment_status = 'PENDING'
         AND TRIM(COALESCE(order_number, '')) <> ''
@@ -74,6 +82,7 @@ export async function listQuotationsAwaitingReply(): Promise<AwaitingQuotation[]
     orderNumber: r.order_number,
     watchFrom: r.watch_from,
     expectedTotal: Number(r.expected_total) || 0,
+    customerEmail: String(r.customer_email ?? ""),
     sentAt: r.sent_at,
     sentTo: r.sent_to,
     replySeenAt: r.reply_seen_at,
@@ -124,6 +133,54 @@ export async function listRepliesForQuotation(input: {
         AND NOT is_auto_reply
       ORDER BY received_at`,
     [input.orderNumber, input.watchFrom],
+  );
+  return result.rows.map((r) => ({
+    id: r.id,
+    fromEmail: String(r.from_email),
+    subject: String(r.subject),
+    bodyText: String(r.body_text),
+    hasAttachments: Boolean(r.has_attachments),
+    receivedAt: r.received_at,
+    isAutoReply: Boolean(r.is_auto_reply),
+  }));
+}
+
+/**
+ * Mail from this customer that the ingest could NOT place against a work order.
+ *
+ * The fallback for a customer who writes "paid" and quotes nothing. Matching on the sender
+ * alone is broader than matching on a WO and correspondingly blunter — it says the right
+ * person wrote, not which job they wrote about — so the caller only uses it when that
+ * customer has exactly one quotation open. With two, "paid" is genuinely ambiguous and
+ * settling either would be a guess.
+ *
+ * Mail that DID resolve to a work order is excluded: that has already been offered to the
+ * quotation for that WO, and letting it in here would settle a different one on the
+ * strength of a payment meant for its neighbour.
+ */
+export async function listUnplacedRepliesFromCustomer(input: {
+  fromEmail: string;
+  watchFrom: string;
+}): Promise<QuotationReply[]> {
+  if (!input.fromEmail.trim()) return [];
+  const result = await query<{
+    id: string;
+    from_email: string;
+    subject: string;
+    body_text: string;
+    has_attachments: boolean;
+    received_at: string;
+    is_auto_reply: boolean;
+  }>(
+    `SELECT id::TEXT, from_email, subject, body_text, has_attachments,
+            received_at::TEXT AS received_at, is_auto_reply
+       FROM inbound_emails
+      WHERE LOWER(TRIM(from_email)) = LOWER(TRIM($1))
+        AND received_at > $2::timestamptz
+        AND NOT is_auto_reply
+        AND TRIM(COALESCE(matched_ticket_id, '')) = ''
+      ORDER BY received_at`,
+    [input.fromEmail, input.watchFrom],
   );
   return result.rows.map((r) => ({
     id: r.id,

@@ -2,6 +2,7 @@ import {
   listQuotationsAwaitingReply,
   listRepliesForQuotation,
   listReplyImages,
+  listUnplacedRepliesFromCustomer,
   recordQuotationReplyState,
 } from "../../repositories/quotationWatchRepository.js";
 import { detectPaymentSignal, type PaymentSignalLevel } from "./paymentSignal.js";
@@ -86,6 +87,18 @@ export async function runQuotationPaymentWatch(): Promise<WatchResult> {
   };
 
   const awaiting = await listQuotationsAwaitingReply();
+
+  // How many open quotations each customer has, counted once for the whole sweep.
+  //
+  // This is what makes the sender-only fallback below safe. A customer with one quotation
+  // open who writes "paid" can only mean that one; a customer with two means one of them
+  // and nothing says which, so settling either would be a coin toss with their money.
+  const openPerCustomer = new Map<string, number>();
+  for (const q of awaiting) {
+    if (!q.customerEmail) continue;
+    openPerCustomer.set(q.customerEmail, (openPerCustomer.get(q.customerEmail) ?? 0) + 1);
+  }
+
   for (const quotation of awaiting) {
     result.checked += 1;
 
@@ -103,6 +116,26 @@ export async function runQuotationPaymentWatch(): Promise<WatchResult> {
       );
       continue;
     }
+    // Nothing quoted the work order. Fall back to the sender — but only when this
+    // customer has a single quotation open, so "paid" cannot be about a different one.
+    if (
+      replies.length === 0 &&
+      quotation.customerEmail &&
+      openPerCustomer.get(quotation.customerEmail) === 1
+    ) {
+      try {
+        replies = await listUnplacedRepliesFromCustomer({
+          fromEmail: quotation.customerEmail,
+          watchFrom: quotation.watchFrom,
+        });
+      } catch (error) {
+        console.error(
+          `[quotationWatch] could not read sender mail for ${quotation.quotationNo}:`,
+          error,
+        );
+      }
+    }
+
     if (replies.length === 0) continue;
 
     let best: { level: PaymentSignalLevel; reasons: string[]; emailId: string } | null = null;
