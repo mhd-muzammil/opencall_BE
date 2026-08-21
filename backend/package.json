@@ -66,6 +66,7 @@
     "migrate:quotation-edit-audit": "tsx src/scripts/applyQuotationEditAuditMigration.ts",
     "migrate:quotation-delivery": "tsx src/scripts/applyQuotationDeliveryMigration.ts",
     "migrate:quotation-payment-watch": "tsx src/scripts/applyQuotationPaymentWatchMigration.ts",
+    "quotations:fetch-verification-mail": "tsx src/scripts/fetchQuotationVerificationMail.ts",
     "migrate:all": "tsx src/scripts/applyAllMigrations.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "fieldez:worker": "tsx src/worker/fieldezSyncWorker.ts",
