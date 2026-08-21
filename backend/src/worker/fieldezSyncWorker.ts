@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
 
@@ -55,6 +55,11 @@ const config = {
   ocUser: str("OPENCALL_USERNAME"),
   ocPass: str("OPENCALL_PASSWORD"),
   regionId: str("OPENCALL_REGION_ID"),
+  // How many cycles may fail back-to-back before the process gives up and exits, so
+  // the container's restart policy hands the work to a brand-new one. Three cycles is
+  // ~45 min at the default interval — long enough to ride out a FieldEZ blip, short
+  // enough that a wedged worker does not quietly lose a whole afternoon.
+  maxConsecutiveFailures: num("FIELDEZ_MAX_CONSECUTIVE_FAILURES", 3),
 };
 
 let isShuttingDown = false;
@@ -567,6 +572,85 @@ function buildJobs(): Job[] {
   return jobs;
 }
 
+// ------------------------------------------------------------------ browser
+//
+// The browser is the one long-lived resource a cycle cannot recreate for itself, and
+// it can die under the worker's feet: a renderer OOMs, the container's memory ceiling
+// kills a child, a hard redeploy leaves the profile locked. The page used to be
+// captured ONCE at startup and handed to every cycle, so a dead browser turned the
+// worker into a silent no-op — awake, logging "cycle failed" every 15 minutes,
+// recovering never and exiting never. The browser has to be re-openable mid-run.
+
+let context: BrowserContext | null = null;
+let page: Page | null = null;
+
+/**
+ * Chromium refuses to open a profile another instance still holds. A container that
+ * was killed rather than stopped (OOM, `docker kill`, a redeploy that does not wait
+ * out the grace period) never gets to release it, so `SingletonLock` survives on the
+ * mounted profile volume pointing at a PID/hostname that no longer exists — and every
+ * later start then fails on a profile nobody is using, crash-looping the worker on
+ * its own warm volume. Clearing the locks is safe precisely because this is the only
+ * process allowed on this profile (see the file header).
+ */
+function clearStaleProfileLocks(): void {
+  for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    try {
+      rmSync(path.join(config.profileDir, name), { force: true });
+    } catch {
+      /* best effort — Chromium may well start anyway */
+    }
+  }
+}
+
+async function openBrowser(): Promise<Page> {
+  clearStaleProfileLocks();
+  const opened = await chromium.launchPersistentContext(config.profileDir, {
+    headless: true,
+    acceptDownloads: true,
+    viewport: { width: 1440, height: 900 },
+    args: [
+      // Docker's default seccomp profile blocks Chromium's namespace sandbox; the
+      // container is the isolation boundary here.
+      "--no-sandbox",
+      // Docker gives /dev/shm 64 MB by default, and a renderer that runs past it
+      // crashes the tab ("Target closed") rather than degrading — the classic way a
+      // headless browser dies after days of uptime. This moves shared memory to /tmp,
+      // where the container's disk is the only ceiling.
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled",
+    ],
+  });
+  context = opened;
+  // A browser that dies on its own must not still look healthy next cycle.
+  opened.on("close", () => {
+    if (context === opened) {
+      context = null;
+      page = null;
+    }
+  });
+  page = opened.pages()[0] ?? (await opened.newPage());
+  log("browser ready");
+  return page;
+}
+
+async function closeBrowser(): Promise<void> {
+  const dying = context;
+  context = null;
+  page = null;
+  await dying?.close().catch(() => {});
+}
+
+/** The live page, relaunching the browser when the last one died. */
+async function ensureBrowser(): Promise<Page> {
+  if (context && page && !page.isClosed()) return page;
+  if (context || page) {
+    log("browser is gone — relaunching…");
+    await closeBrowser();
+  }
+  return openBrowser();
+}
+
 async function main(): Promise<void> {
   if (!config.username || !config.password) {
     throw new Error("Set FIELDEZ_USERNAME and FIELDEZ_PASSWORD.");
@@ -584,13 +668,10 @@ async function main(): Promise<void> {
     log("closure job disabled (FIELDEZ_CLOSURE_REPORT_NAME is blank)");
   }
 
-  const context: BrowserContext = await chromium.launchPersistentContext(config.profileDir, {
-    headless: true,
-    acceptDownloads: true,
-    viewport: { width: 1440, height: 900 },
-    args: ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-  });
-  const page = context.pages()[0] ?? (await context.newPage());
+  // A cycle that fails is ordinary (a FieldEZ blip, a slow API); a run of them is
+  // not. Counting them is what turns a wedged worker into a restart rather than into
+  // hours of silence nobody is watching.
+  let consecutiveFailures = 0;
 
   try {
     while (!isShuttingDown) {
@@ -621,21 +702,37 @@ async function main(): Promise<void> {
           }
         }
 
-        // A failed job may have left a modal open; start every job from a
-        // known-good page, and re-log in if the session lapsed.
-        await ensureReportsPage(page).catch((error: unknown) => {
-          log(`could not reach the reports page: ${error instanceof Error ? error.message : String(error)}`);
-        });
-
         ranThisPass = true;
+        let failed = false;
         try {
-          await job.run(page);
+          // A failed job may have left a modal open — and the browser may not have
+          // survived at all. Start every job from a live browser on a known-good
+          // page, re-logging in if the FieldEZ session lapsed.
+          const live = await ensureBrowser();
+          await ensureReportsPage(live);
+          await job.run(live);
+          consecutiveFailures = 0;
         } catch (error) {
+          failed = true;
           log(`[${job.key}] cycle failed: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
           // Schedule off completion, so a slow cycle never queues up behind itself
           // — and so a job can never be immediately due again inside this loop.
           job.nextRunAt = Date.now() + job.intervalMs;
+        }
+
+        if (failed) {
+          consecutiveFailures += 1;
+          // Past a single blip, assume the browser is part of the problem: a wedged
+          // renderer or a half-dead context survives `goto` and then fails every
+          // cycle after it. Relaunching costs seconds; inheriting a dead one costs
+          // every cycle that follows.
+          await closeBrowser();
+          if (consecutiveFailures >= config.maxConsecutiveFailures) {
+            throw new Error(
+              `${consecutiveFailures} cycles in a row failed — exiting so the container restarts clean`,
+            );
+          }
         }
       }
 
@@ -647,7 +744,7 @@ async function main(): Promise<void> {
       await interruptibleSleep(wait);
     }
   } finally {
-    await context.close().catch(() => {});
+    await closeBrowser();
   }
 }
 
@@ -665,6 +762,11 @@ try {
 } catch (error) {
   console.error("[fieldez] worker crashed", error);
   process.exitCode = 1;
+  // Playwright can leave a handle behind, and a process that sets an exit code but
+  // never actually exits is invisible to the restart policy — the very silence this
+  // guard exists to end. Let the event loop drain, then force it; the timer is
+  // unref'd, so it never delays a clean exit.
+  setTimeout(() => process.exit(1), 5000).unref();
 } finally {
   log("worker stopped");
 }

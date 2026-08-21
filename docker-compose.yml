@@ -128,6 +128,10 @@ services:
       FIELDEZ_REPORT_NAME: ${FIELDEZ_REPORT_NAME:-Flex WIP Report ASP}
       FIELDEZ_FORMAT: ${FIELDEZ_FORMAT:-XLSX}
       FIELDEZ_SYNC_INTERVAL_MS: ${FIELDEZ_SYNC_INTERVAL_MS:-900000}
+      # Consecutive failed cycles the worker tolerates before it exits on purpose and
+      # lets the restart policy give it a clean process. Guards the case where the
+      # browser or the FieldEZ session is wedged in a way no single cycle can undo.
+      FIELDEZ_MAX_CONSECUTIVE_FAILURES: ${FIELDEZ_MAX_CONSECUTIVE_FAILURES:-3}
       # --- Closure report job (second job in the SAME worker process) ---
       # Blank report name ⇒ the job is never scheduled, so leaving these unset keeps
       # the worker behaving exactly as it did before.
