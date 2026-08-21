@@ -18,13 +18,25 @@ export interface AwaitingQuotation {
   id: string;
   quotationNo: string;
   orderNumber: string;
-  sentAt: string;
+  /**
+   * The moment mail starts counting as an answer to this quotation: when it was sent from
+   * here, or failing that when it was raised. See the note on the query below.
+   */
+  watchFrom: string;
+  sentAt: string | null;
   sentTo: string;
   replySeenAt: string | null;
 }
 
 /**
- * Quotations that have gone out and are still waiting.
+ * Quotations still waiting on an answer, sent from here or not.
+ *
+ * NOT sent from here is the normal case for anything raised before sending existed, and for
+ * a quotation handed over on WhatsApp or read out over the phone. Those cannot be re-sent —
+ * the customer already has one — but the customer can still write back saying they have
+ * paid, and there is no reason the watcher should be blind to that. For them the clock
+ * starts at the quotation's own date, which is the earliest moment mail about that work
+ * order could be an answer to it.
  *
  * Only PENDING ones: a quotation already settled — paid, or declined — has nothing left for
  * a reply to change, and re-reading its mail every sweep would mean a later "thanks" could
@@ -35,22 +47,25 @@ export async function listQuotationsAwaitingReply(): Promise<AwaitingQuotation[]
     id: string;
     quotation_no: string;
     order_number: string;
-    sent_at: string;
+    watch_from: string;
+    sent_at: string | null;
     sent_to: string;
     reply_seen_at: string | null;
   }>(
-    `SELECT id::TEXT, quotation_no, order_number, sent_at::TEXT AS sent_at,
+    `SELECT id::TEXT, quotation_no, order_number,
+            COALESCE(sent_at, quotation_date::timestamptz)::TEXT AS watch_from,
+            sent_at::TEXT AS sent_at,
             COALESCE(sent_to, '') AS sent_to, reply_seen_at::TEXT AS reply_seen_at
        FROM quotations
-      WHERE sent_at IS NOT NULL
-        AND payment_status = 'PENDING'
+      WHERE payment_status = 'PENDING'
         AND TRIM(COALESCE(order_number, '')) <> ''
-      ORDER BY sent_at`,
+      ORDER BY COALESCE(sent_at, quotation_date::timestamptz)`,
   );
   return result.rows.map((r) => ({
     id: r.id,
     quotationNo: r.quotation_no,
     orderNumber: r.order_number,
+    watchFrom: r.watch_from,
     sentAt: r.sent_at,
     sentTo: r.sent_to,
     replySeenAt: r.reply_seen_at,
@@ -70,9 +85,10 @@ export interface QuotationReply {
 /**
  * Mail that arrived about this work order AFTER the quotation went out.
  *
- * The `sent_at` bound is what keeps this honest: mail predating the quotation cannot be a
- * reply to it, and without the bound an old "payment done" about a previous job on the same
- * work order would settle a quotation raised this morning.
+ * The time bound is what keeps this honest: mail predating the quotation cannot be an
+ * answer to it, and without the bound an old "payment done" about a previous job on the
+ * same work order would settle a quotation raised this morning. For one sent from here the
+ * bound is the send; for one that never was, it is the date the quotation was raised.
  *
  * Auto-replies are excluded here rather than filtered later. An out-of-office is not the
  * customer speaking, and letting one count as a reply would silence the follow-up for a
@@ -80,7 +96,8 @@ export interface QuotationReply {
  */
 export async function listRepliesForQuotation(input: {
   orderNumber: string;
-  sentAt: string;
+  /** Mail before this cannot be an answer — the send date, or the quotation's own date. */
+  watchFrom: string;
 }): Promise<QuotationReply[]> {
   const result = await query<{
     id: string;
@@ -98,7 +115,7 @@ export async function listRepliesForQuotation(input: {
         AND received_at > $2::timestamptz
         AND NOT is_auto_reply
       ORDER BY received_at`,
-    [input.orderNumber, input.sentAt],
+    [input.orderNumber, input.watchFrom],
   );
   return result.rows.map((r) => ({
     id: r.id,

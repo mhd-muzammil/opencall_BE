@@ -12,6 +12,11 @@ import { detectPaymentSignal, type PaymentSignalLevel } from "./paymentSignal.js
  * replied" and "the quotation is paid" both appear without anyone opening the inbox, which
  * is the whole point: sending is a decision, chasing is not.
  *
+ * Quotations never sent from here are watched too. Those cannot be re-sent — the customer
+ * was given one on WhatsApp, or over the counter, or before sending existed here — but they
+ * can still write back saying they have paid, and verifying that is the only thing left to
+ * do for them.
+ *
  * The strongest reply wins, not the latest. A customer commonly answers twice — a question
  * first, then the transfer — and taking the last message would let a "thanks, received" that
  * arrives after the payment overwrite the mail carrying the reference number, which is the
@@ -38,7 +43,7 @@ export async function runQuotationPaymentWatch(): Promise<WatchResult> {
     try {
       replies = await listRepliesForQuotation({
         orderNumber: quotation.orderNumber,
-        sentAt: quotation.sentAt,
+        watchFrom: quotation.watchFrom,
       });
     } catch (error) {
       // One quotation's lookup failing must not end the sweep for the rest of them.
