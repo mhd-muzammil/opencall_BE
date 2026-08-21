@@ -29,6 +29,29 @@ import { isReadableImage, readImageText } from "./screenshotReader.js";
 
 const RANK: Record<PaymentSignalLevel, number> = { NONE: 0, WEAK: 1, STRONG: 2 };
 
+/**
+ * Is this message the CUSTOMER answering, or somebody else talking about the same job?
+ *
+ * Matching on the work order finds every message about it, and most of them are not the
+ * customer: HP and Flex thread on the same WO all day, and our own mailboxes appear in the
+ * trail. Counting those as "the customer replied" is what put thirty-eight quotations in
+ * front of someone with almost nothing to act on.
+ *
+ * When the quotation carries an address, that address decides — a reply from anywhere else
+ * is somebody else's mail. When it does not, everyone except our own mailboxes and the
+ * partners we thread with is given the benefit of the doubt; there is nothing better to go
+ * on, and the payment rules still have to be satisfied before anything is settled.
+ */
+const NOT_THE_CUSTOMER = /@(renderways\.in|hp\.com|flex\.com|concentrix\.com)$/i;
+
+function isFromCustomer(fromEmail: string, customerEmail: string): boolean {
+  const from = fromEmail.trim().toLowerCase();
+  if (!from) return false;
+  const customer = customerEmail.trim().toLowerCase();
+  if (customer) return from === customer;
+  return !NOT_THE_CUSTOMER.test(from);
+}
+
 export interface WatchResult {
   checked: number;
   repliedNow: number;
@@ -135,6 +158,10 @@ export async function runQuotationPaymentWatch(): Promise<WatchResult> {
         );
       }
     }
+
+    // Only the customer's own messages. The rest are about the same job, not about the
+    // money, and letting them set `reply_seen_at` makes "Replied" mean "this WO has mail".
+    replies = replies.filter((reply) => isFromCustomer(reply.fromEmail, quotation.customerEmail));
 
     if (replies.length === 0) continue;
 
