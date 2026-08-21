@@ -36,6 +36,14 @@ const config = {
   username: str("FIELDEZ_USERNAME"),
   password: str("FIELDEZ_PASSWORD"),
   reportName: str("FIELDEZ_REPORT_NAME", "Flex WIP Report ASP"),
+  // Folder path to walk before looking for a report row, "A>B" for A ▸ B. FieldEZ
+  // reorganised /birt/viewlist into folders on 2026-08-21 and the page now lands on an
+  // empty list, so the reports have to be navigated to. Configurable because the next
+  // reorganisation should cost an env var, not a deploy.
+  reportFolderPath: str("FIELDEZ_REPORT_FOLDER_PATH", "REPORTS>OTB REPORT")
+    .split(">")
+    .map((part) => part.trim())
+    .filter(Boolean),
   format: str("FIELDEZ_FORMAT", "XLSX"),
   profileDir: str("FIELDEZ_PROFILE_DIR", path.resolve(".fieldez-profile")),
   intervalMs: num("FIELDEZ_SYNC_INTERVAL_MS", 15 * 60 * 1000), // 15 min default
@@ -237,8 +245,105 @@ export interface DownloadOptions {
   destBaseName: string;
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function reportRowVisible(page: Page, reportName: string): Promise<boolean> {
+  return page
+    .locator("tr", { hasText: reportName })
+    .first()
+    .isVisible()
+    .catch(() => false);
+}
+
+/** What the list actually shows, so a miss reports evidence instead of a bare timeout. */
+async function visibleRowLabels(page: Page): Promise<string[]> {
+  const rows = await page.locator("table tr").allTextContents().catch(() => []);
+  return rows
+    .map((text) => text.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 25);
+}
+
+/**
+ * Every folder label the tree is showing. Matched by the folder icon rather than by
+ * position or class name: the labels are the one thing FieldEZ is guaranteed to render,
+ * and the icon is what marks an entry as a folder at all.
+ */
+async function folderLabels(page: Page): Promise<string[]> {
+  const icons = page.locator('i[class*="folder" i], span[class*="folder" i]');
+  const count = Math.min(await icons.count().catch(() => 0), 40);
+  const labels: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const text = (await icons.nth(index).locator("xpath=..").innerText().catch(() => ""))
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text && text.length <= 60 && !labels.includes(text)) labels.push(text);
+  }
+  return labels;
+}
+
+/**
+ * Click one folder label; true if the report row appeared as a result.
+ *
+ * The label is matched case-insensitively because these are rendered uppercase and CSS
+ * may be doing that, and every visible match is tried in turn — the sidebar carries a
+ * "Reports" link of its own, and guessing which node is the folder is worse than simply
+ * trying each and checking. A click that navigates off the list is undone.
+ */
+async function tryFolder(page: Page, label: string, reportName: string): Promise<boolean> {
+  const matches = page.getByText(new RegExp(`^\\s*${escapeRegex(label)}\\s*$`, "i"));
+  const count = Math.min(await matches.count().catch(() => 0), 8);
+  for (let index = 0; index < count; index += 1) {
+    const entry = matches.nth(index);
+    if (!(await entry.isVisible().catch(() => false))) continue;
+    await entry.click({ timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(1200);
+    if (!/birt\/viewlist/i.test(page.url())) {
+      await ensureReportsPage(page).catch(() => {});
+      continue;
+    }
+    if (await reportRowVisible(page, reportName)) return true;
+  }
+  return false;
+}
+
+/**
+ * Bring the report's row on screen. Until 2026-08-21 the list arrived flat and this was
+ * a no-op; that day FieldEZ moved the reports into folders (REPORTS ▸ OTB REPORT) and
+ * the landing view became an empty list, which stopped both jobs dead at 12:17 IST.
+ *
+ * The configured path is tried first, then every folder the tree offers — so a report
+ * that moves again is found anyway, and the log says where it ended up.
+ */
+async function revealReport(page: Page, reportName: string): Promise<void> {
+  if (await reportRowVisible(page, reportName)) return;
+
+  const tried: string[] = [];
+  for (const label of config.reportFolderPath) {
+    tried.push(label);
+    if (await tryFolder(page, label, reportName)) return;
+  }
+
+  for (const label of await folderLabels(page)) {
+    if (tried.some((seen) => seen.toLowerCase() === label.toLowerCase())) continue;
+    tried.push(label);
+    if (await tryFolder(page, label, reportName)) {
+      log(`found "${reportName}" under "${label}" — set FIELDEZ_REPORT_FOLDER_PATH to match`);
+      return;
+    }
+  }
+
+  throw new Error(
+    `"${reportName}" is not on the reports list. Folders tried: ${tried.join(", ") || "none"}. ` +
+      `Rows on screen: ${(await visibleRowLabels(page)).join(" | ") || "(none)"}`,
+  );
+}
+
 /** Download one report; returns the saved file path. */
 async function downloadReport(page: Page, options: DownloadOptions): Promise<string> {
+  await revealReport(page, options.reportName);
   const row = page.locator("tr", { hasText: options.reportName }).first();
   await row.waitFor({ state: "visible", timeout: 30000 });
   await row.locator("i.fa-download").first().click({ timeout: 10000 });
