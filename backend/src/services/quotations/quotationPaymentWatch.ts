@@ -1,4 +1,5 @@
 import {
+  clearQuotationReplyState,
   listQuotationsAwaitingReply,
   listRepliesForQuotation,
   listReplyImages,
@@ -59,6 +60,8 @@ export interface WatchResult {
   needsLook: number;
   /** Screenshots actually read, so the log says whether OCR is doing anything at all. */
   screenshotsRead: number;
+  /** Flags taken back off, so a tightened rule is visibly correcting itself. */
+  unflagged: number;
 }
 
 /**
@@ -107,6 +110,7 @@ export async function runQuotationPaymentWatch(): Promise<WatchResult> {
     autoPaid: 0,
     needsLook: 0,
     screenshotsRead: 0,
+    unflagged: 0,
   };
 
   const awaiting = await listQuotationsAwaitingReply();
@@ -163,7 +167,23 @@ export async function runQuotationPaymentWatch(): Promise<WatchResult> {
     // money, and letting them set `reply_seen_at` makes "Replied" mean "this WO has mail".
     replies = replies.filter((reply) => isFromCustomer(reply.fromEmail, quotation.customerEmail));
 
-    if (replies.length === 0) continue;
+    if (replies.length === 0) {
+      // Flagged before, nothing behind it now — the rule for what counts as the customer
+      // answering tightened, and a quotation that no longer qualifies must lose the flag
+      // rather than keep it for ever. Without this the watcher could only ever add.
+      if (quotation.replySeenAt) {
+        try {
+          await clearQuotationReplyState(quotation.id);
+          result.unflagged += 1;
+        } catch (error) {
+          console.error(
+            `[quotationWatch] could not clear the reply flag on ${quotation.quotationNo}:`,
+            error,
+          );
+        }
+      }
+      continue;
+    }
 
     let best: { level: PaymentSignalLevel; reasons: string[]; emailId: string } | null = null;
     for (const reply of replies) {

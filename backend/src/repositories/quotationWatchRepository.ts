@@ -259,6 +259,33 @@ export async function listReplyImages(inboundEmailId: string): Promise<ReplyImag
 }
 
 /**
+ * Un-record a reply that turns out not to be one.
+ *
+ * The watcher can change its mind, and it has to be able to. When the rule for "the
+ * customer answered" tightened — mail from the customer's own address, rather than any mail
+ * quoting the work order — every quotation flagged under the old rule kept its flag, because
+ * a sweep that finds nothing simply moves on. Thirty-nine read as replied when a handful
+ * had been.
+ *
+ * So a quotation with a flag and nothing behind it any more has the flag taken off. The
+ * payment status is deliberately NOT touched: a settled quotation is out of this sweep
+ * entirely, and a status somebody set by hand is theirs.
+ */
+export async function clearQuotationReplyState(id: string): Promise<void> {
+  await query(
+    `UPDATE quotations
+        SET reply_seen_at = NULL,
+            payment_signal = 'NONE',
+            payment_signal_reasons = '',
+            payment_evidence_email_id = NULL
+      WHERE id = $1
+        AND payment_status = 'PENDING'
+        AND reply_seen_at IS NOT NULL`,
+    [id],
+  );
+}
+
+/**
  * Record what the sweep made of a quotation's replies.
  *
  * `markPaid` is the only branch that changes the quotation's status, and it is written as a
