@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { detectPaymentSignal } from "./paymentSignal.js";
 
-const read = (body: string, hasAttachments = false) =>
-  detectPaymentSignal({ subject: "", body, hasAttachments });
+const read = (body: string, hasImage = false) =>
+  detectPaymentSignal({ subject: "", body, hasImage });
 
 /**
  * These decide whether a quotation is marked paid with nobody looking, so the cases that
@@ -32,7 +32,7 @@ describe("detectPaymentSignal", () => {
       expect(read("Payment done").level).toBe("WEAK");
     });
 
-    it("flags a screenshot that says nothing", () => {
+    it("flags a picture that says nothing", () => {
       expect(read("Please check", true).level).toBe("WEAK");
     });
 
@@ -67,6 +67,13 @@ describe("detectPaymentSignal", () => {
       expect(read("Payment failed, UTR AXIS0012938471", true).level).toBe("NONE");
     });
 
+    it("ignores an HP report thread carrying a spreadsheet", () => {
+      // The bug this replaced: any attachment counted, so every Flex report mail with an
+      // Excel on it was flagged as a possible receipt — fifty-six in one sweep, almost
+      // none about money. Only a PICTURE counts now, and a document is not one.
+      expect(read("Please find the attached updated WIP report as on today", false).level).toBe("NONE");
+    });
+
     it("ignores a mention of UPI with no payment at all", () => {
       expect(read("Do you accept UPI?").level).toBe("NONE");
     });
@@ -88,7 +95,7 @@ describe("detectPaymentSignal", () => {
     const signal = detectPaymentSignal({
       subject: "Payment done - WO-035408009",
       body: "UTR AXIS0012938471",
-      hasAttachments: false,
+      hasImage: false,
     });
     expect(signal.level).toBe("STRONG");
   });

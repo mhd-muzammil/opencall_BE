@@ -94,10 +94,28 @@ export interface QuotationReply {
   fromEmail: string;
   subject: string;
   bodyText: string;
-  hasAttachments: boolean;
+  /**
+   * A PICTURE is attached, not merely a file.
+   *
+   * `inbound_emails.has_attachments` cannot answer this: HP and Flex attach an Excel or a
+   * PDF to every report thread, and treating those as possible receipts flagged fifty-six
+   * quotations in a single sweep, almost none of them about money. A flag that fires on
+   * everything is the same as no flag.
+   *
+   * Inline images are excluded for the same reason — a signature logo is not a receipt.
+   */
+  hasImage: boolean;
   receivedAt: string;
   isAutoReply: boolean;
 }
+
+/** The `hasImage` test, written once because three queries select it. */
+const HAS_IMAGE_SQL = `EXISTS (
+        SELECT 1 FROM inbound_email_attachments a
+         WHERE a.inbound_email_id = inbound_emails.id
+           AND NOT a.is_inline
+           AND a.mime_type ILIKE 'image/%'
+      ) AS has_image`;
 
 /**
  * Mail that arrived about this work order AFTER the quotation went out.
@@ -121,11 +139,12 @@ export async function listRepliesForQuotation(input: {
     from_email: string;
     subject: string;
     body_text: string;
-    has_attachments: boolean;
+    has_image: boolean;
     received_at: string;
     is_auto_reply: boolean;
   }>(
-    `SELECT id::TEXT, from_email, subject, body_text, has_attachments,
+    `SELECT id::TEXT, from_email, subject, body_text,
+            ${HAS_IMAGE_SQL},
             received_at::TEXT AS received_at, is_auto_reply
        FROM inbound_emails
       WHERE UPPER(TRIM(matched_ticket_id)) = UPPER(TRIM($1))
@@ -139,7 +158,7 @@ export async function listRepliesForQuotation(input: {
     fromEmail: String(r.from_email),
     subject: String(r.subject),
     bodyText: String(r.body_text),
-    hasAttachments: Boolean(r.has_attachments),
+    hasImage: Boolean(r.has_image),
     receivedAt: r.received_at,
     isAutoReply: Boolean(r.is_auto_reply),
   }));
@@ -168,11 +187,12 @@ export async function listUnplacedRepliesFromCustomer(input: {
     from_email: string;
     subject: string;
     body_text: string;
-    has_attachments: boolean;
+    has_image: boolean;
     received_at: string;
     is_auto_reply: boolean;
   }>(
-    `SELECT id::TEXT, from_email, subject, body_text, has_attachments,
+    `SELECT id::TEXT, from_email, subject, body_text,
+            ${HAS_IMAGE_SQL},
             received_at::TEXT AS received_at, is_auto_reply
        FROM inbound_emails
       WHERE LOWER(TRIM(from_email)) = LOWER(TRIM($1))
@@ -187,7 +207,7 @@ export async function listUnplacedRepliesFromCustomer(input: {
     fromEmail: String(r.from_email),
     subject: String(r.subject),
     bodyText: String(r.body_text),
-    hasAttachments: Boolean(r.has_attachments),
+    hasImage: Boolean(r.has_image),
     receivedAt: r.received_at,
     isAutoReply: Boolean(r.is_auto_reply),
   }));

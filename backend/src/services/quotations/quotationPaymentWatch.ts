@@ -143,7 +143,7 @@ export async function runQuotationPaymentWatch(): Promise<WatchResult> {
       const signal = detectPaymentSignal({
         subject: reply.subject,
         body: reply.bodyText,
-        hasAttachments: reply.hasAttachments,
+        hasImage: reply.hasImage,
       });
       if (!best || RANK[signal.level] > RANK[best.level]) {
         best = { level: signal.level, reasons: signal.reasons, emailId: reply.id };
@@ -155,8 +155,8 @@ export async function runQuotationPaymentWatch(): Promise<WatchResult> {
     // the case the OCR exists for, and the only one it is reached in.
     let screenshotNote = "";
     if (best.level !== "STRONG") {
-      const withImage = replies.find((reply) => reply.id === best!.emailId && reply.hasAttachments)
-        ?? replies.find((reply) => reply.hasAttachments);
+      const withImage = replies.find((reply) => reply.id === best!.emailId && reply.hasImage)
+        ?? replies.find((reply) => reply.hasImage);
       if (withImage) {
         const { read, payment } = await readScreenshots({
           emailId: withImage.id,

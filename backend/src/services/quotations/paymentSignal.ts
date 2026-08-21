@@ -67,8 +67,15 @@ const NEGATIONS: readonly RegExp[] = [
 export function detectPaymentSignal(input: {
   subject: string;
   body: string;
-  /** A screenshot of a transfer is the commonest proof customers send. */
-  hasAttachments: boolean;
+  /**
+   * An IMAGE attachment, not any attachment.
+   *
+   * The distinction is the whole difference between a useful flag and a useless one. A
+   * payment screenshot is a picture; the Excel and PDF that HP and Flex attach to every
+   * report mail are not, and counting those flagged fifty-six quotations in one sweep —
+   * almost none of them about money — which is the same as flagging nothing.
+   */
+  hasImage: boolean;
 }): PaymentSignal {
   const text = `${input.subject ?? ""}\n${input.body ?? ""}`;
   if (!text.trim()) return { level: "NONE", reasons: [] };
@@ -90,23 +97,23 @@ export function detectPaymentSignal(input: {
   const mentionsRail = RAIL_WORDS.test(text);
   if (mentionsRail) reasons.push("names a payment method");
 
-  if (input.hasAttachments) reasons.push("attached a file, likely a payment screenshot");
+  if (input.hasImage) reasons.push("attached a picture, likely a payment screenshot");
 
   // Strong needs the claim AND something behind it. A bare "payment done" is the easiest
   // thing in the world to send while a transfer is still queued, or to say about a
   // different invoice entirely.
-  if (claimsPaid && (hasReference || input.hasAttachments)) {
+  if (claimsPaid && (hasReference || input.hasImage)) {
     return { level: "STRONG", reasons };
   }
 
   // Everything else payment-shaped is worth a human's eye and nothing more: a claim with
   // no proof, or proof with no claim.
   //
-  // A bare attachment counts, because of where this runs. These are replies to a quotation
-  // WE sent asking to be paid, and the commonest thing a customer attaches to one is a
-  // screenshot of the transfer. WEAK costs a glance and nothing else, so the cheap answer
-  // is to surface it; the expensive answer would be marking it paid, which needs the claim.
-  if (claimsPaid || hasReference || input.hasAttachments) {
+  // A bare picture counts, because of where this runs. These are replies about a quotation
+  // asking to be paid, and the commonest thing a customer sends is a screenshot of the
+  // transfer with no words at all. WEAK costs a glance and nothing else. A document does
+  // NOT count: a report attached to an HP thread says nothing about payment.
+  if (claimsPaid || hasReference || input.hasImage) {
     return { level: "WEAK", reasons };
   }
 
