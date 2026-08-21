@@ -50,4 +50,15 @@ USER opencall
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:4000/api/v1/health/runtime').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "dist/server.js"]
+# Migrations run before the server, not as a step somebody has to remember afterwards.
+# Every "a page 500s while /health says ready" outage this system has had came from code
+# shipping ahead of its schema.
+#
+# `&&` is the safety: a non-zero exit from the migration step means the server is never
+# reached, the container never becomes healthy, the deploy goes red, and the container
+# already serving carries on. Starting on a half-applied schema would be the worse
+# outcome — it is the silent drift this exists to prevent.
+#
+# The step is a no-op unless RUN_MIGRATIONS_ON_START is "true", so it can be switched off
+# from the environment in seconds if it ever misbehaves.
+CMD ["sh", "-c", "node dist/scripts/migrateOnStart.js && node dist/server.js"]
