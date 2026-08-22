@@ -70,6 +70,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyQuotationEditAuditMigration", // 060 who last edited a quotation, and when
   "applyQuotationDeliveryMigration", // 061 quotation send + payment tracking
   "applyQuotationPaymentWatchMigration", // 062 what the reply said, and who acted on it
+  "applyQuotationSendVerificationMigration", // 063 when the Sent folder was last asked
 ];
 
 /**

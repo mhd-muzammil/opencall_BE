@@ -2,6 +2,7 @@ import "dotenv/config";
 import { closeDatabasePool } from "../config/database.js";
 import { pollAllMailboxes } from "../services/inboundEmail/inboundEmailService.js";
 import { runQuotationPaymentWatch } from "../services/quotations/quotationPaymentWatch.js";
+import { runQuotationSendVerification } from "../services/quotations/quotationSendVerifier.js";
 
 /**
  * Customer email ingest worker — Stage 1: READ ONLY.
@@ -56,6 +57,22 @@ async function sweep(): Promise<void> {
       console.log(`[mailWorker ${stamp()}] no mailboxes configured (set MAIL_* in .env)`);
       return;
     }
+    // A few of the quotations that carry no send, asked of the mailbox's own Sent folder.
+    // Before the payment watch, because it can turn one into a sent quotation and the watch
+    // reads that. Its own try/catch: a mailbox that will not open must not stop the reply
+    // reading, which needs no mailbox at all.
+    try {
+      const verified = await runQuotationSendVerification();
+      if (verified.checked > 0) {
+        console.log(
+          `[mailWorker ${stamp()}] quotation sends — checked ${verified.checked}, ` +
+            `${verified.foundSent} found in a Sent folder`,
+        );
+      }
+    } catch (error) {
+      console.error(`[mailWorker ${stamp()}] send verification failed:`, error);
+    }
+
     // Straight after the sweep, on the mail it has just stored: a customer who answers a
     // quotation should show as having answered without anyone opening the inbox. Wrapped
     // separately because this is downstream of the ingest — if it fails, the mail is still

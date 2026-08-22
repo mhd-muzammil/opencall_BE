@@ -258,6 +258,99 @@ export async function listReplyImages(inboundEmailId: string): Promise<ReplyImag
   }));
 }
 
+export interface QuotationSendCheck {
+  id: string;
+  quotationNo: string;
+  orderNumber: string;
+  customerEmail: string;
+  /** Nothing before this can be the mail that sent it. */
+  raisedAt: string;
+}
+
+/**
+ * Quotations to ask the Sent folder about.
+ *
+ * A quotation with no send recorded was either never mailed or was mailed before OpenCall
+ * could record it, and only the mailbox knows which. That answer costs an IMAP search per
+ * quotation per mailbox, so it cannot be asked for all of them on every sweep.
+ *
+ * Never-asked first, then longest-unasked. A handful per sweep means a hundred quotations
+ * settle themselves over an hour rather than the mail server being searched to death every
+ * three minutes for ever.
+ */
+export async function listQuotationsNeedingSendCheck(input: {
+  limit: number;
+  recheckAfterHours: number;
+}): Promise<QuotationSendCheck[]> {
+  const result = await query<{
+    id: string;
+    quotation_no: string;
+    order_number: string;
+    customer_email: string;
+    raised_at: string;
+  }>(
+    `SELECT id::TEXT, quotation_no,
+            COALESCE(order_number, '') AS order_number,
+            LOWER(TRIM(COALESCE(customer_email, ''))) AS customer_email,
+            quotation_date::timestamptz::TEXT AS raised_at
+       FROM quotations
+      WHERE sent_at IS NULL
+        AND payment_status = 'PENDING'
+        AND (
+          sent_checked_at IS NULL
+          OR sent_checked_at < NOW() - make_interval(hours => $2)
+        )
+      ORDER BY sent_checked_at NULLS FIRST, quotation_date
+      LIMIT $1`,
+    [input.limit, input.recheckAfterHours],
+  );
+  return result.rows
+    .map((r) => ({
+      id: r.id,
+      quotationNo: r.quotation_no,
+      orderNumber: r.order_number.trim(),
+      customerEmail: r.customer_email.trim(),
+      raisedAt: r.raised_at,
+    }))
+    .filter((q) => q.orderNumber || q.customerEmail);
+}
+
+/**
+ * Record that the Sent folder was asked, and what it said.
+ *
+ * `sentAt` present means the mail was found — the quotation did go out, on that date, and
+ * Sent now means it with evidence behind it. Absent means asked and not found, which is
+ * still worth writing down: it is what stops the same question being asked every sweep.
+ *
+ * Only rows still carrying no send, so a quotation mailed from OpenCall in the meantime
+ * keeps its own real timestamp.
+ */
+export async function recordQuotationSendCheck(input: {
+  id: string;
+  sentAt: string | null;
+  sentTo: string;
+}): Promise<void> {
+  if (input.sentAt) {
+    await query(
+      `UPDATE quotations
+          SET sent_at = $2::timestamptz,
+              last_sent_at = $2::timestamptz,
+              send_count = GREATEST(send_count, 1),
+              sent_to = COALESCE(NULLIF(sent_to, ''), NULLIF($3, ''), customer_email, ''),
+              sent_by = 'verified from the Sent folder',
+              sent_checked_at = NOW()
+        WHERE id = $1
+          AND sent_at IS NULL`,
+      [input.id, input.sentAt, input.sentTo],
+    );
+    return;
+  }
+  await query(
+    `UPDATE quotations SET sent_checked_at = NOW() WHERE id = $1 AND sent_at IS NULL`,
+    [input.id],
+  );
+}
+
 /**
  * Un-record a reply that turns out not to be one.
  *

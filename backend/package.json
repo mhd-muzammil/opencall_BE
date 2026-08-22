@@ -66,6 +66,7 @@
     "migrate:quotation-edit-audit": "tsx src/scripts/applyQuotationEditAuditMigration.ts",
     "migrate:quotation-delivery": "tsx src/scripts/applyQuotationDeliveryMigration.ts",
     "migrate:quotation-payment-watch": "tsx src/scripts/applyQuotationPaymentWatchMigration.ts",
+    "migrate:quotation-send-verification": "tsx src/scripts/applyQuotationSendVerificationMigration.ts",
     "quotations:fetch-verification-mail": "tsx src/scripts/fetchQuotationVerificationMail.ts",
     "quotations:mark-existing-sent": "tsx src/scripts/markExistingQuotationsSent.ts",
     "quotations:undo-mark-existing-sent": "tsx src/scripts/undoMarkExistingQuotationsSent.ts",
