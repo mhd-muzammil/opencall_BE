@@ -39,11 +39,62 @@ import {
  * SAFE TO RE-RUN. The watermark is not touched, so the normal ingest is unaffected, and
  * storing is guarded by the same message_id conflict — a message already held is a no-op.
  *
- *   node dist/scripts/fetchQuotationVerificationMail.js
+ * ONE MAILBOX AT A TIME, if you name one. Searching is the slow half and it is slow per
+ * mailbox, so a run that has already done four of them should not have to do those four
+ * again to reach the fifth — and the fifth, the one registered most recently, is the one
+ * whose history is missing. Each mailbox also gets a search budget, so one enormous INBOX
+ * can no longer hold up every mailbox behind it.
+ *
+ *   node dist/scripts/fetchQuotationVerificationMail.js            # every mailbox
+ *   node dist/scripts/fetchQuotationVerificationMail.js trade      # only that one
  */
 
 /** Stop a runaway search from pulling half a mailbox. Per mailbox, per run. */
 const MAX_PER_MAILBOX = Number(process.env.VERIFY_FETCH_MAX ?? 400) || 400;
+
+/**
+ * How long the searching may run for ONE mailbox before it settles for what it has.
+ *
+ * A TEXT search asks the server to read the body of every message in the folder, and there
+ * are two searches per open quotation — sixty-odd quotations is over a hundred full passes
+ * of an INBOX. On a mailbox that has been busy for years that is not slow, it is unbounded,
+ * and because nothing prints until every search is done it reads as a hung script.
+ *
+ * Worse, it is unbounded in the wrong place: a run that never reaches the fifth mailbox has
+ * done nothing at all for the fifth mailbox, and the mailbox registered last is exactly the
+ * one whose history is missing. A budget turns "stuck on mailbox three" into "mailbox three
+ * got five minutes and the rest still got their turn".
+ *
+ * What it gives up is stated out loud when it happens — a quiet cut here would read as full
+ * coverage while being anything but.
+ */
+const SEARCH_BUDGET_MS = (Number(process.env.VERIFY_SEARCH_MINUTES ?? 5) || 5) * 60_000;
+
+/** A progress line this often, so a long search cannot be mistaken for a dead one. */
+const PROGRESS_EVERY = 10;
+
+/**
+ * One mailbox, named on the command line.
+ *
+ * Without it every registered mailbox is done in turn, which is right for a first run and
+ * wrong for every run after: when four mailboxes are already done and the fifth is the one
+ * that matters, working through the four again to reach it costs the whole of their search
+ * time for nothing. Region code, address, or just the local part — `trade`, `TRADE` and
+ * `trade@renderways.in` all name the same mailbox.
+ *
+ *   node dist/scripts/fetchQuotationVerificationMail.js trade
+ */
+function namesMailbox(
+  mailbox: { email: string; regionCode: string },
+  filter: string,
+): boolean {
+  if (!filter) return true;
+  const email = mailbox.email.trim().toLowerCase();
+  const localPart = email.split("@")[0] ?? "";
+  return (
+    email === filter || localPart === filter || mailbox.regionCode.trim().toLowerCase() === filter
+  );
+}
 
 interface OpenQuotation {
   quotationNo: string;
@@ -199,7 +250,20 @@ async function run(): Promise<void> {
     return;
   }
 
-  const mailboxes = await listActiveMailboxes();
+  const filter = (process.argv[2] ?? "").trim().toLowerCase();
+  const all = await listActiveMailboxes();
+  const mailboxes = all.filter((mailbox) => namesMailbox(mailbox, filter));
+  if (filter && mailboxes.length === 0) {
+    console.error(
+      `No registered mailbox is called "${process.argv[2]}". The registered ones are:\n` +
+        all.map((m) => `  ${m.regionCode}  ${m.email}`).join("\n"),
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (filter) {
+    console.log(`Only ${mailboxes.map((m) => m.email).join(", ")} — named on the command line.\n`);
+  }
   let storedTotal = 0;
 
   for (const mailbox of mailboxes) {
@@ -236,23 +300,34 @@ async function run(): Promise<void> {
         // fetched once. The value is the work order that found it, so the message can be
         // filed under the one it was searched for rather than the first it mentions.
         const uids = new Map<number, string>();
+        const deadline = Date.now() + SEARCH_BUDGET_MS;
+        let asked = 0;
+        let ranOutOfTime = false;
 
         for (const quotation of quotations) {
+          if (Date.now() > deadline) {
+            ranOutOfTime = true;
+            break;
+          }
           const searches: Array<{ criteria: Record<string, unknown>; wo: string }> = [];
+          // The customer's own mail FIRST. It is a header search, so the server answers it
+          // from what it already has indexed, where TEXT below makes it read every body in
+          // the folder. When the budget runs out mid-mailbox, what has been collected by
+          // then should be the cheap question asked of every quotation rather than the
+          // expensive one asked of the first dozen — and a reply the customer sent is
+          // precisely what the payment watch is waiting for.
+          if (quotation.customerEmail) {
+            searches.push({
+              criteria: { since: quotation.since, from: quotation.customerEmail },
+              wo: "",
+            });
+          }
           // The work order anywhere in the message — subject line, quoted body, forwarded
           // trail. TEXT is the broad one and the one that catches a forward.
           if (quotation.orderNumber) {
             searches.push({
               criteria: { since: quotation.since, text: quotation.orderNumber },
               wo: quotation.orderNumber,
-            });
-          }
-          // And anything the customer themselves sent, for the reply that quotes nothing.
-          // No preferred WO here: the sender says who wrote, not which job.
-          if (quotation.customerEmail) {
-            searches.push({
-              criteria: { since: quotation.since, from: quotation.customerEmail },
-              wo: "",
             });
           }
 
@@ -262,10 +337,15 @@ async function run(): Promise<void> {
               const found = await client.search(criteria, { uid: true });
               for (const uid of Array.isArray(found) ? found : []) {
                 const value = Number(uid);
-                // First writer wins: a WO search is more specific than a sender search, so
-                // it must not be overwritten by a later, vaguer match.
-                if (Number.isInteger(value) && value > 0 && !uids.has(value)) {
-                  uids.set(value, wo);
+                if (Number.isInteger(value) && value > 0) {
+                  // A work order names the job; a sender only names who wrote. So a WO claim
+                  // fills in for a sender's blank, and nothing ever overwrites a WO already
+                  // recorded — the first work order to find a message still keeps it, which
+                  // is what stops a message being filed under a neighbour's job.
+                  const claimed = uids.get(value);
+                  if (claimed === undefined || (claimed === "" && wo !== "")) {
+                    uids.set(value, wo);
+                  }
                 }
                 if (uids.size >= MAX_PER_MAILBOX) break;
               }
@@ -276,6 +356,24 @@ async function run(): Promise<void> {
               );
             }
           }
+
+          asked += 1;
+          if (asked % PROGRESS_EVERY === 0) {
+            console.log(
+              `  ${mailbox.email} — asked about ${asked}/${quotations.length} quotation(s), ` +
+                `${uids.size} message(s) found so far`,
+            );
+          }
+        }
+        if (ranOutOfTime) {
+          // Said out loud. A cut this size passed over in silence would leave the run looking
+          // like it covered everything, and the next person to wonder why a quotation is
+          // still unanswered would have no reason to suspect it was never asked about.
+          console.log(
+            `  ${mailbox.email} — ${SEARCH_BUDGET_MS / 60_000} minute search budget used up after ` +
+              `${asked}/${quotations.length} quotation(s). Fetching what was found; run it again ` +
+              `for the rest.`,
+          );
         }
 
         if (uids.size > 0) {
