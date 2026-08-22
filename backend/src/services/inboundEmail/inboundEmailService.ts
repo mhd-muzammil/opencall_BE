@@ -117,7 +117,13 @@ export interface MailboxConfig {
   email: string;
 }
 
-/** Mailboxes declared in the environment. Chennai/Hosur appear once their keys are set. */
+/**
+ * Mailboxes declared in the environment. Each appears once its key is set.
+ *
+ * TRADE is not a region — it is the trade desk, and it is here because quotations go out
+ * from it. Without it the Sent-folder check cannot find the mail that carried a quotation
+ * to the customer, and the customer's reply lands in a mailbox nothing reads.
+ */
 export function mailboxesFromEnv(): MailboxConfig[] {
   const map: Array<[string, string | undefined]> = [
     ["CHENNAI", process.env.MAIL_CHENNAI],
@@ -125,6 +131,7 @@ export function mailboxesFromEnv(): MailboxConfig[] {
     ["HOSUR", process.env.MAIL_HOSUR],
     ["VELLORE", process.env.MAIL_VELLORE],
     ["KANCHIPURAM", process.env.MAIL_KANCHIPURAM],
+    ["TRADE", process.env.MAIL_TRADE],
   ];
   return map
     .filter((entry): entry is [string, string] => Boolean(entry[1]?.trim()))
