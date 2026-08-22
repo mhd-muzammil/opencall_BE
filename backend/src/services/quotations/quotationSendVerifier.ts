@@ -22,10 +22,12 @@ import { listSentFolders } from "../inboundEmail/sentFolderScanner.js";
  * than an assumption. Found means sent, and the mail's own date is the send date. Not found
  * means the mail is not in any folder this can reach, and Created is the truthful answer.
  *
- * THE CUSTOMER'S ADDRESS IS THE QUESTION. Every quotation is mailed and every one records
- * where it was mailed to, so "did anything go to this customer" is answerable for all of
- * them. The work order is more specific and stays as a second ask, but it only helps when
- * someone typed it into the subject — inside the attached PDF it is beyond any text search.
+ * THE CUSTOMER'S ADDRESS IS THE ONLY QUESTION. Every quotation is mailed and every one
+ * records where it was mailed to, so "did anything go to this customer" is answerable for
+ * all of them. The work order was asked as well and earned nothing: it is findable only when
+ * someone typed it into the subject — inside the attached PDF no text search reaches it — and
+ * when it did match, it matched any mail quoting that job rather than the quotation leaving.
+ * One question, asked of the one field that is always filled in.
  *
  * EVERY SENT FOLDER, not the first one found. A mailbox used from webmail and from Outlook
  * has two: the one the server flags \Sent, and the one Outlook made for itself. Reading only
@@ -73,49 +75,44 @@ async function findSentMail(
   quotation: QuotationSendCheck,
   onSearchError: (detail: string) => void,
 ): Promise<{ date: Date; to: string } | null> {
+  if (!quotation.customerEmail) return null;
   const since = new Date(new Date(quotation.raisedAt).getTime() - CLOCK_SLACK_DAYS * 86_400_000);
 
-  // THE CUSTOMER'S ADDRESS FIRST. Every quotation goes out by mail and every one carries the
-  // address it goes to, so "was anything sent to this customer" is the question that is
-  // actually answerable for all of them. The work order is the more specific reference and
-  // stays as the second ask, but it is only in the subject if whoever typed it put it there —
-  // and when it lives only inside the attached PDF, no text search reaches it.
-  const searches: Array<[string, Record<string, unknown>]> = [];
-  if (quotation.customerEmail) {
-    searches.push([`to ${quotation.customerEmail}`, { since, to: quotation.customerEmail }]);
+  // THE CUSTOMER'S ADDRESS, AND NOTHING ELSE. Every quotation is mailed and every one
+  // records the address it is mailed to, so this one question is answerable for all of them.
+  //
+  // Searching the work order as well was strictly worse in both directions. It found nothing
+  // extra when the reference lives only inside the attached PDF, which is where it usually
+  // lives — and when it did hit, it hit any mail quoting that job, which is not the same
+  // thing as the quotation going out. A second criterion that adds no true answers and can
+  // add false ones is not a fallback, it is a way to be wrong.
+  const label = `to ${quotation.customerEmail}`;
+  let uids: unknown;
+  try {
+    uids = await client.search({ since, to: quotation.customerEmail }, { uid: true });
+  } catch (error) {
+    // Reported, not swallowed. A server rejecting the search used to read as a clean "not
+    // found", which is what a reader also sees when the mail genuinely is not there — and
+    // those two need completely different fixes.
+    onSearchError(`${label} — ${error instanceof Error ? error.message : String(error)}`);
+    return null;
   }
-  if (quotation.orderNumber) {
-    searches.push([`text ${quotation.orderNumber}`, { since, text: quotation.orderNumber }]);
-  }
+  const list = (Array.isArray(uids) ? uids : []).map(Number).filter((n) => n > 0);
+  if (list.length === 0) return null;
 
-  for (const [label, criteria] of searches) {
-    let uids: unknown;
-    try {
-      uids = await client.search(criteria, { uid: true });
-    } catch (error) {
-      // Reported, not swallowed. A server rejecting a criterion used to read as a clean
-      // "not found", which is the same thing a reader sees when the mail genuinely is not
-      // there — and those two need completely different fixes.
-      onSearchError(`${label} — ${error instanceof Error ? error.message : String(error)}`);
-      continue;
+  // The EARLIEST match. A quotation may have been chased more than once, and what is wanted
+  // is when the customer first had it — the same rule the send path follows.
+  const first = Math.min(...list);
+  try {
+    for await (const message of client.fetch([first], { uid: true, envelope: true }, { uid: true })) {
+      const date = message.envelope?.date;
+      const to = message.envelope?.to?.[0]?.address ?? "";
+      if (date) return { date, to };
     }
-    const list = (Array.isArray(uids) ? uids : []).map(Number).filter((n) => n > 0);
-    if (list.length === 0) continue;
-
-    // The EARLIEST match. A quotation may have been chased more than once, and what is
-    // wanted is when the customer first had it — the same rule the send path follows.
-    const first = Math.min(...list);
-    try {
-      for await (const message of client.fetch([first], { uid: true, envelope: true }, { uid: true })) {
-        const date = message.envelope?.date;
-        const to = message.envelope?.to?.[0]?.address ?? "";
-        if (date) return { date, to };
-      }
-    } catch {
-      // Found it but could not read it. Knowing it exists is enough to say it was sent;
-      // the date is the only thing lost, and the quotation's own date stands in.
-      return { date: new Date(quotation.raisedAt), to: quotation.customerEmail };
-    }
+  } catch {
+    // Found it but could not read it. Knowing it exists is enough to say it was sent; the
+    // date is the only thing lost, and the quotation's own date stands in.
+    return { date: new Date(quotation.raisedAt), to: quotation.customerEmail };
   }
   return null;
 }

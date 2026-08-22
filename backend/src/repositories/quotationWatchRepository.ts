@@ -277,6 +277,12 @@ export interface QuotationSendCheck {
  * Never-asked first, then longest-unasked. A handful per sweep means a hundred quotations
  * settle themselves over an hour rather than the mail server being searched to death every
  * three minutes for ever.
+ *
+ * ONLY THOSE WITH A CUSTOMER ADDRESS. That address is the whole of the question the verifier
+ * asks the Sent folder, so a quotation without one has nothing to be asked. Excluded in the
+ * WHERE rather than filtered afterwards: dropped after the LIMIT it would still consume one
+ * of the handful the sweep takes, and take it again on every sweep for ever, so a couple of
+ * quotations with a blank address would quietly starve the rest of the queue.
  */
 export async function listQuotationsNeedingSendCheck(input: {
   limit: number;
@@ -296,6 +302,7 @@ export async function listQuotationsNeedingSendCheck(input: {
        FROM quotations
       WHERE sent_at IS NULL
         AND payment_status = 'PENDING'
+        AND TRIM(COALESCE(customer_email, '')) <> ''
         AND (
           sent_checked_at IS NULL
           OR sent_checked_at < NOW() - make_interval(hours => $2)
@@ -312,7 +319,7 @@ export async function listQuotationsNeedingSendCheck(input: {
       customerEmail: r.customer_email.trim(),
       raisedAt: r.raised_at,
     }))
-    .filter((q) => q.orderNumber || q.customerEmail);
+    .filter((q) => q.customerEmail);
 }
 
 /**
