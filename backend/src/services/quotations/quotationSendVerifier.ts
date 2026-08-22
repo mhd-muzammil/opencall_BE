@@ -6,7 +6,7 @@ import {
 } from "../../repositories/quotationWatchRepository.js";
 import { listActiveMailboxes } from "../../repositories/inboundEmailRepository.js";
 import { mailboxPassword } from "../inboundEmail/mailboxCredentials.js";
-import { resolveSentFolder } from "../inboundEmail/sentFolderArchiver.js";
+import { listSentFolders } from "../inboundEmail/sentFolderScanner.js";
 
 /**
  * Ask the mailbox whether a quotation was ever actually sent.
@@ -18,10 +18,18 @@ import { resolveSentFolder } from "../inboundEmail/sentFolderArchiver.js";
  * were mailed from webmail.
  *
  * The mailbox knows. Webmail files what it sends in the same Sent folder OpenCall does, so
- * searching it for a quotation's work order or its customer's address answers the question
- * with evidence rather than an assumption. Found means sent, and the mail's own date is the
- * send date. Not found means not mailed from here — WhatsApp, the counter, a phone call —
- * and Created is the truthful answer.
+ * searching it for the address a quotation went to answers the question with evidence rather
+ * than an assumption. Found means sent, and the mail's own date is the send date. Not found
+ * means the mail is not in any folder this can reach, and Created is the truthful answer.
+ *
+ * THE CUSTOMER'S ADDRESS IS THE QUESTION. Every quotation is mailed and every one records
+ * where it was mailed to, so "did anything go to this customer" is answerable for all of
+ * them. The work order is more specific and stays as a second ask, but it only helps when
+ * someone typed it into the subject — inside the attached PDF it is beyond any text search.
+ *
+ * EVERY SENT FOLDER, not the first one found. A mailbox used from webmail and from Outlook
+ * has two: the one the server flags \Sent, and the one Outlook made for itself. Reading only
+ * the flagged one leaves everything sent from the other reading as never sent.
  *
  * A FEW AT A TIME. Every check is an IMAP search per mailbox, so a sweep takes a handful
  * and leaves the rest; `sent_checked_at` remembers where it got to. A hundred quotations
@@ -40,33 +48,55 @@ const PER_SWEEP = Number(process.env.QUOTATION_SEND_CHECK_BATCH ?? 8) || 8;
  */
 const RECHECK_AFTER_HOURS = Number(process.env.QUOTATION_SEND_RECHECK_HOURS ?? 24) || 24;
 
+/**
+ * How far before the quotation's own date the search reaches back.
+ *
+ * `quotation_date` is a DATE — midnight — and the mail server files by its own clock in its
+ * own zone, so a quotation raised on the 19th and mailed at nine that morning can carry an
+ * INTERNALDATE of the 18th once the offsets are applied. A search starting exactly at
+ * midnight loses that mail to arithmetic rather than to anything real.
+ *
+ * One day, and no more. The bound is what stops last month's correspondence with the same
+ * customer being read as this quotation going out, so it is widened by the smallest amount
+ * that covers a timezone and not by an amount that covers a different job.
+ */
+const CLOCK_SLACK_DAYS = 1;
+
 export interface SendVerifyResult {
   checked: number;
   foundSent: number;
 }
 
-/** The mail that carried a quotation out, if the Sent folder has one. */
+/** The mail that carried a quotation out, if this Sent folder has one. */
 async function findSentMail(
   client: ImapFlow,
   quotation: QuotationSendCheck,
+  onSearchError: (detail: string) => void,
 ): Promise<{ date: Date; to: string } | null> {
-  // The work order first: it is in the subject of anything about this job, and it is
-  // specific in a way an address is not — a customer with three jobs has three quotations
-  // and one address.
-  const searches: Array<Record<string, unknown>> = [];
-  if (quotation.orderNumber) {
-    searches.push({ since: new Date(quotation.raisedAt), text: quotation.orderNumber });
-  }
+  const since = new Date(new Date(quotation.raisedAt).getTime() - CLOCK_SLACK_DAYS * 86_400_000);
+
+  // THE CUSTOMER'S ADDRESS FIRST. Every quotation goes out by mail and every one carries the
+  // address it goes to, so "was anything sent to this customer" is the question that is
+  // actually answerable for all of them. The work order is the more specific reference and
+  // stays as the second ask, but it is only in the subject if whoever typed it put it there —
+  // and when it lives only inside the attached PDF, no text search reaches it.
+  const searches: Array<[string, Record<string, unknown>]> = [];
   if (quotation.customerEmail) {
-    searches.push({ since: new Date(quotation.raisedAt), to: quotation.customerEmail });
+    searches.push([`to ${quotation.customerEmail}`, { since, to: quotation.customerEmail }]);
+  }
+  if (quotation.orderNumber) {
+    searches.push([`text ${quotation.orderNumber}`, { since, text: quotation.orderNumber }]);
   }
 
-  for (const criteria of searches) {
+  for (const [label, criteria] of searches) {
     let uids: unknown;
     try {
       uids = await client.search(criteria, { uid: true });
-    } catch {
-      // One search failing is not worth ending the check for; the next criterion may work.
+    } catch (error) {
+      // Reported, not swallowed. A server rejecting a criterion used to read as a clean
+      // "not found", which is the same thing a reader sees when the mail genuinely is not
+      // there — and those two need completely different fixes.
+      onSearchError(`${label} — ${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
     const list = (Array.isArray(uids) ? uids : []).map(Number).filter((n) => n > 0);
@@ -133,31 +163,51 @@ export async function runQuotationSendVerification(): Promise<SendVerifyResult> 
 
     try {
       await client.connect();
-      const folder = await resolveSentFolder(client);
-      if (!folder) {
+      // EVERY Sent folder, not the first one found. Webmail files into the folder the server
+      // flags as \Sent and Outlook makes its own alongside it, so a mailbox used from both
+      // has half its history somewhere a single-folder reader never opens — and a quotation
+      // mailed from the other one reads as never sent.
+      const folders = await listSentFolders(client);
+      if (folders.length === 0) {
         console.error(`[sendVerify] no Sent folder on ${mailbox.email}`);
         continue;
       }
-      const lock = await client.getMailboxLock(folder);
-      try {
-        for (const quotation of pending) {
-          if (settled.has(quotation.id)) continue;
-          const found = await findSentMail(client, quotation);
-          if (!found) continue;
-
-          await recordQuotationSendCheck({
-            id: quotation.id,
-            sentAt: found.date.toISOString(),
-            sentTo: found.to,
-          });
-          settled.add(quotation.id);
-          result.foundSent += 1;
-          console.log(
-            `[sendVerify] ${quotation.quotationNo} was sent — found in ${mailbox.email}'s Sent folder, ${found.date.toISOString().slice(0, 10)}`,
+      for (const folder of folders) {
+        if (settled.size === pending.length) break;
+        let lock;
+        try {
+          lock = await client.getMailboxLock(folder);
+        } catch (error) {
+          // One unopenable folder is not a reason to give up on the mailbox; the next one
+          // may hold everything.
+          console.error(
+            `[sendVerify] could not open ${mailbox.email}/${folder}:`,
+            error instanceof Error ? error.message : error,
           );
+          continue;
         }
-      } finally {
-        lock.release();
+        try {
+          for (const quotation of pending) {
+            if (settled.has(quotation.id)) continue;
+            const found = await findSentMail(client, quotation, (detail) =>
+              console.error(`[sendVerify] search failed in ${mailbox.email}/${folder} — ${detail}`),
+            );
+            if (!found) continue;
+
+            await recordQuotationSendCheck({
+              id: quotation.id,
+              sentAt: found.date.toISOString(),
+              sentTo: found.to,
+            });
+            settled.add(quotation.id);
+            result.foundSent += 1;
+            console.log(
+              `[sendVerify] ${quotation.quotationNo} was sent — found in ${mailbox.email}/${folder}, ${found.date.toISOString().slice(0, 10)}`,
+            );
+          }
+        } finally {
+          lock.release();
+        }
       }
     } catch (error) {
       console.error(
