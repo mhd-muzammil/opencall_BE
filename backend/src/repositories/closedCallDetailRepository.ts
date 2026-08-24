@@ -44,6 +44,14 @@ export async function findClosedCallDetailsByReportId(
     return [];
   }
 
+  // A row whose "Ticket ID" column is blank is identified by the shared calculation
+  // as its serial number instead (`String(row.output["Ticket ID"]).trim() ||
+  // String(row.serialNo)`). Matching only on ticket_id therefore drops exactly those
+  // calls — counted, but absent from the list that is supposed to explain the count.
+  // Only purely numeric ids are tried against serial_no, so a real ticket reference
+  // can never be pulled in by a coincidental number.
+  const serialIds = ticketIds.filter((id) => /^\d+$/.test(id));
+
   const result = await query<{
     serial_no: number;
     ticket_id: string | null;
@@ -67,10 +75,16 @@ export async function findClosedCallDetailsByReportId(
       FROM daily_call_plan_report_rows
       WHERE report_id = $1
         AND NOT is_excluded
-        AND ticket_id = ANY($2::text[])
+        AND (
+          ticket_id = ANY($2::text[])
+          OR (
+            coalesce(ticket_id, '') = ''
+            AND serial_no::text = ANY($3::text[])
+          )
+        )
       ORDER BY serial_no ASC, id ASC
     `,
-    [reportId, ticketIds],
+    [reportId, ticketIds, serialIds],
   );
 
   return result.rows.map((row) => ({

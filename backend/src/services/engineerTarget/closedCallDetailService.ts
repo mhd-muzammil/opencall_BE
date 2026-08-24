@@ -57,6 +57,16 @@ export interface ClosedCallDetail extends ClosedCallDetailRow {
   /** ASP/region code the closing engineer worked under that day (e.g. "ASPS01463"). */
   regionCode: string;
   /**
+   * The closing engineer's CANONICAL name — the one every engineer view shows, after
+   * aliases and casing have been resolved ("Lava Kumar" is listed as "Lava").
+   *
+   * `engineer` carries the raw text the report row happened to hold, which for an
+   * aliased engineer is a name that appears nowhere else in the product. A caller
+   * grouping these calls by engineer must use this field, or an aliased engineer's
+   * calls will silently fail to join to their own row.
+   */
+  engineerName: string;
+  /**
    * That code resolved to its human region name (e.g. "VELLORE"), as the shared
    * calculation already resolves it — a reader should never have to decode an ASP
    * code. Falls back to the raw code when the map has no entry for it.
@@ -115,6 +125,11 @@ export async function getClosedCallDetails(input: {
     // applied here — exactly as Engineer Target applies it — so a REGION_ADMIN can only
     // ever drill into calls their own count already included.
     const regionByTicket = new Map<string, { code: string; name: string }>();
+    // The canonical name per ticket, for the same reason the region is carried here:
+    // the report row's own text is raw, and only the calculation knows what it resolves
+    // to. Taking it from `entry` guarantees the drill-down names an engineer exactly as
+    // the count beside it does.
+    const nameByTicket = new Map<string, string>();
     const ticketIds: string[] = [];
     for (const entry of productivity.list) {
       const regionCode = entry.regionCode ?? "";
@@ -130,6 +145,7 @@ export async function getClosedCallDetails(input: {
       const region = { code: regionCode, name: entry.regionName || regionCode };
       for (const ticketId of entry.closedTickets) {
         regionByTicket.set(ticketId, region);
+        nameByTicket.set(ticketId, entry.name);
         ticketIds.push(ticketId);
       }
     }
@@ -140,11 +156,16 @@ export async function getClosedCallDetails(input: {
 
     const details = await findClosedCallDetailsByReportId(day.reportId, ticketIds);
     for (const detail of details) {
-      const region = regionByTicket.get(detail.ticketId);
+      // Resolve by the SAME id the calculation used: its ticket, or its serial number
+      // when the ticket column was blank. Looking up only by ticket would leave a
+      // blank-ticket call with no engineer and no region attached to it.
+      const key = detail.ticketId || String(detail.serialNo);
+      const region = regionByTicket.get(key);
       calls.push({
         ...detail,
         date: day.reportDate,
         regionCode: region?.code ?? "",
+        engineerName: nameByTicket.get(key) || detail.engineer || "",
         // Prefer the resolved name; fall back to whatever the row itself carries so a
         // code with no map entry still shows something rather than an empty cell.
         workLocationName: region?.name || detail.workLocation || "",
