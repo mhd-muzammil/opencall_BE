@@ -54,8 +54,14 @@ function toProductivityRow(row: ProductivityPersistedRow): ProductivityReportRow
 export interface ClosedCallDetail extends ClosedCallDetailRow {
   /** The report date this call was closed on (YYYY-MM-DD). */
   date: string;
-  /** ASP/region code the closing engineer worked under that day. */
+  /** ASP/region code the closing engineer worked under that day (e.g. "ASPS01463"). */
   regionCode: string;
+  /**
+   * That code resolved to its human region name (e.g. "VELLORE"), as the shared
+   * calculation already resolves it — a reader should never have to decode an ASP
+   * code. Falls back to the raw code when the map has no entry for it.
+   */
+  workLocationName: string;
 }
 
 export interface ClosedCallDetailResponse {
@@ -108,7 +114,7 @@ export async function getClosedCallDetails(input: {
     // Which tickets closed on this day, and under whose name/region. Region scoping is
     // applied here — exactly as Engineer Target applies it — so a REGION_ADMIN can only
     // ever drill into calls their own count already included.
-    const regionByTicket = new Map<string, string>();
+    const regionByTicket = new Map<string, { code: string; name: string }>();
     const ticketIds: string[] = [];
     for (const entry of productivity.list) {
       const regionCode = entry.regionCode ?? "";
@@ -118,8 +124,12 @@ export async function getClosedCallDetails(input: {
       if (engineerFilter && entry.name.trim().toLowerCase() !== engineerFilter) {
         continue;
       }
+      // regionName is the ASP code already resolved through ASP_CODE_REGION_MAP by the
+      // shared calculation, so the drill-down shows the same region wording as every
+      // other engineer view instead of a raw ASPS… code.
+      const region = { code: regionCode, name: entry.regionName || regionCode };
       for (const ticketId of entry.closedTickets) {
-        regionByTicket.set(ticketId, regionCode);
+        regionByTicket.set(ticketId, region);
         ticketIds.push(ticketId);
       }
     }
@@ -130,10 +140,14 @@ export async function getClosedCallDetails(input: {
 
     const details = await findClosedCallDetailsByReportId(day.reportId, ticketIds);
     for (const detail of details) {
+      const region = regionByTicket.get(detail.ticketId);
       calls.push({
         ...detail,
         date: day.reportDate,
-        regionCode: regionByTicket.get(detail.ticketId) ?? "",
+        regionCode: region?.code ?? "",
+        // Prefer the resolved name; fall back to whatever the row itself carries so a
+        // code with no map entry still shows something rather than an empty cell.
+        workLocationName: region?.name || detail.workLocation || "",
       });
     }
   }
