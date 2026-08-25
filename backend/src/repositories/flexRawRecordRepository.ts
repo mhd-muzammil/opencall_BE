@@ -153,10 +153,51 @@ export interface FlexRawSummary {
 }
 
 /**
- * Counts the raw records grouped by Work Location and month. Rows whose Work Location is
- * blank or is not an ASP code (the raw export has HP engineer ids and 'FCT CCO' in that
- * column) still contribute to the overall totals, they simply do not land on a region
- * card.
+ * SQL for a `loc` CTE mapping a normalised WO id / Case id key to the Work Location
+ * OpenCall's own report rows recorded against it. Shared by the region summary and the
+ * per-region record list so a card's count and its drill-down can never disagree.
+ *
+ * `flex_raw_records` is deliberately NOT a source here: this CTE exists to answer for
+ * the raw rows that have no Work Location of their own, and the raw export can only
+ * repeat what it already failed to say.
+ */
+function reportRowLocationCteSql(): string {
+  return `SELECT key, MAX(loc) AS loc
+            FROM (
+              SELECT UPPER(TRIM(ticket_id)) AS key, UPPER(TRIM(work_location)) AS loc
+                FROM daily_call_plan_report_rows
+               WHERE COALESCE(TRIM(ticket_id), '') <> ''
+                 AND COALESCE(TRIM(work_location), '') <> ''
+              UNION ALL
+              SELECT UPPER(TRIM(case_id)) AS key, UPPER(TRIM(work_location)) AS loc
+                FROM daily_call_plan_report_rows
+               WHERE COALESCE(TRIM(case_id), '') <> ''
+                 AND COALESCE(TRIM(work_location), '') <> ''
+            ) sources
+           GROUP BY key`;
+}
+
+/**
+ * The ASP code a raw row belongs to. The raw export's own Work Location is authoritative
+ * when it says anything at all; otherwise the region is recovered by tracing the WO id /
+ * Case id back through OpenCall's own report rows.
+ *
+ * This is the same rule, in the same order, that `case_closure_dates` uses for the
+ * "FieldEZ data closure" line — the two lines sit on one card and are read against each
+ * other, so they must agree on what "this region's" means.
+ */
+const RAW_ASP_CODE_SQL = `COALESCE(NULLIF(raw.work_location, ''), by_wo.loc, by_case.loc, '')`;
+
+/**
+ * Counts the raw records grouped by ASP region and month.
+ *
+ * Region comes from `RAW_ASP_CODE_SQL`, not from the Work Location column alone: HP
+ * closes a large share of work orders in its CRM with no ASP on the row (962 of the 1,334
+ * closures in the Jul 2026 bill cycle), and grouping on the bare column left every one of
+ * them in the "All Regions" total but on no region card — the cards summed to a quarter of
+ * their own rollup. Rows that still resolve to nothing (blank, an HP engineer id, 'FCT
+ * CCO') keep their place in the totals under the '' bucket, so "All Regions" still
+ * answers for every closure the raw file reports.
  */
 export async function summarizeFlexRawRecords(
   opts: { dateFrom?: string; dateTo?: string } = {},
@@ -177,23 +218,28 @@ export async function summarizeFlexRawRecords(
     resolved: string;
     open: string;
   }>(
-    `SELECT
-       work_location,
-       source_month,
+    `WITH loc AS (
+       ${reportRowLocationCteSql()}
+     )
+     SELECT
+       ${RAW_ASP_CODE_SQL}                                       AS work_location,
+       raw.source_month,
        COUNT(*)::TEXT                                            AS total,
        COUNT(*) FILTER (WHERE status_group = 'closed')::TEXT     AS closed,
        COUNT(*) FILTER (WHERE status_group = 'cancelled')::TEXT  AS cancelled,
        COUNT(*) FILTER (WHERE status_group = 'resolved')::TEXT   AS resolved,
        COUNT(*) FILTER (WHERE status_group = 'open')::TEXT       AS open
-     FROM flex_raw_records
+     FROM flex_raw_records raw
+     LEFT JOIN loc AS by_wo   ON by_wo.key   = raw.ticket_no AND raw.ticket_no <> ''
+     LEFT JOIN loc AS by_case ON by_case.key = raw.case_id   AND raw.case_id   <> ''
      ${
        dayScoped
-         ? `WHERE closed_on IS NOT NULL
-              AND ($1 = '' OR closed_on >= $1::date)
-              AND ($2 = '' OR closed_on <= $2::date)`
+         ? `WHERE raw.closed_on IS NOT NULL
+              AND ($1 = '' OR raw.closed_on >= $1::date)
+              AND ($2 = '' OR raw.closed_on <= $2::date)`
          : ""
      }
-     GROUP BY work_location, source_month`,
+     GROUP BY 1, 2`,
     dayScoped ? [dateFrom, dateTo] : [],
   );
 
@@ -279,6 +325,11 @@ const RECORD_LIST_LIMIT = 2000;
  * ASP ('' = every ASP), a month range (both '' = every month) and status group ('' = every
  * status). When either month bound is set, rows with a blank month are excluded (they
  * belong to no month range). Capped; `total` is the true count.
+ *
+ * The ASP filter (and the RBAC scope) runs against `RAW_ASP_CODE_SQL`, the same resolved
+ * region the summary groups by — filtering on the bare Work Location column would open a
+ * card of N and list a fraction of it. `workLocation` on each returned row is likewise
+ * the resolved code, so the drill-down shows the region the card put the row under.
  */
 export async function listFlexRawRecords(filter: {
   aspCode: string;
@@ -311,27 +362,33 @@ export async function listFlexRawRecords(filter: {
     closed_on?: string | null;
     total_count: string;
   }>(
-    `SELECT ticket_no, case_id, work_location, call_status, source_month,
-            ${withClosedOn ? "closed_on::text AS closed_on," : ""}
+    `WITH loc AS (
+       ${reportRowLocationCteSql()}
+     )
+     SELECT raw.ticket_no, raw.case_id, ${RAW_ASP_CODE_SQL} AS work_location,
+            raw.call_status, raw.source_month,
+            ${withClosedOn ? "raw.closed_on::text AS closed_on," : ""}
             COUNT(*) OVER()::TEXT AS total_count
-       FROM flex_raw_records
-      WHERE ($1 = '' OR status_group = $1)
-        AND ($2 = '' OR work_location = $2)
-        AND ($5::text[] IS NULL OR work_location = ANY($5::text[]))
+       FROM flex_raw_records raw
+       LEFT JOIN loc AS by_wo   ON by_wo.key   = raw.ticket_no AND raw.ticket_no <> ''
+       LEFT JOIN loc AS by_case ON by_case.key = raw.case_id   AND raw.case_id   <> ''
+      WHERE ($1 = '' OR raw.status_group = $1)
+        AND ($2 = '' OR ${RAW_ASP_CODE_SQL} = $2)
+        AND ($5::text[] IS NULL OR ${RAW_ASP_CODE_SQL} = ANY($5::text[]))
         AND (
           ($3 = '' AND $4 = '')
-          OR (source_month <> ''
-              AND ($3 = '' OR source_month >= $3)
-              AND ($4 = '' OR source_month <= $4))
+          OR (raw.source_month <> ''
+              AND ($3 = '' OR raw.source_month >= $3)
+              AND ($4 = '' OR raw.source_month <= $4))
         )
         ${
           dayScoped
-            ? `AND closed_on IS NOT NULL
-               AND ($6 = '' OR closed_on >= $6::date)
-               AND ($7 = '' OR closed_on <= $7::date)`
+            ? `AND raw.closed_on IS NOT NULL
+               AND ($6 = '' OR raw.closed_on >= $6::date)
+               AND ($7 = '' OR raw.closed_on <= $7::date)`
             : ""
         }
-      ORDER BY ${withClosedOn ? "closed_on DESC NULLS LAST, " : ""}source_month DESC, ticket_no
+      ORDER BY ${withClosedOn ? "raw.closed_on DESC NULLS LAST, " : ""}raw.source_month DESC, raw.ticket_no
       LIMIT ${RECORD_LIST_LIMIT}`,
     [
       filter.statusGroup,
