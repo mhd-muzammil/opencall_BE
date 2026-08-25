@@ -1,10 +1,14 @@
 import type { SpecialAccessPrincipal } from "../../types/auth.js";
 import type { Region } from "../../repositories/regionRepository.js";
 import { findRegionById } from "../../repositories/regionRepository.js";
-import type { RegionEodStateResponse } from "@opencall/shared";
+import type {
+  RegionEodStateResponse,
+  ReportProductivityRangeResponse,
+} from "@opencall/shared";
 import {
   freezeRegionDay,
   getRegionEodState,
+  getReportProductivityRange,
   type CloseRegionEodResult,
 } from "../productivity/eodService.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
@@ -76,6 +80,32 @@ export async function getRegionEodStateForSpecialAccess(
   return {
     ...state,
     regions: state.regions.filter((region) => granted.has(region.regionId)),
+  };
+}
+
+/**
+ * Productivity summed across a date range, filtered to the credential's granted
+ * regions. Mirrors GET /reports/productivity/range, which is role-guarded and so
+ * unreachable with a special-access token — without it the date-range filter would
+ * keep reading a single day's report for exactly the logins that cannot fetch the
+ * range any other way.
+ */
+export async function getReportProductivityRangeForSpecialAccess(
+  principal: SpecialAccessPrincipal,
+  from: string,
+  to: string,
+): Promise<ReportProductivityRangeResponse> {
+  if (!principal.sections.includes("productivity")) {
+    throw forbidden("Engineer Productivity is not granted to this login");
+  }
+  const range = await getReportProductivityRange(from, to);
+  const granted = grantedRegionIds(principal);
+  if (!granted) {
+    return range;
+  }
+  return {
+    ...range,
+    regions: range.regions.filter((region) => granted.has(region.regionId)),
   };
 }
 

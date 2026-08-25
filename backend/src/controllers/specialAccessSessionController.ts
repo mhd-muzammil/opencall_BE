@@ -6,6 +6,7 @@ import { loadScopedReportForPrincipal } from "../services/specialAccess/specialA
 import {
   closeRegionEodForSpecialAccess,
   getRegionEodStateForSpecialAccess,
+  getReportProductivityRangeForSpecialAccess,
 } from "../services/specialAccess/specialAccessEodService.js";
 import {
   deleteSpecialAccessRecordLayout,
@@ -197,6 +198,20 @@ export const getSpecialAccessEodStateController: RequestHandler = asyncHandler(
     });
   },
 );
+
+const eodRangeQuerySchema = z.object({
+  from: workingDateSchema,
+  to: workingDateSchema,
+});
+
+export const getSpecialAccessProductivityRangeController: RequestHandler =
+  asyncHandler(async (request, response) => {
+    const principal = requireSpecialAccess(request);
+    const { from, to } = eodRangeQuerySchema.parse(request.query);
+    response.json({
+      data: await getReportProductivityRangeForSpecialAccess(principal, from, to),
+    });
+  });
 
 export const closeSpecialAccessRegionEodController: RequestHandler = asyncHandler(
   async (request, response) => {

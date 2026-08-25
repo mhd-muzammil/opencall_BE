@@ -14,11 +14,14 @@
 // 2026-07-23 incident).
 import {
   computeEngineerProductivity,
+  mergeEngineerProductivityResults,
   type EngineerProductivityResult,
   type ProductivityReportRow,
   type RegionEodStateEntry,
   type RegionEodStateResponse,
   type RegionProductivityEntry,
+  type RegionProductivityRangeEntry,
+  type ReportProductivityRangeResponse,
   type ReportProductivityResponse,
 } from "@opencall/shared";
 import { withTransaction } from "../../config/database.js";
@@ -115,21 +118,36 @@ function toProductivityRow(row: ProductivityPersistedRow): ProductivityReportRow
  * also what the admin is looking at when they click Final EOD, so the frozen
  * numbers match the screen by construction.
  */
-async function loadDayProductivityRows(
+async function loadDayProductivityRowsOrNull(
   workingDate: string,
-): Promise<ProductivityReportRow[]> {
+): Promise<ProductivityReportRow[] | null> {
   const session = await findLatestCompletedSessionByReportDate(workingDate);
   if (!session?.daily_call_plan_report_id) {
-    throw unprocessableEntity(
-      "No completed report exists for this working date",
-      { workingDate },
-    );
+    return null;
   }
 
   const rows = await findProductivityRowsByReportId(
     session.daily_call_plan_report_id,
   );
   return rows.map(toProductivityRow);
+}
+
+/**
+ * As above, but a day with no completed report is an error. Asking to close or
+ * read ONE day that does not exist is a mistake worth reporting; a range that
+ * happens to span such a day is not (see `getReportProductivityRange`).
+ */
+async function loadDayProductivityRows(
+  workingDate: string,
+): Promise<ProductivityReportRow[]> {
+  const rows = await loadDayProductivityRowsOrNull(workingDate);
+  if (rows === null) {
+    throw unprocessableEntity(
+      "No completed report exists for this working date",
+      { workingDate },
+    );
+  }
+  return rows;
 }
 
 function computeRegionProductivity(
@@ -288,13 +306,19 @@ export async function getRegionEodState(
  * region's day is CLOSED, else a live compute from the day's report — both
  * paths through the same shared function.
  */
-export async function getReportProductivity(
+/**
+ * One day's per-region productivity against an already-loaded region list.
+ * Returns null when the day has no completed report at all AND some region
+ * would have needed a live compute from it — a fully-frozen day still answers.
+ *
+ * Shared by the single-day endpoint and the range endpoint so a range is
+ * literally the sum of the days the single-day view would show.
+ */
+async function productivityEntriesForDay(
   workingDate: string,
-): Promise<ReportProductivityResponse> {
-  assertValidWorkingDate(workingDate);
-
-  const [regions, states, snapshots] = await Promise.all([
-    listRegions({ activeOnly: true }),
+  regions: readonly Region[],
+): Promise<RegionProductivityEntry[] | null> {
+  const [states, snapshots] = await Promise.all([
     findEodStatesForDate(workingDate),
     findSnapshotsForDate(workingDate),
   ]);
@@ -309,10 +333,14 @@ export async function getReportProductivity(
     (region) =>
       !closedRegionIds.has(region.id) || !snapshotByRegion.has(region.id),
   );
-  const liveRows =
-    liveRegions.length > 0 ? await loadDayProductivityRows(workingDate) : [];
+  let liveRows: ProductivityReportRow[] = [];
+  if (liveRegions.length > 0) {
+    const rows = await loadDayProductivityRowsOrNull(workingDate);
+    if (rows === null) return null;
+    liveRows = rows;
+  }
 
-  const entries: RegionProductivityEntry[] = regions.map((region) => {
+  return regions.map((region) => {
     const frozen = closedRegionIds.has(region.id)
       ? snapshotByRegion.get(region.id)
       : undefined;
@@ -326,6 +354,132 @@ export async function getReportProductivity(
         : computeRegionProductivity(liveRows, region),
     };
   });
+}
+
+export async function getReportProductivity(
+  workingDate: string,
+): Promise<ReportProductivityResponse> {
+  assertValidWorkingDate(workingDate);
+
+  const regions = await listRegions({ activeOnly: true });
+  const entries = await productivityEntriesForDay(workingDate, regions);
+  if (entries === null) {
+    throw unprocessableEntity(
+      "No completed report exists for this working date",
+      { workingDate },
+    );
+  }
 
   return { workingDate, regions: entries };
+}
+
+/**
+ * The most days one range request will read. Each day costs its report's rows,
+ * so an unbounded range is an unbounded query — a quarter covers any bill cycle
+ * or month the productivity filter can ask for, and anything longer is refused
+ * out loud instead of quietly timing out.
+ */
+const MAX_PRODUCTIVITY_RANGE_DAYS = 92;
+
+/** How many days are read at once. Bounds concurrent row loads on the pool. */
+const RANGE_DAY_CONCURRENCY = 4;
+
+/** Every YYYY-MM-DD from `from` to `to` inclusive, walked in UTC. */
+function enumerateWorkingDates(from: string, to: string): string[] {
+  const days: string[] = [];
+  const end = Date.parse(`${to}T00:00:00Z`);
+  for (let t = Date.parse(`${from}T00:00:00Z`); t <= end; t += 86_400_000) {
+    days.push(new Date(t).toISOString().slice(0, 10));
+  }
+  return days;
+}
+
+/**
+ * Per-region productivity summed over an inclusive range of working dates.
+ *
+ * Productivity is day-scoped by construction — assigned is THAT day's plan,
+ * attended and closed are THAT day's outcomes — so the only faithful reading of
+ * "Jun 25 to Jul 24" is each of those days computed exactly as its own day and
+ * added together. Every day goes through `productivityEntriesForDay`, so a range
+ * and the days it is made of can never disagree, and a Final-EOD-frozen day
+ * contributes its frozen snapshot here too.
+ *
+ * A date with no completed report contributes nothing and is reported in
+ * `missingDays`; it is not an error, or no range spanning a quiet day could ever
+ * be asked for.
+ */
+export async function getReportProductivityRange(
+  fromRaw: string,
+  toRaw: string,
+): Promise<ReportProductivityRangeResponse> {
+  assertValidWorkingDate(fromRaw);
+  assertValidWorkingDate(toRaw);
+  // A reversed pair is a slip, not a request for nothing.
+  const [from, to] = fromRaw <= toRaw ? [fromRaw, toRaw] : [toRaw, fromRaw];
+
+  const dates = enumerateWorkingDates(from, to);
+  if (dates.length > MAX_PRODUCTIVITY_RANGE_DAYS) {
+    throw unprocessableEntity(
+      `A productivity range covers at most ${MAX_PRODUCTIVITY_RANGE_DAYS} days`,
+      { from, to, days: dates.length },
+    );
+  }
+
+  const regions = await listRegions({ activeOnly: true });
+
+  const days: string[] = [];
+  const missingDays: string[] = [];
+  const perRegion = new Map<
+    string,
+    { frozen: number; live: number; results: EngineerProductivityResult[] }
+  >();
+
+  for (let i = 0; i < dates.length; i += RANGE_DAY_CONCURRENCY) {
+    const batch = dates.slice(i, i + RANGE_DAY_CONCURRENCY);
+    const settled = await Promise.all(
+      batch.map(async (date) => ({
+        date,
+        entries: await productivityEntriesForDay(date, regions),
+      })),
+    );
+
+    for (const { date, entries } of settled) {
+      if (entries === null) {
+        missingDays.push(date);
+        continue;
+      }
+      days.push(date);
+      for (const entry of entries) {
+        let bucket = perRegion.get(entry.regionId);
+        if (!bucket) {
+          bucket = { frozen: 0, live: 0, results: [] };
+          perRegion.set(entry.regionId, bucket);
+        }
+        if (entry.source === "FROZEN") bucket.frozen += 1;
+        else bucket.live += 1;
+        bucket.results.push(entry.productivity);
+      }
+    }
+  }
+
+  days.sort();
+  missingDays.sort();
+
+  const entries: RegionProductivityRangeEntry[] = regions.map((region) => {
+    const bucket = perRegion.get(region.id);
+    return {
+      regionId: region.id,
+      regionCode: region.code,
+      regionName: region.name,
+      source:
+        !bucket || bucket.frozen === 0
+          ? "LIVE"
+          : bucket.live === 0
+            ? "FROZEN"
+            : "MIXED",
+      productivity: mergeEngineerProductivityResults(bucket?.results ?? []),
+    };
+  });
+
+  return { from, to, days, missingDays, regions: entries };
 }

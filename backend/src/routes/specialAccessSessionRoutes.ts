@@ -4,6 +4,7 @@ import {
   deleteSpecialAccessRecordLayoutController,
   getSpecialAccessEngineersDropdownController,
   getSpecialAccessEodStateController,
+  getSpecialAccessProductivityRangeController,
   getSpecialAccessMeController,
   getSpecialAccessRecordColumnsCatalogController,
   getSpecialAccessRecordLayoutController,
@@ -77,6 +78,12 @@ specialAccessSessionRouter.patch(
 // filtered to granted regions; the close additionally requires `edit` permission and
 // the `productivity` grant (enforced in the service, not here).
 specialAccessSessionRouter.get("/eod-state/:date", getSpecialAccessEodStateController);
+// Productivity summed over ?from=&to=, filtered to the granted regions. Mirrors
+// GET /reports/productivity/range for the date-range filter.
+specialAccessSessionRouter.get(
+  "/productivity/range",
+  getSpecialAccessProductivityRangeController,
+);
 specialAccessSessionRouter.post(
   "/regions/:regionId/eod/close",
   closeSpecialAccessRegionEodController,

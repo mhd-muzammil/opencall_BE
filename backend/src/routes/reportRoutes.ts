@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   getRegionEodStateController,
   getReportProductivityController,
+  getReportProductivityRangeController,
 } from "../controllers/eodController.js";
 import { generateDailyCallPlanReportController } from "../controllers/reportController.js";
 import { syncAssignedCasesToPayrollController } from "../controllers/payrollSyncController.js";
@@ -23,6 +24,15 @@ reportRouter.get(
   requireAuthenticatedUser,
   requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
   getRegionEodStateController,
+);
+
+// Per-region productivity summed over ?from=&to= inclusive. Declared BEFORE
+// "/:date/..." so the literal path is not swallowed by the date parameter.
+reportRouter.get(
+  "/productivity/range",
+  requireAuthenticatedUser,
+  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
+  getReportProductivityRangeController,
 );
 
 // Per-region productivity for a report date: frozen snapshot when CLOSED,

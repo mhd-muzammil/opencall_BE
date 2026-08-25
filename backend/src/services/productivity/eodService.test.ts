@@ -146,6 +146,7 @@ import {
   closeRegionEod,
   getRegionEodState,
   getReportProductivity,
+  getReportProductivityRange,
   reopenRegionEod,
 } from "./eodService.js";
 
@@ -412,5 +413,92 @@ describe("getRegionEodState", () => {
     const velloreEntry = state.regions.find((r) => r.regionId === vellore.id);
     expect(velloreEntry?.status).toBe("OPEN");
     expect(velloreEntry?.snapshot).toBeNull();
+  });
+});
+
+describe("getReportProductivityRange", () => {
+  /**
+   * The date-range filter used to filter ONE report's rows by Case Created Time,
+   * so a month-long range showed a single day's work. A range is the days added
+   * up — these tests pin that, and pin that it stays the same days the day-by-day
+   * view shows.
+   */
+  it("sums each day in the range instead of reading one day", async () => {
+    // Three consecutive days, each with the same two Chennai rows for Ravi.
+    const range = await getReportProductivityRange("2026-07-15", "2026-07-17");
+
+    expect(range.from).toBe("2026-07-15");
+    expect(range.to).toBe("2026-07-17");
+    expect(range.days).toEqual(["2026-07-15", "2026-07-16", "2026-07-17"]);
+    expect(range.missingDays).toEqual([]);
+
+    const chennaiEntry = range.regions.find((r) => r.regionId === chennai.id);
+    // One day is assigned 2 / closed 1; three days is three times that.
+    expect(chennaiEntry?.productivity.list).toHaveLength(1);
+    expect(chennaiEntry?.productivity.list[0]?.name).toBe("Ravi");
+    expect(chennaiEntry?.productivity.list[0]?.assigned).toBe(6);
+    expect(chennaiEntry?.productivity.list[0]?.closed).toBe(3);
+    expect(chennaiEntry?.productivity.totalAttended).toBe(3);
+  });
+
+  it("equals the single-day read when the range is one day", async () => {
+    const asRange = await getReportProductivityRange(WORKING_DATE, WORKING_DATE);
+    const asDay = await getReportProductivity(WORKING_DATE);
+
+    expect(asRange.days).toEqual([WORKING_DATE]);
+    expect(asRange.regions.map((r) => r.productivity)).toEqual(
+      asDay.regions.map((r) => r.productivity),
+    );
+  });
+
+  it("skips days with no completed report instead of failing the range", async () => {
+    mocks.findLatestCompletedSessionByReportDate.mockImplementation(
+      async (date: string) =>
+        date === "2026-07-16"
+          ? null
+          : { id: "session-1", daily_call_plan_report_id: "report-1" },
+    );
+
+    const range = await getReportProductivityRange("2026-07-15", "2026-07-17");
+
+    expect(range.days).toEqual(["2026-07-15", "2026-07-17"]);
+    expect(range.missingDays).toEqual(["2026-07-16"]);
+    // Two days counted, not three.
+    const chennaiEntry = range.regions.find((r) => r.regionId === chennai.id);
+    expect(chennaiEntry?.productivity.list[0]?.assigned).toBe(4);
+  });
+
+  it("takes a frozen day's snapshot and a live day's compute in one range", async () => {
+    await closeRegionEod(superAdmin, chennai.id, "2026-07-16");
+    // The day's rows change after the freeze; the frozen day must not follow.
+    mocks.findProductivityRowsByReportId.mockResolvedValue(
+      persistedRows([
+        { ticketId: "W1", engineer: "Ravi", morning: "Scheduled" },
+      ]),
+    );
+
+    const range = await getReportProductivityRange("2026-07-15", "2026-07-16");
+
+    const chennaiEntry = range.regions.find((r) => r.regionId === chennai.id);
+    expect(chennaiEntry?.source).toBe("MIXED");
+    // 15th live (1 assigned, post-edit rows) + 16th frozen (2 assigned).
+    expect(chennaiEntry?.productivity.list[0]?.assigned).toBe(3);
+
+    const velloreEntry = range.regions.find((r) => r.regionId === vellore.id);
+    expect(velloreEntry?.source).toBe("LIVE");
+  });
+
+  it("swaps a reversed pair rather than returning nothing", async () => {
+    const range = await getReportProductivityRange("2026-07-17", "2026-07-15");
+
+    expect(range.from).toBe("2026-07-15");
+    expect(range.to).toBe("2026-07-17");
+    expect(range.days).toHaveLength(3);
+  });
+
+  it("refuses a range longer than it will read in one request", async () => {
+    await expect(
+      getReportProductivityRange("2026-01-01", "2026-12-31"),
+    ).rejects.toThrow(/at most 92 days/);
   });
 });

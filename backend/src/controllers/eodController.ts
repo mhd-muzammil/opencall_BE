@@ -5,6 +5,7 @@ import {
   closeRegionEod,
   getRegionEodState,
   getReportProductivity,
+  getReportProductivityRange,
   reopenRegionEod,
 } from "../services/productivity/eodService.js";
 import { requireCurrentUser } from "../services/rbac/regionAccessService.js";
@@ -95,6 +96,28 @@ export const getReportProductivityController: RequestHandler = asyncHandler(
 
     response.json({
       data: await getReportProductivity(workingDate),
+    });
+  },
+);
+
+const productivityRangeQuerySchema = z.object({
+  from: workingDateSchema,
+  to: workingDateSchema,
+});
+
+/**
+ * Per-region productivity summed across `from`..`to` inclusive. The Engineer
+ * Productivity date-range filter reads this: productivity is a day-scoped
+ * measure, so a range has to be computed day by day and added up rather than
+ * read off any single day's report.
+ */
+export const getReportProductivityRangeController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    requireCurrentUser(request.currentUser);
+    const { from, to } = productivityRangeQuerySchema.parse(request.query);
+
+    response.json({
+      data: await getReportProductivityRange(from, to),
     });
   },
 );
