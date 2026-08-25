@@ -502,3 +502,49 @@ describe("getReportProductivityRange", () => {
     ).rejects.toThrow(/at most 92 days/);
   });
 });
+
+describe("getReportProductivityRange callsInPeriod", () => {
+  /**
+   * The number that tells "this region booked nothing" apart from "this region
+   * did nothing". Vellore read 5 assigned against 6,840 calls in production and
+   * looked broken; without the denominator that is indistinguishable from a
+   * region with no work at all.
+   */
+  it("counts every visible call a region had, not just the booked ones", async () => {
+    // Chennai: 2 rows, both Scheduled with an engineer. Vellore: 1 row, but its
+    // status is NOT Scheduled — a call it had and did not book.
+    mocks.findProductivityRowsByReportId.mockResolvedValue(
+      persistedRows([
+        { ticketId: "W1", engineer: "Ravi", morning: "Scheduled" },
+        { ticketId: "W2", engineer: "Ravi", morning: "Scheduled" },
+        { ticketId: "V1", engineer: "Vel", morning: "Actionable", workLocation: vellore.code },
+      ]),
+    );
+
+    const range = await getReportProductivityRange("2026-07-15", "2026-07-16");
+
+    const chennaiEntry = range.regions.find((r) => r.regionId === chennai.id);
+    expect(chennaiEntry?.callsInPeriod).toBe(4); // 2 rows over 2 days
+    expect(chennaiEntry?.productivity.list[0]?.assigned).toBe(4);
+
+    const velloreEntry = range.regions.find((r) => r.regionId === vellore.id);
+    // The call is there both days and is counted...
+    expect(velloreEntry?.callsInPeriod).toBe(2);
+    // ...but none of it was booked as Scheduled, so nothing is assigned.
+    expect(velloreEntry?.productivity.list).toHaveLength(0);
+    expect(velloreEntry?.productivity.totalAttended).toBe(0);
+  });
+
+  it("still counts calls on a day where every region is frozen", async () => {
+    // Freeze both regions for the 16th: without countCalls forcing the read,
+    // that day's rows are never loaded and its calls would go uncounted.
+    await closeRegionEod(superAdmin, chennai.id, "2026-07-16");
+    await closeRegionEod(superAdmin, vellore.id, "2026-07-16");
+
+    const range = await getReportProductivityRange("2026-07-16", "2026-07-16");
+
+    const chennaiEntry = range.regions.find((r) => r.regionId === chennai.id);
+    expect(chennaiEntry?.source).toBe("FROZEN");
+    expect(chennaiEntry?.callsInPeriod).toBe(2);
+  });
+});

@@ -60,6 +60,17 @@ export interface RegionProductivityRangeEntry {
   /** FROZEN when every counted day was frozen, LIVE when none was, else MIXED. */
   source: "FROZEN" | "LIVE" | "MIXED";
   productivity: EngineerProductivityResult;
+  /**
+   * Calls this region had in the period at all — every productivity-visible row
+   * carrying one of its ASP codes, across the counted days.
+   *
+   * The denominator for "N booked of M calls". Productivity counts only calls
+   * booked as Scheduled with an engineer, so a region that does not use that
+   * flow reports near zero and looks identical to one that did no work. Without
+   * this number that difference is invisible, and reading it off the database
+   * is the only way to tell them apart.
+   */
+  callsInPeriod: number;
 }
 
 export interface ReportProductivityRangeResponse {

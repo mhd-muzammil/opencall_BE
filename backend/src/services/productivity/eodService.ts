@@ -14,6 +14,7 @@
 // 2026-07-23 incident).
 import {
   computeEngineerProductivity,
+  isProductivityVisibleRow,
   mergeEngineerProductivityResults,
   type EngineerProductivityResult,
   type ProductivityReportRow,
@@ -307,17 +308,28 @@ export async function getRegionEodState(
  * paths through the same shared function.
  */
 /**
- * One day's per-region productivity against an already-loaded region list.
+ * One day's per-region productivity against an already-loaded region list, plus
+ * how many calls each region had that day at all (see `callsInPeriod`).
+ *
  * Returns null when the day has no completed report at all AND some region
  * would have needed a live compute from it — a fully-frozen day still answers.
  *
- * Shared by the single-day endpoint and the range endpoint so a range is
- * literally the sum of the days the single-day view would show.
+ * `countCalls` forces the day's rows to be read even when every region is
+ * frozen and none of them needs a live compute. Only the range asks for that:
+ * the call counts are its denominator and must cover every counted day, while
+ * the single-day endpoint keeps the cheaper read.
+ *
+ * Shared by both endpoints so a range is literally the sum of the days the
+ * single-day view would show.
  */
 async function productivityEntriesForDay(
   workingDate: string,
   regions: readonly Region[],
-): Promise<RegionProductivityEntry[] | null> {
+  opts: { countCalls?: boolean } = {},
+): Promise<{
+  entries: RegionProductivityEntry[];
+  calls: Map<string, number>;
+} | null> {
   const [states, snapshots] = await Promise.all([
     findEodStatesForDate(workingDate),
     findSnapshotsForDate(workingDate),
@@ -334,13 +346,31 @@ async function productivityEntriesForDay(
       !closedRegionIds.has(region.id) || !snapshotByRegion.has(region.id),
   );
   let liveRows: ProductivityReportRow[] = [];
-  if (liveRegions.length > 0) {
+  if (liveRegions.length > 0 || opts.countCalls) {
     const rows = await loadDayProductivityRowsOrNull(workingDate);
     if (rows === null) return null;
     liveRows = rows;
   }
 
-  return regions.map((region) => {
+  // Calls the region had at all today, before the Scheduled gate — counted off
+  // the same visible-row set the productivity calculation starts from, so the
+  // two numbers are the same rows filtered differently and nothing else.
+  const calls = new Map<string, number>();
+  if (opts.countCalls) {
+    const visible = liveRows.filter(isProductivityVisibleRow);
+    for (const region of regions) {
+      const codes = aspCodesForRegion(region);
+      let count = 0;
+      for (const row of visible) {
+        if (codes.has(String(row.output["Work Location"] ?? "").trim().toUpperCase())) {
+          count += 1;
+        }
+      }
+      calls.set(region.id, count);
+    }
+  }
+
+  const entries = regions.map((region): RegionProductivityEntry => {
     const frozen = closedRegionIds.has(region.id)
       ? snapshotByRegion.get(region.id)
       : undefined;
@@ -354,6 +384,8 @@ async function productivityEntriesForDay(
         : computeRegionProductivity(liveRows, region),
     };
   });
+
+  return { entries, calls };
 }
 
 export async function getReportProductivity(
@@ -362,15 +394,15 @@ export async function getReportProductivity(
   assertValidWorkingDate(workingDate);
 
   const regions = await listRegions({ activeOnly: true });
-  const entries = await productivityEntriesForDay(workingDate, regions);
-  if (entries === null) {
+  const day = await productivityEntriesForDay(workingDate, regions);
+  if (day === null) {
     throw unprocessableEntity(
       "No completed report exists for this working date",
       { workingDate },
     );
   }
 
-  return { workingDate, regions: entries };
+  return { workingDate, regions: day.entries };
 }
 
 /**
@@ -431,7 +463,12 @@ export async function getReportProductivityRange(
   const missingDays: string[] = [];
   const perRegion = new Map<
     string,
-    { frozen: number; live: number; results: EngineerProductivityResult[] }
+    {
+      frozen: number;
+      live: number;
+      calls: number;
+      results: EngineerProductivityResult[];
+    }
   >();
 
   for (let i = 0; i < dates.length; i += RANGE_DAY_CONCURRENCY) {
@@ -439,24 +476,25 @@ export async function getReportProductivityRange(
     const settled = await Promise.all(
       batch.map(async (date) => ({
         date,
-        entries: await productivityEntriesForDay(date, regions),
+        day: await productivityEntriesForDay(date, regions, { countCalls: true }),
       })),
     );
 
-    for (const { date, entries } of settled) {
-      if (entries === null) {
+    for (const { date, day } of settled) {
+      if (day === null) {
         missingDays.push(date);
         continue;
       }
       days.push(date);
-      for (const entry of entries) {
+      for (const entry of day.entries) {
         let bucket = perRegion.get(entry.regionId);
         if (!bucket) {
-          bucket = { frozen: 0, live: 0, results: [] };
+          bucket = { frozen: 0, live: 0, calls: 0, results: [] };
           perRegion.set(entry.regionId, bucket);
         }
         if (entry.source === "FROZEN") bucket.frozen += 1;
         else bucket.live += 1;
+        bucket.calls += day.calls.get(entry.regionId) ?? 0;
         bucket.results.push(entry.productivity);
       }
     }
@@ -478,6 +516,7 @@ export async function getReportProductivityRange(
             ? "FROZEN"
             : "MIXED",
       productivity: mergeEngineerProductivityResults(bucket?.results ?? []),
+      callsInPeriod: bucket?.calls ?? 0,
     };
   });
 
