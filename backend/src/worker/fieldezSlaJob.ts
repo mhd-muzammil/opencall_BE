@@ -46,8 +46,23 @@ const CONCURRENCY = Number(process.env.FIELDEZ_SLA_CONCURRENCY ?? 6) || 6;
 /** Records per POST to OpenCall. A thousand rows in one body is a needless spike. */
 const PUSH_BATCH = Number(process.env.FIELDEZ_SLA_PUSH_BATCH ?? 200) || 200;
 
-/** How many tickets to ask the list for. Well above the real number, which is ~1000. */
-const LIST_ROWS = Number(process.env.FIELDEZ_SLA_LIST_ROWS ?? 5000) || 5000;
+/**
+ * Tickets per page of the list.
+ *
+ * Asking for all of them at once looked like the obvious saving and was rejected outright:
+ * `rows=5000` came back 400 on every cycle. FieldEZ's own frontend asks for twenty, so the
+ * endpoint has a ceiling somewhere between, and guessing where it is costs a whole cycle
+ * per guess. A hundred at a time is ten requests for a thousand calls — nothing next to the
+ * thousand detail reads that follow — and `FALLBACK_ROWS` is the size known to work, used
+ * automatically if even this is refused.
+ */
+const LIST_ROWS = Number(process.env.FIELDEZ_SLA_LIST_ROWS ?? 100) || 100;
+
+/** The page size FieldEZ's own frontend uses, so it is certainly accepted. */
+const FALLBACK_ROWS = 20;
+
+/** A runaway guard: a hundred pages is ten thousand tickets, far past anything real. */
+const MAX_PAGES = 100;
 
 /** The statuses that count as an open call — the same ones FieldEZ's own list asks for. */
 const OPEN_STATUS = process.env.FIELDEZ_SLA_STATUS ?? "Open,Scheduled";
@@ -107,16 +122,20 @@ async function captureAuthHeaders(
   return headers;
 }
 
-/** Every open ticket FieldEZ knows about, in one call. */
-async function listOpenTickets(
+/** One page of the open-ticket list. Throws with the server's own words on a refusal. */
+async function fetchTicketPage(
   page: Page,
   base: string,
   headers: Record<string, string>,
+  pageIndex: number,
+  rows: number,
 ): Promise<FieldezTicketRef[]> {
   const response = await page.request.post(
-    `${base}/tlm/v1.0/ticket/summary-list?page=0&rows=${LIST_ROWS}`,
+    `${base}/tlm/v1.0/ticket/summary-list?page=${pageIndex}&rows=${rows}`,
     {
       headers: { ...headers, "Content-Type": "application/json" },
+      // Exactly the body FieldEZ's own frontend sends. Copied from a captured request, not
+      // reasoned out — a field guessed wrong here is a 400 with no explanation.
       data: {
         status: OPEN_STATUS,
         tasks: "",
@@ -131,9 +150,63 @@ async function listOpenTickets(
     },
   );
   if (!response.ok()) {
-    throw new Error(`summary-list returned ${response.status()}`);
+    // The status alone said "400" for two cycles and nothing about why. The body usually
+    // names the field it did not like, which is the difference between a fix and a guess.
+    const detail = (await response.text().catch(() => "")).slice(0, 300).replace(/\s+/g, " ");
+    throw new Error(
+      `summary-list returned ${response.status()} for page=${pageIndex} rows=${rows}` +
+        (detail ? ` — ${detail}` : ""),
+    );
   }
   return parseTicketList(await response.json().catch(() => null));
+}
+
+/**
+ * Every open ticket FieldEZ knows about, a page at a time.
+ *
+ * One call for the lot was the first attempt and FieldEZ refused it — `rows=5000` returned
+ * 400 every cycle. Paging is what the endpoint is built for, and it costs ten requests
+ * against the thousand detail reads that follow.
+ *
+ * If even the configured page size is refused, it drops to the twenty FieldEZ's own frontend
+ * asks for and carries on. A ceiling that moves with the next release should cost a slower
+ * sweep, not a dead one.
+ */
+async function listOpenTickets(
+  page: Page,
+  base: string,
+  headers: Record<string, string>,
+  log: (message: string) => void,
+): Promise<FieldezTicketRef[]> {
+  let rows = LIST_ROWS;
+  const all: FieldezTicketRef[] = [];
+  const seen = new Set<number>();
+
+  for (let pageIndex = 0; pageIndex < MAX_PAGES; pageIndex += 1) {
+    let batch: FieldezTicketRef[];
+    try {
+      batch = await fetchTicketPage(page, base, headers, pageIndex, rows);
+    } catch (error) {
+      if (pageIndex === 0 && rows !== FALLBACK_ROWS) {
+        log(
+          `${error instanceof Error ? error.message : String(error)} — retrying at ${FALLBACK_ROWS} per page`,
+        );
+        rows = FALLBACK_ROWS;
+        pageIndex -= 1;
+        continue;
+      }
+      throw error;
+    }
+
+    // A page that repeats what the last one held means the endpoint is ignoring `page`, and
+    // continuing would loop until MAX_PAGES collecting the same twenty tickets.
+    const fresh = batch.filter((ticket) => !seen.has(ticket.fieldezTicketId));
+    for (const ticket of fresh) seen.add(ticket.fieldezTicketId);
+    all.push(...fresh);
+
+    if (batch.length < rows || fresh.length === 0) break;
+  }
+  return all;
 }
 
 /** One ticket's SLA. Returns null when FieldEZ would not answer for it. */
@@ -201,7 +274,7 @@ export async function runFieldezSlaSync(options: SlaSyncOptions): Promise<SlaSyn
 
   const headers = await captureAuthHeaders(page, fieldezBase, log);
 
-  const tickets = await listOpenTickets(page, fieldezBase, headers);
+  const tickets = await listOpenTickets(page, fieldezBase, headers, log);
   result.listed = tickets.length;
   if (tickets.length === 0) {
     // Not "every call closed". A list that comes back empty is far more likely to be a
