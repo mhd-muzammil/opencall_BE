@@ -209,6 +209,45 @@ async function listOpenTickets(
   return all;
 }
 
+/**
+ * Find one work order by name, the way a person does it.
+ *
+ * FieldEZ's open-ticket list answers a narrower question than the report asks. Its summary
+ * page filters on `status = Open,Scheduled` and returned four hundred against the report's
+ * nine hundred and fifty — and the calls in the gap showed no SLA at all, including ones four
+ * days old that nobody would call closed. Rather than guess at which other statuses to ask
+ * for, the ones the list missed are looked up individually, through the same search endpoint
+ * the Ticket ▸ Summary box drives.
+ *
+ * One extra request per missing call, and only for the ones actually missing.
+ */
+async function searchTicket(
+  page: Page,
+  base: string,
+  headers: Record<string, string>,
+  ticketNo: string,
+): Promise<FieldezTicketRef | null> {
+  try {
+    const response = await page.request.post(
+      `${base}/tlm/v1.0/ticket/summary-list/search?page=0&rows=5`,
+      {
+        headers: { ...headers, "Content-Type": "application/json" },
+        // The exact body the search box sends, captured rather than reasoned out.
+        data: { searchKey: "Work Order", searchValue: ticketNo },
+        timeout: 45_000,
+      },
+    );
+    if (!response.ok()) return null;
+    const found = parseTicketList(await response.json().catch(() => null));
+    // The search is a contains-match, so a work order can bring back its neighbours. Only an
+    // exact match on the digits is this call.
+    const wanted = ticketNo.replace(/\D/g, "");
+    return found.find((ticket) => ticket.ticketNo.replace(/\D/g, "") === wanted) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** One ticket's SLA. Returns null when FieldEZ would not answer for it. */
 async function readSla(
   page: Page,
@@ -264,6 +303,12 @@ export interface SlaSyncOptions {
   /** OpenCall API base, e.g. http://opencall:4000 */
   apiUrl: string;
   /**
+   * The work orders the Open Call Report is about, so the sweep covers what is on screen
+   * rather than what FieldEZ's own filter happens to return. Empty when OpenCall cannot say,
+   * in which case FieldEZ's list is all there is to go on.
+   */
+  wanted: () => Promise<string[]>;
+  /**
    * Sends one batch to OpenCall. Given as a function so the worker keeps its token logic.
    *
    * `sweepStartedAt` is what the pruning compares against — rows older than it are the ones
@@ -289,6 +334,29 @@ export async function runFieldezSlaSync(options: SlaSyncOptions): Promise<SlaSyn
   const headers = await captureAuthHeaders(page, fieldezBase, log);
 
   const tickets = await listOpenTickets(page, fieldezBase, headers, log);
+
+  // Whatever the report is about that FieldEZ's list did not return. Asked for by name,
+  // one search each — the gap between the two was four hundred calls with a blank SLA
+  // column, and no amount of guessing at status values would have closed it reliably.
+  let wantedList: string[] = [];
+  try {
+    wantedList = await options.wanted();
+  } catch (error) {
+    log(`could not ask OpenCall which calls it needs — ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (wantedList.length > 0) {
+    const have = new Set(tickets.map((ticket) => ticket.ticketNo.replace(/\D/g, "")));
+    const missing = wantedList.filter((ticketNo) => !have.has(ticketNo.replace(/\D/g, "")));
+    if (missing.length > 0) {
+      log(`${missing.length} of ${wantedList.length} on the report were not in FieldEZ's list — looking them up`);
+      const found = (
+        await inPool(missing, CONCURRENCY, (ticketNo) => searchTicket(page, fieldezBase, headers, ticketNo))
+      ).filter((ticket): ticket is FieldezTicketRef => ticket !== null);
+      log(`${found.length} of those were found by name`);
+      tickets.push(...found);
+    }
+  }
+
   result.listed = tickets.length;
   if (tickets.length === 0) {
     // Not "every call closed". A list that comes back empty is far more likely to be a

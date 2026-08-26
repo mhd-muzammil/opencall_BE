@@ -127,6 +127,35 @@ export async function findSlaByTicket(ticketKey: string): Promise<StoredSla | nu
   return row ? toStored(row) : null;
 }
 
+/**
+ * The work orders the Open Call Report is actually about.
+ *
+ * FieldEZ's own open-ticket list answers a narrower question than this one. Its summary page
+ * filters on `status = Open,Scheduled` and returns around four hundred; the report carries
+ * more than twice that, and the calls in the gap showed no SLA at all — including ones only
+ * four days old, which nobody would call closed.
+ *
+ * So the sweep is driven from here instead: whatever the latest WIP upload holds is what
+ * needs an SLA, and anything FieldEZ's list does not cover gets asked for by name.
+ *
+ * From the most recent VALIDATED batch, because a failed upload must not narrow the estate
+ * to whatever it managed to parse.
+ */
+export async function listWantedTicketNumbers(): Promise<string[]> {
+  const result = await query<{ ticket_id: string }>(
+    `SELECT DISTINCT ticket_id
+       FROM flex_wip_records
+      WHERE upload_batch_id = (
+              SELECT id FROM source_upload_batches
+               WHERE source_type = 'FLEX_WIP' AND status = 'VALIDATED'
+               ORDER BY created_at DESC
+               LIMIT 1
+            )
+        AND TRIM(COALESCE(ticket_id, '')) <> ''`,
+  );
+  return result.rows.map((row) => row.ticket_id.trim()).filter(Boolean);
+}
+
 export interface SlaFreshness {
   rows: number;
   /** ISO of the most recent refresh, or null when nothing has ever been written. */

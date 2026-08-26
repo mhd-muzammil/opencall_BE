@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   importFieldezSlaController,
   listFieldezSlaController,
+  listWantedTicketsController,
 } from "../controllers/fieldezSlaController.js";
 import {
   requireAuthenticatedUser,
@@ -23,6 +24,15 @@ import { requireRole } from "../middlewares/roleMiddleware.js";
 export const fieldezSlaRouter = Router();
 
 fieldezSlaRouter.get("/", requirePrincipal, listFieldezSlaController);
+
+// What the worker should fetch. Behind the same credential as the import, because it is the
+// import's other half rather than something a screen reads.
+fieldezSlaRouter.get(
+  "/wanted",
+  requireAuthenticatedUser,
+  requireRole(["SUPER_ADMIN", "REGION_ADMIN"]),
+  listWantedTicketsController,
+);
 
 fieldezSlaRouter.post(
   "/import",

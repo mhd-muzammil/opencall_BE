@@ -668,6 +668,21 @@ async function syncSla(livePage: Page): Promise<void> {
     fieldezBase: config.fieldezBase,
     apiUrl: config.apiUrl,
     log: (message: string) => log(`[sla] ${message}`),
+    // What the Open Call Report is about. FieldEZ's own list is narrower, and the calls in
+    // the gap are the ones that showed a blank SLA column.
+    wanted: async () => {
+      const res = await postWithToken((token) =>
+        fetch(`${config.apiUrl}/api/v1/fieldez-sla/wanted`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      );
+      if (!res.ok) throw new Error(`wanted list returned ${res.status}`);
+      const body = (await res.json().catch(() => null)) as
+        | { data?: { ticketNos?: string[] } }
+        | null;
+      return body?.data?.ticketNos ?? [];
+    },
     push: async (records, prune, sweepStartedAt) => {
       const res = await postWithToken((token) =>
         fetch(`${config.apiUrl}/api/v1/fieldez-sla/import`, {

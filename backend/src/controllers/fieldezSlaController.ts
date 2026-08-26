@@ -5,6 +5,7 @@ import {
   deleteSlaOlderThan,
   getSlaFreshness,
   listAllSla,
+  listWantedTicketNumbers,
   upsertSlaRecords,
 } from "../repositories/fieldezSlaRepository.js";
 import {
@@ -32,6 +33,21 @@ export const listFieldezSlaController: RequestHandler = asyncHandler(
   async (_request, response) => {
     const [records, freshness] = await Promise.all([listAllSla(), getSlaFreshness()]);
     response.json({ data: { records, freshness } });
+  },
+);
+
+/**
+ * The work orders the worker should come back with an SLA for.
+ *
+ * FieldEZ's own open-ticket list is narrower than the report — it returned four hundred
+ * against nine hundred and fifty, and calls four days old sat in the gap with no SLA on
+ * screen. This is what the sweep is driven from instead, so anything FieldEZ's list misses
+ * is asked for by name.
+ */
+export const listWantedTicketsController: RequestHandler = asyncHandler(
+  async (_request, response) => {
+    const ticketNos = await listWantedTicketNumbers();
+    response.json({ data: { ticketNos } });
   },
 );
 
