@@ -112,36 +112,89 @@ async function openSummary(page: Page): Promise<void> {
   }
 }
 
+/** Every work order the list is currently showing, read off the rendered page. */
+async function visibleTickets(page: Page): Promise<string[]> {
+  const text = await page.locator("body").innerText({ timeout: 15000 }).catch(() => "");
+  return [...new Set(text.match(/WO-?\d{6,}/gi) ?? [])];
+}
+
 /**
- * Type the work order into "Enter Ticket No", search, and end up on its Details page.
+ * Run the search once, for one spelling of the work order.
  *
- * Two endings are allowed for, because which one happens is FieldEZ's choice rather than
- * ours: the search may land straight on Ticket ▸ Details, or it may narrow the list to a
- * single row that still has to be clicked. Assuming one of the two would make the scraper
- * work until the day it did the other.
+ * PRESSING ENTER IS NOT THE SEARCH. The box sits beside its own magnifier button and the
+ * first attempt at this typed the work order, pressed Enter, waited, and found the list
+ * exactly as it was — the keypress went nowhere. So the button next to the box is clicked,
+ * with Enter kept only as a fallback for the day FieldEZ makes the box submit on its own.
+ *
+ * Reports what the list showed afterwards either way. "No row matched" and "the search
+ * never ran" look identical from the outside and need completely different fixes, and the
+ * work orders still on screen tell the two apart: unchanged means the search did not fire,
+ * empty means it fired and found nothing.
  */
-async function openTicket(page: Page, ticketNo: string): Promise<boolean> {
+async function trySearch(page: Page, term: string): Promise<boolean> {
+  await openSummary(page);
   const box = page.getByPlaceholder(/enter ticket no/i).first();
   await box.waitFor({ state: "visible", timeout: 30000 });
+  const before = await visibleTickets(page);
+
   await box.fill("");
-  await box.fill(ticketNo);
-  log(`searching for ${ticketNo}…`);
-  await box.press("Enter").catch(() => {});
-  await page.waitForTimeout(3500);
+  await box.fill(term);
+  log(`searching for "${term}" (list is showing ${before.length} work orders)…`);
 
-  if (/ticket-view\/.+\/summary/i.test(page.url())) return true;
-
-  // Still on the list: the search filtered it, so open the one row it left.
-  const link = page.getByRole("link", { name: new RegExp(ticketNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") }).first();
-  const fallback = page.locator(`text=${ticketNo}`).first();
-  const target = (await link.count()) > 0 ? link : fallback;
-  if ((await target.count()) === 0) {
-    log(`no row on the list matched ${ticketNo}`);
-    return false;
+  // The button immediately after the box in document order — the magnifier beside it.
+  const searchButton = box.locator("xpath=following::button[1]");
+  if ((await searchButton.count()) > 0) {
+    await searchButton.click({ timeout: 15000 }).catch(() => {});
+  } else {
+    log("  (no button found after the box — falling back to Enter)");
+    await box.press("Enter").catch(() => {});
   }
-  await target.click({ timeout: 20000 }).catch(() => {});
-  await page.waitForTimeout(3500);
+
+  // Either the app navigates, or it re-renders the list in place. Wait for the navigation
+  // and fall through to the list check when it does not come; 3.5 seconds was simply too
+  // short for a page that has to go and ask a server.
+  await page
+    .waitForURL(/ticket-view\/.+\/summary/i, { timeout: 20000 })
+    .catch(() => {});
+  if (/ticket-view\/.+\/summary/i.test(page.url())) {
+    log("  landed straight on Ticket/Details");
+    return true;
+  }
+
+  await page.waitForTimeout(2500);
+  const after = await visibleTickets(page);
+  log(`  still on the list — ${after.length} work order(s) showing: ${after.slice(0, 6).join(", ") || "(none)"}`);
+  if (after.length === before.length && after.length > 6) {
+    log("  the list did not change, so the search did not actually run");
+  }
+
+  const wanted = term.replace(/\D/g, "");
+  const match = after.find((t) => t.replace(/\D/g, "") === wanted);
+  if (!match) return false;
+
+  log(`  found ${match} on the list — opening it`);
+  await page.locator(`text=${match}`).first().click({ timeout: 20000 }).catch(() => {});
+  await page.waitForURL(/ticket-view\/.+\/summary/i, { timeout: 20000 }).catch(() => {});
   return /ticket-view\/.+\/summary/i.test(page.url());
+}
+
+/**
+ * Get to the ticket's Details page, trying both ways the work order is written.
+ *
+ * OpenCall holds `WO-035640797`; whether FieldEZ's box wants that or the bare digits is not
+ * something to guess at when asking costs one extra search. Whichever works is reported, so
+ * the real scraper is written knowing rather than hoping.
+ */
+async function openTicket(page: Page, ticketNo: string): Promise<boolean> {
+  const digits = ticketNo.replace(/\D/g, "");
+  const spellings = digits && digits !== ticketNo ? [ticketNo, digits] : [ticketNo];
+  for (const term of spellings) {
+    if (await trySearch(page, term)) {
+      log(`WORKS with "${term}"`);
+      return true;
+    }
+  }
+  return false;
 }
 
 async function run(): Promise<void> {
@@ -173,7 +226,10 @@ async function run(): Promise<void> {
   const slaResponses: Array<{ url: string; sample: string }> = [];
   page.on("response", (response) => {
     const url = response.url();
-    if (!/\/api\/|\/rest\/|json/i.test(url)) return;
+    // Everything except the static assets. Filtering FOR "/api/" assumed a URL shape nobody
+    // has checked, and a scraper that misses the one endpoint carrying the SLA because of a
+    // guess about its path is the expensive kind of wrong here.
+    if (/\.(js|css|png|jpe?g|svg|gif|ico|woff2?|ttf|map)(\?|$)/i.test(url)) return;
     void response
       .text()
       .then((body) => {
@@ -187,36 +243,35 @@ async function run(): Promise<void> {
   });
 
   try {
-    await openSummary(page);
     const landed = await openTicket(page, ticketNo);
     console.log(`\nURL after the search: ${page.url()}`);
+
     if (!landed) {
-      console.log("\nDid NOT reach a Ticket/Details page. Nothing to read.");
-      return;
-    }
-
-    // Let the details cards finish drawing; the SLA card fills in after the first paint.
-    await page.waitForTimeout(2500);
-    const text = await page.locator("body").innerText({ timeout: 20000 });
-    const lines = text.split("\n").map((line) => line.trim());
-
-    console.log("\nWHAT THE PAGE SAYS");
-    console.log("-".repeat(74));
-    for (const label of WANTED_LABELS) {
-      const value = valueAfter(lines, label);
-      console.log(`  ${label.padEnd(16)} ${value || "(blank)"}`);
-    }
-
-    // The raw neighbourhood, so a label that moved can be seen rather than guessed at.
-    const firstSla = lines.findIndex((line) => /^SLA /i.test(line));
-    if (firstSla >= 0) {
-      console.log("\nRAW LINES AROUND THE FIRST SLA LABEL (for when the reading above looks wrong)");
-      console.log("-".repeat(74));
-      for (const line of lines.slice(Math.max(0, firstSla - 4), firstSla + 16)) {
-        console.log(`  |${line}`);
-      }
+      console.log("\nDid NOT reach a Ticket/Details page — nothing to read off it.");
     } else {
-      console.log("\nNo line starting with 'SLA' was found on the page at all.");
+      // Let the details cards finish drawing; the SLA card fills in after the first paint.
+      await page.waitForTimeout(2500);
+      const text = await page.locator("body").innerText({ timeout: 20000 });
+      const lines = text.split("\n").map((line) => line.trim());
+
+      console.log("\nWHAT THE PAGE SAYS");
+      console.log("-".repeat(74));
+      for (const label of WANTED_LABELS) {
+        const value = valueAfter(lines, label);
+        console.log(`  ${label.padEnd(16)} ${value || "(blank)"}`);
+      }
+
+      // The raw neighbourhood, so a label that moved can be seen rather than guessed at.
+      const firstSla = lines.findIndex((line) => /^SLA /i.test(line));
+      if (firstSla >= 0) {
+        console.log("\nRAW LINES AROUND THE FIRST SLA LABEL (for when the reading above looks wrong)");
+        console.log("-".repeat(74));
+        for (const line of lines.slice(Math.max(0, firstSla - 4), firstSla + 16)) {
+          console.log(`  |${line}`);
+        }
+      } else {
+        console.log("\nNo line starting with 'SLA' was found on the page at all.");
+      }
     }
 
     console.log("\nAPI RESPONSES THAT MENTION SLA");
