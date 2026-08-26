@@ -275,6 +275,35 @@ function findTicketRecord(body: string, ticketNo: string): Record<string, unknow
   return null;
 }
 
+/**
+ * Every field in a JSON value, flattened to `a.b.c = value`.
+ *
+ * The SLA is somewhere in the ticket response and its field names are not guessable —
+ * neighbouring endpoints spell it `fzSla`, `slaType` and `sla` in the same breath. Rather
+ * than grep for one spelling, flatten the lot and let the names be read.
+ */
+function flatten(
+  node: unknown,
+  prefix = "",
+  out: Array<[string, string]> = [],
+  depth = 0,
+): Array<[string, string]> {
+  if (depth > 6) return out;
+  if (node === null || typeof node !== "object") {
+    out.push([prefix || "(root)", String(node)]);
+    return out;
+  }
+  if (Array.isArray(node)) {
+    // Three is enough to see the shape; a hundred activity entries are not the question.
+    node.slice(0, 3).forEach((value, i) => flatten(value, `${prefix}[${i}]`, out, depth + 1));
+    return out;
+  }
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    flatten(value, prefix ? `${prefix}.${key}` : key, out, depth + 1);
+  }
+  return out;
+}
+
 /** Every field of a record that holds a plain number — the id candidates. */
 function numericFields(record: Record<string, unknown>): Array<[string, number]> {
   const out: Array<[string, number]> = [];
@@ -327,6 +356,10 @@ async function run(): Promise<void> {
    * to the URL, or skip the browser and call the ticket API directly.
    */
   const ticketApiBodies: Array<{ url: string; body: string }> = [];
+  /** The body the frontend POSTs to search, so the same search can be made without a page. */
+  const searchRequests: Array<{ url: string; body: string }> = [];
+  /** `GET /tlm/v1.0/ticket/{id}` in full — the response the SLA has to be read out of. */
+  let detailBody = "";
   page.on("response", (response) => {
     const url = response.url();
     // Everything except the static assets. Filtering FOR "/api/" assumed a URL shape nobody
@@ -337,12 +370,27 @@ async function run(): Promise<void> {
     // "slaType", "slaLabel" — and there are a dozen of them. They are the page's dictionary,
     // not its data, and they buried the two real endpoints on the first run.
     if (/\/frontend\/assets\//i.test(url)) return;
-    apiCalls.add(`${response.request().method()} ${url.split("?")[0]}`);
+    const request = response.request();
+    apiCalls.add(`${request.method()} ${url.split("?")[0]}`);
+    // What the frontend POSTS to the search endpoint. Replaying that call directly is what
+    // turns nine hundred page loads into nine hundred fetches, and it cannot be replayed
+    // without knowing the body it expects.
+    if (request.method() === "POST" && /\/tlm\/v1\.0\/ticket\/summary-list/i.test(url)) {
+      const posted = request.postData();
+      if (posted && !searchRequests.some((r) => r.url === url)) {
+        searchRequests.push({ url, body: posted.slice(0, 1200) });
+      }
+    }
     void response
       .text()
       .then((body) => {
         if (/\/tlm\/v1\.0\/ticket\//i.test(url) && !ticketApiBodies.some((t) => t.url === url)) {
           ticketApiBodies.push({ url, body });
+        }
+        // The one endpoint that matters: GET /tlm/v1.0/ticket/{id}. It is the only response
+        // seen so far that both belongs to a single ticket and mentions SLA.
+        if (/\/tlm\/v1\.0\/ticket\/\d+(\?|$)/i.test(url) && !detailBody) {
+          detailBody = body;
         }
         if (!/sla/i.test(body)) return;
         if (slaResponses.some((r) => r.url === url)) return;
@@ -432,6 +480,42 @@ async function run(): Promise<void> {
         }
       } else {
         console.log("\nNo line starting with 'SLA' was found on the page at all.");
+      }
+    }
+
+    // ---- The two calls that would replace the browser entirely ----
+    console.log("\nWHAT THE FRONTEND POSTS TO SEARCH");
+    console.log("-".repeat(74));
+    if (searchRequests.length === 0) {
+      console.log("  the search POST was not captured.");
+    }
+    for (const request of searchRequests) {
+      console.log(`  ${request.url}`);
+      console.log(`    ${request.body}`);
+    }
+
+    console.log("\nTHE SLA FIELDS INSIDE  GET /tlm/v1.0/ticket/{id}");
+    console.log("-".repeat(74));
+    if (!detailBody) {
+      console.log("  that endpoint was never seen — the detail page may not have loaded.");
+    } else {
+      let flat: Array<[string, string]> = [];
+      try {
+        flat = flatten(JSON.parse(detailBody));
+      } catch {
+        console.log("  the response was not JSON. First 400 characters:");
+        console.log(`    ${detailBody.slice(0, 400)}`);
+      }
+      const slaish = flat.filter(([key]) => /sla|due|breach|target|resolv|escalat|priorit/i.test(key));
+      if (slaish.length === 0 && flat.length > 0) {
+        console.log(`  nothing SLA-shaped among its ${flat.length} fields.`);
+      }
+      for (const [key, value] of slaish) {
+        console.log(`  ${key} = ${value.slice(0, 120)}`);
+      }
+      if (flat.length > 0) {
+        console.log(`\n  (${flat.length} fields in total; every name it has:)`);
+        console.log(`  ${flat.map(([key]) => key).join(", ").slice(0, 2000)}`);
       }
     }
 
