@@ -22,6 +22,7 @@ import { engineerTargetRouter } from "./engineerTargetRoutes.js";
 import { inboundEmailRouter } from "./inboundEmailRoutes.js";
 import { renewalRouter } from "./renewalRoutes.js";
 import { payrollTrackingRouter } from "./payrollTrackingRoutes.js";
+import { fieldezSlaRouter } from "./fieldezSlaRoutes.js";
 
 export const apiRouter = Router();
 
@@ -48,3 +49,6 @@ apiRouter.use("/engineer-target", engineerTargetRouter);
 apiRouter.use("/customer-emails", inboundEmailRouter);
 apiRouter.use("/renewal", renewalRouter);
 apiRouter.use("/payroll-tracking", payrollTrackingRouter);
+// What FieldEZ promised about each open call. Written by the FieldEZ worker — the only
+// process holding a FieldEZ session — and read by every screen that shows an SLA.
+apiRouter.use("/fieldez-sla", fieldezSlaRouter);

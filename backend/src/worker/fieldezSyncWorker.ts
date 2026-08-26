@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
+import { runFieldezSlaSync } from "./fieldezSlaJob.js";
 
 /**
  * Standalone worker that mirrors the manual "download a report from FieldEZ → send it to
@@ -54,6 +55,12 @@ const config = {
   // inside an hour, so a slower poll just serves stale reconciliation numbers.
   closureIntervalMs: num("FIELDEZ_CLOSURE_INTERVAL_MS", 15 * 60 * 1000), // 15 min
   closureDateMode: str("FIELDEZ_CLOSURE_DATE_MODE", "today"),
+  // FieldEZ SLA. Unlike the two above this downloads no report: it asks FieldEZ's own API
+  // what it promised about each open call and hands the answers to OpenCall. Same cadence as
+  // the report jobs, and `FIELDEZ_SLA_ENABLED=false` turns it off without a code change.
+  slaEnabled: (process.env.FIELDEZ_SLA_ENABLED ?? "true").trim().toLowerCase() !== "false",
+  slaIntervalMs: num("FIELDEZ_SLA_INTERVAL_MS", 15 * 60 * 1000), // 15 min
+  fieldezBase: str("FIELDEZ_BASE_URL", "https://prod.fsmsupport.com").replace(/\/$/, ""),
   // Pause between two jobs that came due in the same cycle, so the second one does
   // not hit the API while the first one's report generation is still finishing.
   jobStaggerMs: num("FIELDEZ_JOB_STAGGER_MS", 60 * 1000),
@@ -647,6 +654,62 @@ async function syncClosure(page: Page): Promise<void> {
   );
 }
 
+/**
+ * Every open call's SLA, from FieldEZ's API rather than its pages.
+ *
+ * The reading and the batching live in fieldezSlaJob.ts; what stays here is the one thing
+ * that belongs to this file — talking to OpenCall with the token it already manages and
+ * refreshes. `postWithToken` retries once on an expired token, which a job running every
+ * fifteen minutes for weeks will eventually need.
+ */
+async function syncSla(livePage: Page): Promise<void> {
+  const outcome = await runFieldezSlaSync({
+    page: livePage,
+    fieldezBase: config.fieldezBase,
+    apiUrl: config.apiUrl,
+    log: (message: string) => log(`[sla] ${message}`),
+    push: async (records, prune) => {
+      const res = await postWithToken((token) =>
+        fetch(`${config.apiUrl}/api/v1/fieldez-sla/import`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            prune,
+            records: records.map((record) => ({
+              ticketNo: record.ticketNo,
+              caseId: record.caseId,
+              fieldezTicketId: record.fieldezTicketId,
+              bpId: record.bpId,
+              slaStatus: record.slaStatus,
+              slaPolicy: record.slaPolicy,
+              // ISO over the wire; the API parses either that or the raw epoch.
+              slaEndTime: record.slaEndTime ? record.slaEndTime.toISOString() : null,
+              priority: record.priority,
+              taskName: record.taskName,
+            })),
+          }),
+        }),
+      );
+      if (!res.ok) {
+        throw new Error(`SLA import returned ${res.status}`);
+      }
+      const body = (await res.json().catch(() => null)) as
+        | { data?: { written?: number } }
+        | null;
+      return Number(body?.data?.written ?? 0);
+    },
+  });
+  if (outcome.error) {
+    // Reported, not thrown. An empty list is FieldEZ having a bad minute, and letting it
+    // count as a cycle failure would march the worker towards its restart threshold over
+    // something that fixes itself.
+    log(`[sla] ${outcome.error}`);
+  }
+}
+
 interface Job {
   key: string;
   reportName: string;
@@ -671,6 +734,16 @@ function buildJobs(): Job[] {
       reportName: config.closureReportName,
       intervalMs: config.closureIntervalMs,
       run: syncClosure,
+      nextRunAt: 0,
+    });
+  }
+  if (config.slaEnabled) {
+    jobs.push({
+      key: "sla",
+      // No report to name — this one asks FieldEZ's API directly.
+      reportName: "open-call SLA (API)",
+      intervalMs: config.slaIntervalMs,
+      run: syncSla,
       nextRunAt: 0,
     });
   }
