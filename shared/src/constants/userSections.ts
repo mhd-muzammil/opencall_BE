@@ -31,6 +31,7 @@ export const USER_SECTIONS: readonly UserSectionOption[] = [
   { key: "warranty", label: "Warranty Lookup", group: "Data & Operations" },
   { key: "renewal-pipeline", label: "Renewal Pipeline", group: "Data & Operations" },
   { key: "productivity", label: "Engineer Productivity", group: "Dashboards" },
+  { key: "live-tracking", label: "Live Tracking", group: "Dashboards" },
 ];
 
 export const USER_SECTION_KEYS: readonly string[] = USER_SECTIONS.map(
