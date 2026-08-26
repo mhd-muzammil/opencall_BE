@@ -668,7 +668,7 @@ async function syncSla(livePage: Page): Promise<void> {
     fieldezBase: config.fieldezBase,
     apiUrl: config.apiUrl,
     log: (message: string) => log(`[sla] ${message}`),
-    push: async (records, prune) => {
+    push: async (records, prune, sweepStartedAt) => {
       const res = await postWithToken((token) =>
         fetch(`${config.apiUrl}/api/v1/fieldez-sla/import`, {
           method: "POST",
@@ -678,6 +678,7 @@ async function syncSla(livePage: Page): Promise<void> {
           },
           body: JSON.stringify({
             prune,
+            sweepStartedAt,
             records: records.map((record) => ({
               ticketNo: record.ticketNo,
               caseId: record.caseId,

@@ -2,7 +2,7 @@ import type { RequestHandler } from "express";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { badRequest } from "../utils/httpError.js";
 import {
-  deleteSlaMissingFrom,
+  deleteSlaOlderThan,
   getSlaFreshness,
   listAllSla,
   upsertSlaRecords,
@@ -56,14 +56,21 @@ function toNumberOrNull(value: unknown): number | null {
 /**
  * Take a sweep's worth of SLA readings.
  *
- * `prune` asks for calls FieldEZ no longer lists to be dropped. It is a flag rather than
- * automatic because it is only safe when the sweep actually completed: a partial sweep looks
- * identical to "every other call closed", and acting on that would empty the table on the
- * first night FieldEZ was slow. The worker sets it only when it got through the whole list.
+ * `prune` asks for calls FieldEZ no longer lists to be dropped, and `sweepStartedAt` says
+ * from when. It is a flag rather than automatic because it is only safe when the sweep
+ * actually completed: a partial sweep looks identical to "every other call closed", and
+ * acting on that would empty the table on the first night FieldEZ was slow.
+ *
+ * The cutoff is a TIMESTAMP and not the list of keys in this request. A sweep arrives in
+ * batches; "delete everything not in this request" deleted the two hundred rows written by
+ * the batch before it and left the table holding one call. Every row a sweep touches is
+ * stamped NOW(), so what it did not touch is exactly what predates its start.
  */
 export const importFieldezSlaController: RequestHandler = asyncHandler(
   async (request, response) => {
-    const body = request.body as { records?: unknown; prune?: unknown } | undefined;
+    const body = request.body as
+      | { records?: unknown; prune?: unknown; sweepStartedAt?: unknown }
+      | undefined;
     const incoming = body?.records;
     if (!Array.isArray(incoming)) {
       throw badRequest("Expected a `records` array of SLA readings", { field: "records" });
@@ -95,8 +102,11 @@ export const importFieldezSlaController: RequestHandler = asyncHandler(
 
     const written = await upsertSlaRecords(records);
     let removed = 0;
-    if (body?.prune === true && records.length > 0) {
-      removed = await deleteSlaMissingFrom(records.map((record) => record.ticketKey));
+    // Both conditions matter. Without a cutoff there is nothing to compare against, and
+    // pruning on a sweep that did not finish would delete calls that are simply still
+    // queued.
+    if (body?.prune === true && typeof body.sweepStartedAt === "string") {
+      removed = await deleteSlaOlderThan(body.sweepStartedAt);
     }
 
     response.status(201).json({

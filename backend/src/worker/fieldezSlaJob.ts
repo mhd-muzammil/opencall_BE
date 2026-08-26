@@ -263,14 +263,28 @@ export interface SlaSyncOptions {
   fieldezBase: string;
   /** OpenCall API base, e.g. http://opencall:4000 */
   apiUrl: string;
-  /** Sends one batch to OpenCall. Given as a function so the worker keeps its token logic. */
-  push: (records: readonly FieldezSlaRecord[], prune: boolean) => Promise<number>;
+  /**
+   * Sends one batch to OpenCall. Given as a function so the worker keeps its token logic.
+   *
+   * `sweepStartedAt` is what the pruning compares against — rows older than it are the ones
+   * this sweep did not touch. Passing the batch's own keys instead is what once deleted the
+   * two hundred rows written a second earlier.
+   */
+  push: (
+    records: readonly FieldezSlaRecord[],
+    prune: boolean,
+    sweepStartedAt: string,
+  ) => Promise<number>;
   log: (message: string) => void;
 }
 
 export async function runFieldezSlaSync(options: SlaSyncOptions): Promise<SlaSyncResult> {
   const { page, fieldezBase, push, log } = options;
   const result: SlaSyncResult = { listed: 0, read: 0, failed: 0, pushed: 0, complete: false };
+
+  // Stamped BEFORE anything is read, so a call that closes while the sweep is running is
+  // still counted as touched rather than pruned out from under it.
+  const sweepStartedAt = new Date().toISOString();
 
   const headers = await captureAuthHeaders(page, fieldezBase, log);
 
@@ -294,9 +308,10 @@ export async function runFieldezSlaSync(options: SlaSyncOptions): Promise<SlaSyn
   for (let index = 0; index < records.length; index += PUSH_BATCH) {
     const batch = records.slice(index, index + PUSH_BATCH);
     const last = index + PUSH_BATCH >= records.length;
-    // Pruning only on a complete sweep, and only with the last batch — the API compares
-    // against what it was just given, so pruning mid-way would delete the rows still queued.
-    result.pushed += await push(batch, last && result.complete);
+    // Pruning only on a complete sweep, and only once every batch is in. The API compares
+    // against `sweepStartedAt` rather than this batch's contents — comparing against the
+    // batch is what deleted the four hundred rows written moments earlier and left one.
+    result.pushed += await push(batch, last && result.complete, sweepStartedAt);
   }
 
   log(

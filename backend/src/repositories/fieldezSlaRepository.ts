@@ -160,15 +160,25 @@ export async function getSlaFreshness(): Promise<SlaFreshness> {
  * Forget calls FieldEZ no longer lists as open.
  *
  * A closed call keeps its row for ever otherwise, and its long-expired deadline goes on
- * counting as a breach in every total. Only rows NOT in the sweep's list are removed, and
- * only when the sweep actually returned something — an empty list means the fetch failed,
- * and treating that as "every call is closed" would empty the table on the first bad night.
+ * counting as a breach in every total.
+ *
+ * BY AGE, NOT BY LIST. The first version took the sweep's ticket keys and deleted everything
+ * else — correct in principle and catastrophic in practice, because a sweep arrives in
+ * batches. Four hundred calls came in as 200 + 200 + 1, the flag rode on the last batch, and
+ * "delete everything not in this request" deleted the four hundred that had just been
+ * written. The table held one row.
+ *
+ * Every row a sweep touches gets `fetched_at = NOW()`, so the rows it did NOT touch are
+ * exactly the ones older than the moment it started. One timestamp, no payload, and it
+ * cannot be fooled by batching.
  */
-export async function deleteSlaMissingFrom(ticketKeys: readonly string[]): Promise<number> {
-  if (ticketKeys.length === 0) return 0;
+export async function deleteSlaOlderThan(sweepStartedAt: string): Promise<number> {
+  if (!sweepStartedAt.trim()) return 0;
+  const cutoff = new Date(sweepStartedAt);
+  if (Number.isNaN(cutoff.getTime())) return 0;
   const result = await query(
-    `DELETE FROM fieldez_sla WHERE ticket_key <> ALL($1::TEXT[])`,
-    [ticketKeys],
+    `DELETE FROM fieldez_sla WHERE fetched_at < $1::timestamptz`,
+    [cutoff.toISOString()],
   );
   return result.rowCount ?? 0;
 }
