@@ -238,6 +238,53 @@ async function openTicket(page: Page, ticketNo: string): Promise<boolean> {
   return false;
 }
 
+/**
+ * The record in an API response that is about this work order.
+ *
+ * Walked rather than read from a known path, because the shape of the response is exactly
+ * what is not known yet. Any object holding a string whose digits are the work order's
+ * digits is the record — `WO-035640797` and `035640797` are the same ticket written two
+ * ways, and which one the API uses is another thing worth finding out rather than assuming.
+ */
+function findTicketRecord(body: string, ticketNo: string): Record<string, unknown> | null {
+  const wanted = ticketNo.replace(/\D/g, "");
+  if (!wanted) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const stack: unknown[] = [parsed];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (Array.isArray(node)) {
+      stack.push(...node);
+      continue;
+    }
+    if (node && typeof node === "object") {
+      const obj = node as Record<string, unknown>;
+      for (const value of Object.values(obj)) {
+        if (typeof value === "string" && /\d/.test(value) && value.replace(/\D/g, "") === wanted) {
+          return obj;
+        }
+      }
+      stack.push(...Object.values(obj));
+    }
+  }
+  return null;
+}
+
+/** Every field of a record that holds a plain number — the id candidates. */
+function numericFields(record: Record<string, unknown>): Array<[string, number]> {
+  const out: Array<[string, number]> = [];
+  for (const [key, value] of Object.entries(record)) {
+    if (typeof value === "number" && Number.isFinite(value)) out.push([key, value]);
+    else if (typeof value === "string" && /^\d{1,12}$/.test(value)) out.push([key, Number(value)]);
+  }
+  return out;
+}
+
 async function run(): Promise<void> {
   const ticketNo = (process.argv[2] ?? "").trim();
   if (!ticketNo) {
@@ -268,6 +315,18 @@ async function run(): Promise<void> {
   /** Every server call the page made, so the ticket endpoint is visible even if its SLA
    *  field happens to be spelled some way this does not grep for. */
   const apiCalls = new Set<string>();
+  /**
+   * What the ticket API actually returned.
+   *
+   * Clicking the work order on the list is turning out to be the hard way: it is not a
+   * link, and clicking the cell it lives in does nothing a person's click does. But the
+   * page found that ticket by asking `POST /tlm/v1.0/ticket/summary-list/search`, and the
+   * detail URL is built from two numbers — `/ticket-view/2/1044258/summary`, where 2 looks
+   * like the business process and 1044258 like the ticket's own id. Both must be in that
+   * response, and if they are then the whole clicking problem disappears: navigate straight
+   * to the URL, or skip the browser and call the ticket API directly.
+   */
+  const ticketApiBodies: Array<{ url: string; body: string }> = [];
   page.on("response", (response) => {
     const url = response.url();
     // Everything except the static assets. Filtering FOR "/api/" assumed a URL shape nobody
@@ -282,6 +341,9 @@ async function run(): Promise<void> {
     void response
       .text()
       .then((body) => {
+        if (/\/tlm\/v1\.0\/ticket\//i.test(url) && !ticketApiBodies.some((t) => t.url === url)) {
+          ticketApiBodies.push({ url, body });
+        }
         if (!/sla/i.test(body)) return;
         if (slaResponses.some((r) => r.url === url)) return;
         slaResponses.push({ url, sample: body.slice(0, 600) });
@@ -292,8 +354,58 @@ async function run(): Promise<void> {
   });
 
   try {
-    const landed = await openTicket(page, ticketNo);
+    let landed = await openTicket(page, ticketNo);
     console.log(`\nURL after the search: ${page.url()}`);
+
+    // ---- What the search API said, and whether the detail URL can be built from it ----
+    console.log("\nWHAT THE TICKET API RETURNED");
+    console.log("-".repeat(74));
+    let record: Record<string, unknown> | null = null;
+    if (ticketApiBodies.length === 0) {
+      console.log("  the ticket API was never seen.");
+    }
+    for (const captured of ticketApiBodies) {
+      const found = findTicketRecord(captured.body, ticketNo);
+      console.log(`  ${captured.url}`);
+      if (!found) {
+        console.log(`    no record in it carried ${ticketNo}`);
+        continue;
+      }
+      record = record ?? found;
+      console.log(`    fields: ${Object.keys(found).join(", ")}`);
+      console.log(`    ${JSON.stringify(found).slice(0, 1400)}`);
+    }
+
+    // Clicking the row is proving to be the hard way in. If the record carries the two
+    // numbers the detail URL is made of, there is no need to click anything at all — and
+    // that is also the shape the real scraper wants, since a URL can be visited nine hundred
+    // times without a list page in between.
+    if (!landed && record) {
+      const numbers = numericFields(record);
+      console.log(`\n  numeric fields to build /ticket-view/<a>/<b>/summary from:`);
+      for (const [key, value] of numbers) console.log(`    ${key} = ${value}`);
+
+      const big = numbers.filter(([, v]) => v >= 10_000);
+      const small = numbers.filter(([, v]) => v > 0 && v < 1000);
+      const tried = new Set<string>();
+      outer: for (const [idKey, id] of big) {
+        for (const [bpKey, bp] of small.length > 0 ? small : ([["guess", 2]] as Array<[string, number]>)) {
+          const url = `https://prod.fsmsupport.com/frontend/tlm/ticket-view/${bp}/${id}/summary`;
+          if (tried.has(url) || tried.size >= 6) break outer;
+          tried.add(url);
+          log(`trying ${bpKey}=${bp}, ${idKey}=${id} → ${url}`);
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+          await page.waitForTimeout(3000);
+          const text = await page.locator("body").innerText({ timeout: 15000 }).catch(() => "");
+          if (text.includes(ticketNo) && /SLA/i.test(text)) {
+            log(`  WORKED — the detail URL is /ticket-view/${bpKey}/${idKey}/summary`);
+            landed = true;
+            break outer;
+          }
+          log(`  no — that URL did not show ${ticketNo}`);
+        }
+      }
+    }
 
     if (!landed) {
       console.log("\nDid NOT reach a Ticket/Details page — nothing to read off it.");
