@@ -173,9 +173,50 @@ async function trySearch(page: Page, term: string): Promise<boolean> {
   if (!match) return false;
 
   log(`  found ${match} on the list — opening it`);
-  await page.locator(`text=${match}`).first().click({ timeout: 20000 }).catch(() => {});
-  await page.waitForURL(/ticket-view\/.+\/summary/i, { timeout: 20000 }).catch(() => {});
-  return /ticket-view\/.+\/summary/i.test(page.url());
+  return openTicketRow(page, match);
+}
+
+/**
+ * Click the work order on the filtered list and end up on its Details page.
+ *
+ * `text=WO-…` was the obvious way and it silently did nothing. The trouble with a bare text
+ * selector is that it matches the FIRST node containing those characters, which on this page
+ * is a wrapper the click passes straight through — and a click that lands on nothing looks
+ * exactly like a click that landed and was ignored. The work order is rendered as a link, so
+ * the link is what to ask for.
+ *
+ * Several ways are tried because only FieldEZ knows which one it built, and each is reported
+ * as it is attempted: when this breaks again, the log should say which selector stopped
+ * matching rather than only that nothing happened.
+ */
+async function openTicketRow(page: Page, wo: string): Promise<boolean> {
+  const escaped = wo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const attempts: Array<[string, ReturnType<Page["locator"]>]> = [
+    ["role=link", page.getByRole("link", { name: new RegExp(escaped, "i") }).first()],
+    ["a:has-text", page.locator(`a:has-text("${wo}")`).first()],
+    ["td:has-text", page.locator(`td:has-text("${wo}")`).first()],
+    ["any text node", page.getByText(wo, { exact: false }).first()],
+  ];
+
+  for (const [name, target] of attempts) {
+    const count = await target.count().catch(() => 0);
+    if (count === 0) {
+      log(`    ${name}: no match`);
+      continue;
+    }
+    const visible = await target.isVisible().catch(() => false);
+    log(`    ${name}: found${visible ? "" : " but not visible"} — clicking`);
+    await target.click({ timeout: 15000, force: !visible }).catch((error: unknown) => {
+      log(`    ${name}: click failed — ${error instanceof Error ? error.message : String(error)}`);
+    });
+    await page.waitForURL(/ticket-view\/.+\/summary/i, { timeout: 15000 }).catch(() => {});
+    if (/ticket-view\/.+\/summary/i.test(page.url())) {
+      log(`    ${name}: WORKED`);
+      return true;
+    }
+    log(`    ${name}: still at ${page.url()}`);
+  }
+  return false;
 }
 
 /**
@@ -224,12 +265,20 @@ async function run(): Promise<void> {
   // Anything the frontend fetched that mentions SLA. This is the whole reason a cheap,
   // frequent refresh might be possible instead of an hourly crawl.
   const slaResponses: Array<{ url: string; sample: string }> = [];
+  /** Every server call the page made, so the ticket endpoint is visible even if its SLA
+   *  field happens to be spelled some way this does not grep for. */
+  const apiCalls = new Set<string>();
   page.on("response", (response) => {
     const url = response.url();
     // Everything except the static assets. Filtering FOR "/api/" assumed a URL shape nobody
     // has checked, and a scraper that misses the one endpoint carrying the SLA because of a
     // guess about its path is the expensive kind of wrong here.
     if (/\.(js|css|png|jpe?g|svg|gif|ico|woff2?|ttf|map)(\?|$)/i.test(url)) return;
+    // The translation bundles under /frontend/assets/i18n all contain the word "sla" —
+    // "slaType", "slaLabel" — and there are a dozen of them. They are the page's dictionary,
+    // not its data, and they buried the two real endpoints on the first run.
+    if (/\/frontend\/assets\//i.test(url)) return;
+    apiCalls.add(`${response.request().method()} ${url.split("?")[0]}`);
     void response
       .text()
       .then((body) => {
@@ -274,7 +323,11 @@ async function run(): Promise<void> {
       }
     }
 
-    console.log("\nAPI RESPONSES THAT MENTION SLA");
+    console.log("\nEVERY SERVER CALL THE PAGE MADE");
+    console.log("-".repeat(74));
+    for (const call of [...apiCalls].sort()) console.log(`  ${call}`);
+
+    console.log("\nRESPONSES THAT MENTION SLA");
     console.log("-".repeat(74));
     if (slaResponses.length === 0) {
       console.log("  none — the SLA is only in the HTML, so each ticket costs a page load.");
@@ -283,8 +336,8 @@ async function run(): Promise<void> {
         console.log(`  ${response.url}`);
         console.log(`    ${response.sample.replace(/\s+/g, " ").slice(0, 400)}`);
       }
-      console.log("\n  ^ If one of these carries the SLA, every ticket can be read by calling it");
-      console.log("    directly — minutes for all of them instead of an hour.");
+      console.log("\n  ^ If one of these carries this ticket's SLA, every ticket can be read by");
+      console.log("    calling it directly — minutes for all of them instead of an hour.");
     }
   } catch (error) {
     console.error("\nFAILED:", error instanceof Error ? error.message : error);
