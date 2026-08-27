@@ -228,7 +228,8 @@ const RECORDS_PAGE_VISIBLE_SQL = `
  * recently touched — the same "latest wins" rule the Evening-status authority uses.
  */
 async function loadDayRows(
-  reportDate: string,
+  fromDate: string,
+  toDate: string,
   allowedAspCodes: string[] | null,
 ): Promise<ClosedHereRow[]> {
   const result = await query<{
@@ -262,7 +263,7 @@ async function loadDayRows(
               ) AS rn
          FROM daily_call_plan_report_rows rows
          JOIN daily_call_plan_reports reports ON reports.id = rows.report_id
-        WHERE reports.report_date = $1::date
+        WHERE reports.report_date BETWEEN $1::date AND $2::date
           AND NOT rows.is_excluded${RECORDS_PAGE_VISIBLE_SQL}
      )
      SELECT ticket_id,
@@ -275,8 +276,8 @@ async function loadDayRows(
                     'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS closed_at
        FROM day_rows
       WHERE rn = 1
-        AND ($2::text[] IS NULL OR asp_code = ANY($2::text[]))`,
-    [reportDate, allowedAspCodes],
+        AND ($3::text[] IS NULL OR asp_code = ANY($3::text[]))`,
+    [fromDate, toDate, allowedAspCodes],
   );
 
   return result.rows.map((row) => ({
@@ -296,7 +297,8 @@ async function loadDayRows(
  * but an ASP-scoped principal must never see one, so the scope filter excludes blanks.
  */
 async function loadFlexClosures(
-  closedOn: string,
+  fromDate: string,
+  toDate: string,
   allowedAspCodes: string[] | null,
 ): Promise<FlexClosureRow[]> {
   const result = await query<{
@@ -312,10 +314,10 @@ async function loadFlexClosures(
             closure_status,
             to_char(closure_date, 'DD-MM-YYYY')          AS closure_date
        FROM case_closure_dates
-      WHERE closed_on = $1::date
-        AND ($2::text[] IS NULL
-             OR UPPER(TRIM(COALESCE(work_location, ''))) = ANY($2::text[]))`,
-    [closedOn, allowedAspCodes],
+      WHERE closed_on BETWEEN $1::date AND $2::date
+        AND ($3::text[] IS NULL
+             OR UPPER(TRIM(COALESCE(work_location, ''))) = ANY($3::text[]))`,
+    [fromDate, toDate, allowedAspCodes],
   );
 
   return result.rows.map((row) => ({
@@ -329,6 +331,12 @@ async function loadFlexClosures(
 
 export async function reconcileClosuresForDate(input: {
   date: string;
+  /**
+   * The last day of the period, inclusive. Omitted means the single day `date` — which is
+   * what every caller asked for before there was a range, and `BETWEEN d AND d` is exactly
+   * `= d`, so their query is unchanged rather than merely equivalent.
+   */
+  toDate?: string;
   /** ASP codes the caller may read, or null for unrestricted. */
   allowedAspCodes: string[] | null;
   /** Narrow to one ASP; '' = every ASP the caller may read. */
@@ -338,10 +346,11 @@ export async function reconcileClosuresForDate(input: {
   // A single-ASP request intersects with the caller's scope; the controller has already
   // rejected an ASP outside it, so this is just the narrowing.
   const scope = asp ? [asp] : input.allowedAspCodes;
+  const toDate = (input.toDate ?? "").trim() || input.date;
 
   const [closedHere, flexClosures] = await Promise.all([
-    loadDayRows(input.date, scope),
-    loadFlexClosures(input.date, scope),
+    loadDayRows(input.date, toDate, scope),
+    loadFlexClosures(input.date, toDate, scope),
   ]);
 
   return bucketReconciliation({

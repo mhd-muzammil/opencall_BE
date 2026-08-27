@@ -177,6 +177,19 @@ export const getClosureReconciliationController: RequestHandler = asyncHandler(
       });
     }
 
+    // The last day of the period, inclusive. Absent means the single day `date`, which is
+    // what this endpoint has always answered — so a caller that sends no `to` gets the
+    // identical query it got before the range existed.
+    const toDate = String(request.query.to ?? "").trim();
+    if (toDate && !RECONCILIATION_DATE.test(toDate)) {
+      throw badRequest("`to` must be of the form YYYY-MM-DD", { field: "to" });
+    }
+    // Refused rather than swapped: a range quietly turned around would report a period
+    // nobody chose and nobody would notice choosing.
+    if (toDate && toDate < date) {
+      throw badRequest("`to` must be on or after `date`", { field: "to" });
+    }
+
     const asp = String(request.query.asp ?? "").trim().toUpperCase();
     // Same guard as /records: an out-of-scope `asp` is a 403, never a silent empty list.
     const allowed = await allowedAspCodesForRequest(request);
@@ -187,6 +200,7 @@ export const getClosureReconciliationController: RequestHandler = asyncHandler(
     response.json({
       data: await reconcileClosuresForDate({
         date,
+        ...(toDate ? { toDate } : {}),
         allowedAspCodes: aspScopeToArray(allowed),
         aspCode: asp,
       }),

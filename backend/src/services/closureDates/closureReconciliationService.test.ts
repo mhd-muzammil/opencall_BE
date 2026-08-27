@@ -243,8 +243,36 @@ describe("reconcileClosuresForDate — the day's row set", () => {
     });
 
     expect(mocks.query).toHaveBeenCalledTimes(2);
+    // The scope is the LAST parameter of both queries; the two before it are the day bounds.
     for (const [, params] of mocks.query.mock.calls) {
-      expect((params as unknown[])[1]).toEqual(["ASPS01461"]);
+      const list = params as unknown[];
+      expect(list[list.length - 1]).toEqual(["ASPS01461"]);
+    }
+  });
+
+  it("asks for a single day when no end date is given", async () => {
+    // `BETWEEN d AND d` is exactly `= d`, so a caller that knows nothing about ranges gets
+    // the query it always got rather than one that merely behaves the same.
+    await reconcileClosuresForDate({ date: "2026-07-31", allowedAspCodes: null });
+
+    for (const [, params] of mocks.query.mock.calls) {
+      expect(params as unknown[]).toEqual(
+        expect.arrayContaining(["2026-07-31", "2026-07-31"]),
+      );
+    }
+  });
+
+  it("asks for the whole period when an end date is given", async () => {
+    await reconcileClosuresForDate({
+      date: "2026-07-01",
+      toDate: "2026-07-31",
+      allowedAspCodes: null,
+    });
+
+    for (const [sql, params] of mocks.query.mock.calls as Array<[string, unknown[]]>) {
+      expect(sql.replace(/\s+/g, " ")).toContain("BETWEEN $1::date AND $2::date");
+      expect(params[0]).toBe("2026-07-01");
+      expect(params[1]).toBe("2026-07-31");
     }
   });
 });
