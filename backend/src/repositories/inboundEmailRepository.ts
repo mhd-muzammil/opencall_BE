@@ -411,6 +411,9 @@ export async function listInboundEmails(params: {
   ticketId?: string;
   /** Cab mail only — what the CAB button opens. */
   cabOnly?: boolean;
+  /** Inclusive day bounds, `YYYY-MM-DD`, read as IST days. Either may stand alone. */
+  receivedFrom?: string;
+  receivedTo?: string;
 }): Promise<InboundEmailRow[]> {
   const conditions: string[] = [];
   const values: unknown[] = [];
@@ -438,6 +441,27 @@ export async function listInboundEmails(params: {
   if (params.cabOnly) {
     values.push(CAB_MAIL_PATTERN);
     conditions.push(`(from_email ~* $${values.length} OR subject ~* $${values.length})`);
+  }
+  // A day means the day somebody in the office lived through, so both bounds are anchored to
+  // IST midnight rather than to the server's. Compared as a plain timestamptz the boundary
+  // would fall at 05:30 IST, and mail that arrived at six in the morning on the "from" day
+  // would be left out of a range that plainly includes it.
+  //
+  // The upper bound is the START of the day after, so the "to" day is included whole. `<= to`
+  // would stop at its midnight and drop everything that arrived during it.
+  const receivedFrom = params.receivedFrom?.trim();
+  if (receivedFrom) {
+    values.push(receivedFrom);
+    conditions.push(
+      `received_at >= ($${values.length}::date)::timestamp AT TIME ZONE 'Asia/Kolkata'`,
+    );
+  }
+  const receivedTo = params.receivedTo?.trim();
+  if (receivedTo) {
+    values.push(receivedTo);
+    conditions.push(
+      `received_at < (($${values.length}::date) + 1)::timestamp AT TIME ZONE 'Asia/Kolkata'`,
+    );
   }
   values.push(params.limit);
   const limitAt = values.length;

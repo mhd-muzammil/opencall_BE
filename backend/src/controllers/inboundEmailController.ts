@@ -56,8 +56,27 @@ export const listInboundEmailsController: RequestHandler = asyncHandler(
     const cabParam = String(request.query.cabOnly ?? "").trim().toLowerCase();
     const cabOnly = cabParam === "1" || cabParam === "true";
 
+    // Inclusive day bounds. Anything that is not exactly `YYYY-MM-DD` is dropped rather than
+    // guessed at: a half-understood date would silently return the wrong period, and a
+    // period nobody can see is wrong is worse than no filter.
+    const day = (value: unknown) => {
+      const text = String(value ?? "").trim();
+      return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
+    };
+    const receivedFrom = day(request.query.from);
+    const receivedTo = day(request.query.to);
+
     const [rows, mailboxes, counts] = await Promise.all([
-      listInboundEmails({ status, regionCodes, limit, offset, ticketId, cabOnly }),
+      listInboundEmails({
+        status,
+        regionCodes,
+        limit,
+        offset,
+        ticketId,
+        cabOnly,
+        receivedFrom,
+        receivedTo,
+      }),
       listActiveMailboxes(),
       // Of everything held, not of this page — the header's tallies are about the mailbox,
       // and a page that shows 200 of 743 should say so.
