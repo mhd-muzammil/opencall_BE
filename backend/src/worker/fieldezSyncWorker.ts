@@ -468,9 +468,10 @@ function describeFailure(raw: string, body: unknown): string {
 }
 
 /**
- * Send the closure workbook to the merge import. `mode=merge` is what stops a today-only
- * download from wiping every earlier day — the default `replace` runs an unconditional
- * DELETE of the whole table.
+ * Send the closure workbook to the merge import. Merge is what stops a today-only
+ * download from wiping every earlier day: `replace` runs an unconditional DELETE of
+ * the whole table. It is stated here rather than left to the server's default,
+ * because a today-only feed must never depend on which way that default points.
  */
 async function importClosureToOpenCall(filePath: string): Promise<ClosureImportOutcome> {
   const buf = readFileSync(filePath);

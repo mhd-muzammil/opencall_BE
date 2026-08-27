@@ -23,14 +23,41 @@ import { recordActivity } from "../services/audit/activityLogger.js";
 /**
  * Imports the Flex Closure ASP Report. Two modes, chosen by the optional `mode` field:
  *
- *   replace (default) — the manual "Import Closure Dates" button. Wipes and reloads the
- *                       whole set, exactly as it always has.
- *   merge             — the hourly FieldEZ auto-sync. Touches ONLY the work orders in
- *                       this file, so a today-only download cannot erase history.
+ *   merge (default) — touches ONLY the work orders in this file, so a partial download
+ *                     can add and refresh closures but can never erase any.
+ *   replace         — wipes the whole set and reloads it from this file. Now only
+ *                     reachable by asking for it by name, because asking for it by
+ *                     accident cost three weeks of closure history.
+ *
+ * Replace used to be the default, and the import button sent no mode at all — so every
+ * manual import wiped the table and refilled it from whatever that one file held. On
+ * 2026-08-27 an import of a partial export took the stored closures down to 24 Jul and
+ * left 25-26 Aug missing entirely, which read on the dashboard as "no calls closed".
+ * Nothing recovered it either: the auto-sync merges today's keys only, so it happily
+ * topped up today on top of a table that had lost its history.
+ *
+ * Merge is the safe default because a closure export is an ADDITIVE fact — it says what
+ * closed, never what un-closed. The one thing replace does that merge cannot is drop
+ * stored closures the source no longer lists, which is rare, destructive, and worth
+ * having to type out.
  *
  * The uploaded file is always deleted afterwards. Regenerating or reopening a report then
  * shows each matched row's Case Closed Date and the vendor's own Flex Status.
  */
+/**
+ * Which import mode a request asked for.
+ *
+ * ONLY an explicit "replace" wipes the table. Everything else merges: a blank
+ * field, a typo, a client that sends no mode at all. A caller that does not say
+ * which it wants gets the one that cannot destroy data — the opposite of this
+ * rule is what emptied three weeks of closure history on 2026-08-27.
+ *
+ * Multipart fields arrive as strings, hence the coercion.
+ */
+export function resolveClosureImportMode(raw: unknown): ClosureImportMode {
+  return String(raw ?? "").trim().toLowerCase() === "replace" ? "replace" : "merge";
+}
+
 export const importClosureDatesController: RequestHandler = asyncHandler(
   async (request, response) => {
     const currentUser = requireCurrentUser(request.currentUser);
@@ -41,10 +68,7 @@ export const importClosureDatesController: RequestHandler = asyncHandler(
       });
     }
 
-    // Multipart fields arrive as strings. Anything other than an explicit "merge" keeps
-    // the historical replace behaviour, so an older client is unaffected.
-    const rawMode = String(request.body?.mode ?? "").trim().toLowerCase();
-    const mode: ClosureImportMode = rawMode === "merge" ? "merge" : "replace";
+    const mode = resolveClosureImportMode(request.body?.mode);
     const isAuto = String(request.body?.source ?? "").trim().toUpperCase() === "AUTO";
 
     try {
