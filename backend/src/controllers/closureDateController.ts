@@ -161,6 +161,33 @@ export const listClosureDateRecordsController: RequestHandler = asyncHandler(
 const RECONCILIATION_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
+ * The longest period one reconciliation request may ask about.
+ *
+ * Thirty-one days covers "this month", which is the question people actually ask. Beyond
+ * that the query stops being a lookup and becomes a report: it reads every row of every
+ * daily report in the period and window-functions over them, holding one of the API's ten
+ * database connections for as long as it runs.
+ */
+export const MAX_RECONCILIATION_DAYS = 31;
+
+/**
+ * Whole days from one YYYY-MM-DD to another, both parsed as UTC midnight.
+ *
+ * UTC on both sides on purpose: parsed as local dates, a range spanning a daylight-saving
+ * change is 30.96 days and rounds differently than the same range in January. The bound is
+ * about how much work the query does, and that does not change with the clocks.
+ *
+ * Exported for the tests that pin the boundary — an off-by-one in a guard is a guard that
+ * lets through exactly the request it was written to stop.
+ */
+export function daysBetween(from: string, to: string): number {
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  if (Number.isNaN(start) || Number.isNaN(end)) return 0;
+  return Math.round((end - start) / 86_400_000);
+}
+
+/**
  * "Did Flex agree with us on this day?" Query params:
  *   date — "YYYY-MM-DD" (required)
  *   asp  — narrow to one ASP code, or "" for every region the caller may read
@@ -188,6 +215,22 @@ export const getClosureReconciliationController: RequestHandler = asyncHandler(
     // nobody chose and nobody would notice choosing.
     if (toDate && toDate < date) {
       throw badRequest("`to` must be on or after `date`", { field: "to" });
+    }
+    // A ceiling on how much work one request may ask for.
+    //
+    // Reconciliation reads every report row in the period and window-functions over them.
+    // One day is cheap; a quarter is not, and it holds one of the API's ten database
+    // connections for as long as it takes. On 2026-08-27 that pool was emptied by two
+    // concurrent report generations and everything else on the server — login, the health
+    // check — began failing with "timeout exceeded when trying to connect". A range nobody
+    // bounded is a second way to reach the same place, from a date picker.
+    //
+    // Thirty-one days covers "this month", which is the question actually being asked.
+    if (toDate && daysBetween(date, toDate) > MAX_RECONCILIATION_DAYS) {
+      throw badRequest(
+        `A reconciliation period may span at most ${MAX_RECONCILIATION_DAYS} days`,
+        { field: "to" },
+      );
     }
 
     const asp = String(request.query.asp ?? "").trim().toUpperCase();
