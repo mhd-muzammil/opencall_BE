@@ -1,4 +1,5 @@
 import { query } from "../config/database.js";
+import { CAB_MAIL_PATTERN } from "../services/inboundEmail/cabMailFilter.js";
 
 /**
  * Storage for the customer email ingest (Stage 1, read-only).
@@ -408,6 +409,8 @@ export async function listInboundEmails(params: {
   offset?: number;
   /** One work order's mail only — what the report row's envelope marker opens. */
   ticketId?: string;
+  /** Cab mail only — what the CAB button opens. */
+  cabOnly?: boolean;
 }): Promise<InboundEmailRow[]> {
   const conditions: string[] = [];
   const values: unknown[] = [];
@@ -427,6 +430,14 @@ export async function listInboundEmails(params: {
   if (ticketId) {
     values.push(ticketId);
     conditions.push(`UPPER(TRIM(matched_ticket_id)) = UPPER(TRIM($${values.length}))`);
+  }
+  // In SQL for the same reason as the work order above: cab mail from last week is older
+  // than the page the list holds, and filtering the loaded page would show nothing and read
+  // as "there is no cab mail". The pattern is the one `cabMailFilter` tests, passed as a
+  // parameter so the two cannot drift apart.
+  if (params.cabOnly) {
+    values.push(CAB_MAIL_PATTERN);
+    conditions.push(`(from_email ~* $${values.length} OR subject ~* $${values.length})`);
   }
   values.push(params.limit);
   const limitAt = values.length;

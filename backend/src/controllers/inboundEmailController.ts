@@ -51,8 +51,13 @@ export const listInboundEmailsController: RequestHandler = asyncHandler(
     // in SQL, not in the reader: that WO's mail can be older than the page the list holds.
     const ticketId = String(request.query.ticketId ?? "").trim();
 
+    // Cab mail only. Absent or anything but "1"/"true" leaves the list exactly as it was, so
+    // every existing caller is unaffected.
+    const cabParam = String(request.query.cabOnly ?? "").trim().toLowerCase();
+    const cabOnly = cabParam === "1" || cabParam === "true";
+
     const [rows, mailboxes, counts] = await Promise.all([
-      listInboundEmails({ status, regionCodes, limit, offset, ticketId }),
+      listInboundEmails({ status, regionCodes, limit, offset, ticketId, cabOnly }),
       listActiveMailboxes(),
       // Of everything held, not of this page — the header's tallies are about the mailbox,
       // and a page that shows 200 of 743 should say so.
