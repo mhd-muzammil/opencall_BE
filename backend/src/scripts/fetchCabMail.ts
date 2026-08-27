@@ -55,6 +55,22 @@ const DEFAULT_MONTHS = 2;
 /** Per mailbox, per run. A guard against a search that matches half an inbox. */
 const MAX_PER_MAILBOX = Number(process.env.CAB_FETCH_MAX ?? 500) || 500;
 
+/**
+ * Folders that hold mail somebody received, wherever they have since filed it.
+ *
+ * INBOX alone found six messages across six mailboxes in two months, which is not what two
+ * months of cab mail looks like. Read mail gets moved — into a folder per subject, into an
+ * archive, by a server rule — and a search of the inbox cannot see any of it.
+ *
+ * Sent is excluded because this table is received mail; storing outgoing mail here would
+ * make it read as though the customer had written to us. Trash, Junk and Drafts are
+ * excluded because they are, respectively, deleted, not ours, and never sent.
+ */
+function isReceivedFolder(path: string): boolean {
+  const leaf = (path.split(/[./]/).pop() ?? "").trim().toLowerCase();
+  return !/^(sent|trash|deleted|junk|spam|draft)/.test(leaf);
+}
+
 function monthsBefore(date: Date, months: number): Date {
   // Same care as the screen's date picker: `setMonth` alone turns "one month before 31
   // March" into 3 March, because February has no 31st and the surplus spills forward.
@@ -200,36 +216,55 @@ async function run(): Promise<void> {
     let notCab = 0;
     try {
       await client.connect();
-      const lock = await client.getMailboxLock("INBOX");
-      try {
-        // Two questions of the server, deduplicated: the word in the subject, and the word in
-        // the sender. Asking only about the subject would miss a booking desk that writes
-        // nothing useful in it.
-        const uids = new Set<number>();
-        for (const criteria of [
-          { since, subject: "cab" },
-          { since, from: "cab" },
-        ]) {
-          try {
-            const found = await client.search(criteria, { uid: true });
-            for (const uid of Array.isArray(found) ? found : []) {
-              const value = Number(uid);
-              if (Number.isInteger(value) && value > 0) uids.add(value);
-              if (uids.size >= MAX_PER_MAILBOX) break;
-            }
-          } catch (error) {
-            console.error(
-              `  search failed on ${mailbox.email}:`,
-              error instanceof Error ? error.message : error,
-            );
-          }
-        }
 
-        if (uids.size === 0) {
-          console.log(`${mailbox.email} — nothing matched`);
-        } else {
+      // Every folder that holds received mail, not just INBOX. Read mail gets filed away,
+      // and the first run of this searched only the inbox and found six messages in two
+      // months across six mailboxes — which is not what two months of cab mail looks like.
+      const folders = (await client.list())
+        .map((box) => String(box.path ?? "").trim())
+        .filter((path) => path && isReceivedFolder(path));
+      console.log(`${mailbox.email} — ${folders.length} folder(s): ${folders.join(", ")}`);
+
+      let matchedHere = 0;
+      for (const folder of folders) {
+        let lock;
+        try {
+          lock = await client.getMailboxLock(folder);
+        } catch (error) {
+          console.error(
+            `  could not open ${folder}:`,
+            error instanceof Error ? error.message : error,
+          );
+          continue;
+        }
+        try {
+          // Two questions of the server, deduplicated: the word in the subject, and the word
+          // in the sender. Asking only about the subject would miss a booking desk that
+          // writes nothing useful in it.
+          const uids = new Set<number>();
+          for (const criteria of [
+            { since, subject: "cab" },
+            { since, from: "cab" },
+          ]) {
+            try {
+              const found = await client.search(criteria, { uid: true });
+              for (const uid of Array.isArray(found) ? found : []) {
+                const value = Number(uid);
+                if (Number.isInteger(value) && value > 0) uids.add(value);
+                if (uids.size >= MAX_PER_MAILBOX) break;
+              }
+            } catch (error) {
+              console.error(
+                `  search failed in ${folder}:`,
+                error instanceof Error ? error.message : error,
+              );
+            }
+          }
+          if (uids.size === 0) continue;
+
           const list = [...uids].sort((a, b) => a - b);
-          console.log(`${mailbox.email} — ${list.length} message(s) matched, fetching…`);
+          matchedHere += list.length;
+          console.log(`  ${folder} — ${list.length} matched, fetching…`);
           for await (const message of client.fetch(
             list,
             { uid: true, envelope: true, source: true },
@@ -252,10 +287,11 @@ async function run(): Promise<void> {
               );
             }
           }
+        } finally {
+          lock.release();
         }
-      } finally {
-        lock.release();
       }
+      if (matchedHere === 0) console.log(`  nothing matched in any folder`);
     } catch (error) {
       console.error(`${mailbox.email} — failed:`, error instanceof Error ? error.message : error);
     } finally {
