@@ -143,7 +143,13 @@ export const getClosureDatesSummaryController: RequestHandler = asyncHandler(
         ...summary,
         byAsp,
         byAspMonth: summary.byAspMonth.filter((entry) => inScope(entry.aspCode)),
+        // Every headline figure is re-summed from the in-scope regions. The outcome
+        // split has to be re-summed alongside `total` — left at the unscoped value it
+        // would leak the completions/cancellations of regions this principal cannot see.
         total: byAsp.reduce((sum, entry) => sum + entry.count, 0),
+        closed: byAsp.reduce((sum, entry) => sum + entry.closed, 0),
+        cancelled: byAsp.reduce((sum, entry) => sum + entry.cancelled, 0),
+        other: byAsp.reduce((sum, entry) => sum + entry.other, 0),
         // "Unmatched" rows traced to no Work Location, so they belong to no region
         // and must not be attributed to a region-scoped principal.
         unmatched: 0,
@@ -154,14 +160,27 @@ export const getClosureDatesSummaryController: RequestHandler = asyncHandler(
 
 /**
  * The closure dates behind a region card's "Closure import" count. Query params:
- *   asp  — recovered ASP code, or "" for every region (includes unmatched)
- *   from — earliest "YYYY-MM-DD" (inclusive), or "" for no lower bound
- *   to   — latest "YYYY-MM-DD" (inclusive), or "" for no upper bound
+ *   asp    — recovered ASP code, or "" for every region (includes unmatched)
+ *   from   — earliest "YYYY-MM-DD" (inclusive), or "" for no lower bound
+ *   to     — latest "YYYY-MM-DD" (inclusive), or "" for no upper bound
+ *   status — "closed" / "cancelled" / "other" to match one half of the card's split,
+ *            or "" for every closure. An unrecognised value is rejected rather than
+ *            silently widened to everything, which would show completions under a
+ *            "cancelled" heading.
  */
+const CLOSURE_STATUS_GROUPS = new Set(["closed", "cancelled", "other"]);
+
 export const listClosureDateRecordsController: RequestHandler = asyncHandler(
   async (request, response) => {
     const asp = String(request.query.asp ?? "").trim().toUpperCase();
     const { from, to } = monthRange(request.query.from, request.query.to);
+    const statusGroup = String(request.query.status ?? "").trim().toLowerCase();
+    if (statusGroup !== "" && !CLOSURE_STATUS_GROUPS.has(statusGroup)) {
+      throw badRequest(
+        `\`status\` must be one of ${[...CLOSURE_STATUS_GROUPS].join(", ")}`,
+        { field: "status" },
+      );
+    }
 
     // `asp` is caller-supplied and went straight to SQL, so any principal could read
     // any region's closure records by changing it. Reject an out-of-scope code, and
@@ -176,6 +195,7 @@ export const listClosureDateRecordsController: RequestHandler = asyncHandler(
       aspCode: asp,
       dateFrom: from,
       dateTo: to,
+      statusGroup,
       allowedAspCodes: aspScopeToArray(allowed),
     });
     response.json({ data: result });

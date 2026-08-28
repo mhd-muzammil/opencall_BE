@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { pool, query } from "../config/database.js";
+import { CLOSURE_STATUS_MATCHERS } from "../services/closureDates/closureStatusClassify.js";
 
 /**
  * Imported case closure dates (from the Flex Closure ASP Report). Keyed by WO id and
@@ -365,6 +366,12 @@ export async function getClosureImportStatus(): Promise<ClosureImportStatus> {
 export interface ClosureDateAspCount {
   aspCode: string;
   count: number;
+  /** Of `count`, the genuine completions — "WO Closed" and friends. */
+  closed: number;
+  /** Of `count`, the "Closed - Canceled" rows. Abandoned calls, never billable. */
+  cancelled: number;
+  /** Of `count`, everything else (incl. a blank Status). */
+  other: number;
 }
 
 export interface ClosureDateAspMonthCount extends ClosureDateAspCount {
@@ -375,6 +382,12 @@ export interface ClosureDateAspMonthCount extends ClosureDateAspCount {
 export interface ClosureDateSummary {
   /** Every stored closure date, matched or not. */
   total: number;
+  /** Of `total`, the genuine completions. This is what the Closed Calls card shows. */
+  closed: number;
+  /** Of `total`, the cancellations. */
+  cancelled: number;
+  /** Of `total`, the unclassifiable remainder. */
+  other: number;
   /** Rows whose WO id / Case id could not be traced to a Work Location. */
   unmatched: number;
   /** Per Work Location, all months, biggest first. */
@@ -434,6 +447,23 @@ async function buildLocationCteSql(): Promise<string> {
 const CLOSURE_ASP_CODE_SQL = `COALESCE(NULLIF(closure.work_location, ''), by_wo.loc, by_case.loc, '')`;
 
 /**
+ * `classifyClosureStatus` expressed in SQL, so a summary can be grouped without pulling
+ * every row into Node. Generated from the SAME ordered matcher list the TS classifier
+ * walks, so the two cannot drift.
+ *
+ * ORDER MATTERS: the literal "Closed - Canceled" contains BOTH words, so CANCEL is
+ * tested before CLOSE. A CASE evaluates its WHENs in order, which is why the list maps
+ * onto it directly. Substrings are rule constants, never user input.
+ */
+const CLOSURE_STATUS_GROUP_SQL = `CASE
+       ${CLOSURE_STATUS_MATCHERS.map(
+         (m) =>
+           `WHEN UPPER(COALESCE(closure.closure_status, '')) LIKE '%${m.substring}%' THEN '${m.group}'`,
+       ).join("\n       ")}
+       ELSE 'other'
+     END`;
+
+/**
  * Groups the imported closures by ASP region.
  *
  * The Flex Closure ASP Report has no region column of its own, but it does carry Work
@@ -455,13 +485,30 @@ export async function summarizeCaseClosureDatesByAsp(
   // MAX() picks one location per key; a work order does not move between ASPs in
   // practice, so any non-blank value for the key is the right one. An optional
   // day-precise date range scopes the whole summary (used by the Closed Calls filter).
-  const result = await query<{ asp_code: string; month: string; count: string }>(
+  //
+  // The outcome split is computed here rather than filtered here: the card shows
+  // completions but the cancellations have to stay visible beside them, and `total`
+  // remains every stored closure so nothing silently disappears from the page.
+  const result = await query<{
+    asp_code: string;
+    month: string;
+    count: string;
+    closed: string;
+    cancelled: string;
+    other: string;
+  }>(
     `WITH loc AS (
        ${locCte}
      )
      SELECT ${CLOSURE_ASP_CODE_SQL}                 AS asp_code,
             to_char(closure.closed_on, 'YYYY-MM')   AS month,
-            COUNT(*)::TEXT                          AS count
+            COUNT(*)::TEXT                          AS count,
+            COUNT(*) FILTER (WHERE ${CLOSURE_STATUS_GROUP_SQL} = 'closed')::TEXT
+                                                    AS closed,
+            COUNT(*) FILTER (WHERE ${CLOSURE_STATUS_GROUP_SQL} = 'cancelled')::TEXT
+                                                    AS cancelled,
+            COUNT(*) FILTER (WHERE ${CLOSURE_STATUS_GROUP_SQL} = 'other')::TEXT
+                                                    AS other
        FROM case_closure_dates closure
        LEFT JOIN loc AS by_wo   ON by_wo.key   = closure.wo_id   AND closure.wo_id   <> ''
        LEFT JOIN loc AS by_case ON by_case.key = closure.case_id AND closure.case_id <> ''
@@ -472,31 +519,61 @@ export async function summarizeCaseClosureDatesByAsp(
   );
 
   const byAspMonth: ClosureDateAspMonthCount[] = [];
-  const aspRollup = new Map<string, number>();
+  const aspRollup = new Map<string, ClosureDateAspCount>();
   const monthSet = new Set<string>();
   let unmatched = 0;
   let total = 0;
+  let closedTotal = 0;
+  let cancelledTotal = 0;
+  let otherTotal = 0;
 
   for (const row of result.rows) {
     const count = Number(row.count);
+    const closed = Number(row.closed);
+    const cancelled = Number(row.cancelled);
+    const other = Number(row.other);
     total += count;
+    closedTotal += closed;
+    cancelledTotal += cancelled;
+    otherTotal += other;
     if (row.month) monthSet.add(row.month);
     // Unmatched rows (no region) are still kept in byAspMonth under aspCode '' so the
     // "All Regions" month total stays complete; they just never land on a region card.
-    byAspMonth.push({ aspCode: row.asp_code, month: row.month, count });
+    byAspMonth.push({
+      aspCode: row.asp_code,
+      month: row.month,
+      count,
+      closed,
+      cancelled,
+      other,
+    });
     if (!row.asp_code) {
       unmatched += count;
       continue;
     }
-    aspRollup.set(row.asp_code, (aspRollup.get(row.asp_code) ?? 0) + count);
+    const entry = aspRollup.get(row.asp_code) ?? {
+      aspCode: row.asp_code,
+      count: 0,
+      closed: 0,
+      cancelled: 0,
+      other: 0,
+    };
+    entry.count += count;
+    entry.closed += closed;
+    entry.cancelled += cancelled;
+    entry.other += other;
+    aspRollup.set(row.asp_code, entry);
   }
 
-  const byAsp: ClosureDateAspCount[] = [...aspRollup.entries()]
-    .map(([aspCode, count]) => ({ aspCode, count }))
-    .sort((a, b) => b.count - a.count);
+  const byAsp: ClosureDateAspCount[] = [...aspRollup.values()].sort(
+    (a, b) => b.count - a.count,
+  );
 
   return {
     total,
+    closed: closedTotal,
+    cancelled: cancelledTotal,
+    other: otherTotal,
     unmatched,
     byAsp,
     byAspMonth,
@@ -531,6 +608,12 @@ export async function listCaseClosureDatesForAsp(filter: {
   dateFrom: string;
   dateTo: string;
   /**
+   * 'closed' / 'cancelled' / 'other' to match one half of the card's split, or '' for
+   * every closure. Classified by the same rule as the summary, so a drill-down can
+   * never return a different set of rows than the number that opened it.
+   */
+  statusGroup?: string;
+  /**
    * ASP codes the caller may read, or `null` for unrestricted. Enforced here as well
    * as in the controller so an empty `aspCode` ("every region", which also includes
    * rows that matched no region) can never widen a region-scoped principal's view.
@@ -564,6 +647,7 @@ export async function listCaseClosureDatesForAsp(filter: {
              OR ${CLOSURE_ASP_CODE_SQL} = ANY($4::text[]))
         AND ($2 = '' OR closure.closed_on >= $2::date)
         AND ($3 = '' OR closure.closed_on <= $3::date)
+        AND ($5 = '' OR ${CLOSURE_STATUS_GROUP_SQL} = $5)
       ORDER BY closure.closed_on DESC
       LIMIT ${CLOSURE_LIST_LIMIT}`,
     [
@@ -571,6 +655,7 @@ export async function listCaseClosureDatesForAsp(filter: {
       filter.dateFrom,
       filter.dateTo,
       filter.allowedAspCodes ?? null,
+      filter.statusGroup ?? "",
     ],
   );
 

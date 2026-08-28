@@ -12,10 +12,27 @@
  */
 export type ClosureStatusGroup = "cancelled" | "closed" | "other";
 
+/**
+ * The ordered rule itself, exported so the SQL form of this classification
+ * (`caseClosureDateRepository`) can be BUILT from it rather than hand-copied. Two
+ * hand-written copies of an order-sensitive rule is exactly how "Closed - Canceled"
+ * ends up counted as a completion on one screen and not another.
+ *
+ * First match wins; anything unmatched is 'other'.
+ */
+export const CLOSURE_STATUS_MATCHERS: ReadonlyArray<{
+  group: Exclude<ClosureStatusGroup, "other">;
+  substring: string;
+}> = [
+  { group: "cancelled", substring: "CANCEL" },
+  { group: "closed", substring: "CLOSE" },
+];
+
 export function classifyClosureStatus(status: unknown): ClosureStatusGroup {
   const s = String(status ?? "").toUpperCase();
-  if (s.includes("CANCEL")) return "cancelled";
-  if (s.includes("CLOSE")) return "closed";
+  for (const matcher of CLOSURE_STATUS_MATCHERS) {
+    if (s.includes(matcher.substring)) return matcher.group;
+  }
   return "other";
 }
 
