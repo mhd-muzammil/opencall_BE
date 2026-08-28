@@ -171,3 +171,93 @@ describe("enrichReportWithClosureDates — Flex Status overlay", () => {
     expect(report.rows[0]?.output["Flex Status"]).toBe("SSC Pending");
   });
 });
+
+describe("enrichReportWithClosureDates — one closure, one row", () => {
+  /**
+   * The production shapes from 2026-08-28. Several work orders share a Case ID —
+   * a revisit filed as "-1", or a repeat call raised as a brand new WO against the
+   * same case — and the Case-id fallback stamped one closure onto all of them.
+   */
+  function lookupFor(record: ClosureRecord) {
+    return {
+      byWoId: new Map([[record.woId, record]]),
+      byCaseId: new Map([[record.caseId, record]]),
+    };
+  }
+
+  it("gives a revisit's closure to the work order that owns it, not the -1 row", async () => {
+    const record = closure({ woId: "WO-035260625", caseId: "5162554102" });
+    mocks.loadClosureDateLookup.mockResolvedValue(lookupFor(record));
+
+    const report = reportWith(
+      [
+        { "Ticket ID": "WO-035260625", "Case ID": "5162554102" },
+        { "Ticket ID": "WO-035260625-1", "Case ID": "5162554102" },
+      ],
+      "2026-08-01",
+      true,
+    );
+    const enriched = await enrichReportWithClosureDates(report);
+
+    expect(enriched.rows[0]!.output["Flex Status"]).toBe("WO Closed");
+    // The revisit is a separate job. Counting it closed reported two completions
+    // for one closure — 22 phantom completions in the 25 Jul–24 Aug cycle.
+    expect(enriched.rows[1]!.output).not.toHaveProperty("Flex Status");
+    expect(enriched.rows[1]!.output).not.toHaveProperty("Case Closed Date");
+  });
+
+  it("gives a repeat call's closure to one row when three share the case", async () => {
+    const record = closure({ woId: "WO-035340079", caseId: "5162524657" });
+    mocks.loadClosureDateLookup.mockResolvedValue(lookupFor(record));
+
+    // The owning WO is deliberately in the MIDDLE — the WO-id pass runs across every
+    // row before the fallback, so position must not decide who gets the closure.
+    const report = reportWith(
+      [
+        { "Ticket ID": "WO-035252057", "Case ID": "5162524657" },
+        { "Ticket ID": "WO-035340079", "Case ID": "5162524657" },
+        { "Ticket ID": "WO-035372074", "Case ID": "5162524657" },
+      ],
+      "2026-08-01",
+      true,
+    );
+    const enriched = await enrichReportWithClosureDates(report);
+
+    const stamped = enriched.rows.filter((r) => "Flex Status" in r.output);
+    expect(stamped).toHaveLength(1);
+    expect(stamped[0]!.output["Ticket ID"]).toBe("WO-035340079");
+  });
+
+  it("still reaches a row through Case id when no row owns the WO id", async () => {
+    // The fallback's reason for existing: a closure filed under a Case id we never
+    // saw as a WO id would otherwise never reach its row.
+    const record = closure({ woId: "WO-NOT-IN-REPORT", caseId: "5163770707" });
+    mocks.loadClosureDateLookup.mockResolvedValue(lookupFor(record));
+
+    const report = reportWith(
+      [{ "Ticket ID": "WO-035606423", "Case ID": "5163770707" }],
+      "2026-08-01",
+      true,
+    );
+    const enriched = await enrichReportWithClosureDates(report);
+
+    expect(enriched.rows[0]!.output["Flex Status"]).toBe("WO Closed");
+  });
+
+  it("does not let two case-only rows both claim one closure", async () => {
+    const record = closure({ woId: "WO-NOT-IN-REPORT", caseId: "5162345454" });
+    mocks.loadClosureDateLookup.mockResolvedValue(lookupFor(record));
+
+    const report = reportWith(
+      [
+        { "Ticket ID": "WO-035273280", "Case ID": "5162345454" },
+        { "Ticket ID": "WO-035405862", "Case ID": "5162345454" },
+      ],
+      "2026-08-01",
+      true,
+    );
+    const enriched = await enrichReportWithClosureDates(report);
+
+    expect(enriched.rows.filter((r) => "Flex Status" in r.output)).toHaveLength(1);
+  });
+});

@@ -1,6 +1,7 @@
 import {
   loadClosureDateLookup,
   normalizeKey,
+  type ClosureRecord,
 } from "../../repositories/caseClosureDateRepository.js";
 import { loadCustomerFeedbackLookup } from "../../repositories/customerFeedbackRepository.js";
 
@@ -49,15 +50,60 @@ export async function enrichReportWithClosureDates<
       return report;
     }
 
-    for (const row of report.rows) {
-      const output = row.output;
-      const woId = normalizeKey(
-        String(output["Ticket ID"] ?? output["WO ID"] ?? ""),
-      );
-      const caseId = normalizeKey(String(output["Case ID"] ?? ""));
+    /**
+     * ONE STORED CLOSURE MAY BE CLAIMED BY ONE ROW.
+     *
+     * A closure is a single work order's, but several rows can share a Case ID: a
+     * revisit raised as "WO-035260625-1", or a repeat call that got a brand new WO
+     * against the same case (WO-035252057 / WO-035340079 / WO-035372074 all carry case
+     * 5162524657). Matching each row independently — WO id, else Case id — stamped that
+     * one closure onto every one of them, so the Closed Calls count reported 2 or 3
+     * completions for a job the vendor closed once. On 2026-08-28 that was 22 phantom
+     * completions in a bill cycle, against a real total of 1,079 — and since we were
+     * also missing 11 calls outright, the two errors nearly cancelled and the number
+     * looked plausible.
+     *
+     * So the WO-id pass runs FIRST across every row and claims what it matches; the
+     * Case-id fallback then only gets closures nobody claimed by WO. In every one of the
+     * 21 duplicate groups seen in production the closure's own work order WAS among the
+     * rows, so this hands each closure to the row that actually owns it and leaves the
+     * revisit/repeat rows unstamped — which is the truth about them.
+     *
+     * The fallback itself stays: it is the only way a closure filed under a Case id we
+     * never saw as a WO id reaches its row at all.
+     */
+    const rowKeys = report.rows.map((row) => ({
+      row,
+      woId: normalizeKey(
+        String(row.output["Ticket ID"] ?? row.output["WO ID"] ?? ""),
+      ),
+      caseId: normalizeKey(String(row.output["Case ID"] ?? "")),
+    }));
 
-      const closure =
-        (woId && byWoId.get(woId)) || (caseId && byCaseId.get(caseId)) || null;
+    const claimed = new Set<ClosureRecord>();
+    const closureForRow = new Map<(typeof rowKeys)[number], ClosureRecord>();
+
+    for (const entry of rowKeys) {
+      const closure = entry.woId ? byWoId.get(entry.woId) : undefined;
+      if (!closure) continue;
+      closureForRow.set(entry, closure);
+      claimed.add(closure);
+    }
+    for (const entry of rowKeys) {
+      if (closureForRow.has(entry) || !entry.caseId) continue;
+      const closure = byCaseId.get(entry.caseId);
+      // Already stamped onto the row that owns it by WO id — taking it again here is
+      // exactly the double count this pass exists to stop.
+      if (!closure || claimed.has(closure)) continue;
+      closureForRow.set(entry, closure);
+      claimed.add(closure);
+    }
+
+    for (const entry of rowKeys) {
+      const { row, woId, caseId } = entry;
+      const output = row.output;
+
+      const closure = closureForRow.get(entry) ?? null;
       if (closure) {
         // Case Closed Date is historical fact and is stamped whenever we have one —
         // unchanged since it shipped, and it never misrepresents the current state.
