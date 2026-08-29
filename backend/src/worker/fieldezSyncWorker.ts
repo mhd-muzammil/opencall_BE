@@ -55,6 +55,20 @@ const config = {
   // inside an hour, so a slower poll just serves stale reconciliation numbers.
   closureIntervalMs: num("FIELDEZ_CLOSURE_INTERVAL_MS", 15 * 60 * 1000), // 15 min
   closureDateMode: str("FIELDEZ_CLOSURE_DATE_MODE", "today"),
+  /**
+   * How many days BEFORE today the closure download reaches back.
+   *
+   * The job used to ask only for today, forever. A closure Flex records after our last
+   * pull of that date — entered late in the evening, or back-dated the next morning —
+   * was then never requested again, because tomorrow we ask about tomorrow. Measured
+   * against a manual month-long export on 2026-08-28: 35 closures missing, short on 20
+   * of 29 days, 1 to 4 a day. Not an outage; a permanent daily leak.
+   *
+   * Re-downloading recent days is safe and cheap: the import is a merge keyed on work
+   * order, so a day arriving twice overwrites itself rather than duplicating. Seven days
+   * covers a long weekend plus a worker outage without making the export unwieldy.
+   */
+  closureLookbackDays: num("FIELDEZ_CLOSURE_LOOKBACK_DAYS", 7),
   // FieldEZ SLA. Unlike the two above this downloads no report: it asks FieldEZ's own API
   // what it promised about each open call and hands the answers to OpenCall. Same cadence as
   // the report jobs, and `FIELDEZ_SLA_ENABLED=false` turns it off without a code change.
@@ -107,6 +121,19 @@ function istTodayIso(): string {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+}
+
+/**
+ * `days` before an IST calendar day, as YYYY-MM-DD.
+ *
+ * Steps the date at UTC noon so a day never lands on a DST or offset edge and slips by
+ * one — the range is a report parameter, and being a day short reopens the very gap the
+ * lookback exists to close.
+ */
+function istDaysBeforeIso(isoDay: string, days: number): string {
+  const anchor = Date.parse(`${isoDay}T12:00:00Z`);
+  if (Number.isNaN(anchor)) return isoDay;
+  return new Date(anchor - days * 86_400_000).toISOString().slice(0, 10);
 }
 
 // ------------------------------------------------------------------ FieldEZ
@@ -607,16 +634,19 @@ async function syncWip(page: Page): Promise<void> {
 }
 
 async function syncClosure(page: Page): Promise<void> {
-  // Only "today" is supported; the setting exists so a future range mode has a home.
   if (config.closureDateMode !== "today") {
     log(`[closure] unknown FIELDEZ_CLOSURE_DATE_MODE="${config.closureDateMode}" — using today`);
   }
   const today = istTodayIso();
+  // Clamped rather than trusted: a negative would put `from` after `to` and a huge one
+  // would ask FieldEZ to render a year of closures every 15 minutes.
+  const lookback = Math.min(31, Math.max(0, Math.trunc(config.closureLookbackDays)));
+  const fromDate = istDaysBeforeIso(today, lookback);
 
   const file = await downloadReport(page, {
     reportName: config.closureReportName,
     format: config.format,
-    fromDate: today,
+    fromDate,
     toDate: today,
     destBaseName: "flexclosure-latest",
   });
@@ -633,7 +663,8 @@ async function syncClosure(page: Page): Promise<void> {
   // export, which is the other way this import can fail with a server error.
   const bytes = statSync(file).size;
   log(
-    `[closure] report ${unchanged ? "unchanged" : "changed"} (${today}, ${bytes} bytes)` +
+    `[closure] report ${unchanged ? "unchanged" : "changed"} ` +
+      `(${fromDate} → ${today}, ${lookback}d lookback, ${bytes} bytes)` +
       ` — importing to OpenCall…`,
   );
 
