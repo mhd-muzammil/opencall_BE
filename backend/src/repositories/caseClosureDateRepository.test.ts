@@ -64,10 +64,12 @@ describe("mergeCaseClosureDates", () => {
     });
   });
 
-  it("scopes the delete by BOTH key sets, or the insert violates the case_id index", async () => {
-    // The table carries two partial unique indexes (wo_id AND case_id), so a single
-    // ON CONFLICT target cannot cover both. Deleting by wo_id alone would leave a stale
-    // row holding this batch's case_id.
+  it("scopes the delete by work order, so a shared case is never swept up", async () => {
+    // Was scoped by BOTH key sets, because 029 made case_id unique and a stale row
+    // holding this batch's case would have broken the insert. After 065 that scoping is
+    // destructive: a case legitimately carries several work orders, so deleting by case
+    // would remove a sibling closed weeks earlier and outside this file's range — and
+    // the insert, holding only this batch, would never put it back.
     await mergeCaseClosureDates([
       record({ woId: "WO-A", caseId: "C-A" }),
       record({ woId: "WO-B", caseId: "C-B" }),
@@ -79,9 +81,9 @@ describe("mergeCaseClosureDates", () => {
     expect(deleteCall).toBeDefined();
     const [sql, params] = deleteCall as [string, unknown[]];
     expect(sql.replace(/\s+/g, " ")).toContain("wo_id = ANY($1::text[])");
-    expect(sql.replace(/\s+/g, " ")).toContain("case_id = ANY($2::text[])");
     expect(params[0]).toEqual(["WO-A", "WO-B"]);
-    expect(params[1]).toEqual(["C-A", "C-B"]);
+    // Both rows carry their own work order, so nothing is matched by case.
+    expect(params[1]).toEqual([]);
   });
 
   it("touches only the incoming keys, so untouched history survives", async () => {
@@ -140,14 +142,18 @@ describe("mergeCaseClosureDates", () => {
     expect(mocks.connect).not.toHaveBeenCalled();
   });
 
-  it("drops a later row that reuses a key already taken, guarding both indexes", async () => {
+  it("drops a repeated WORK ORDER, but keeps a second work order on one case", async () => {
+    // Was: any reused key was dropped, because 029 made case_id unique too. That
+    // discarded 19 real closures per cycle on prod — a customer calling back gets a new
+    // work order on the same case, and Flex closes that one as well. 065 removed the
+    // index; identity is the work order alone.
     const written = await mergeCaseClosureDates([
       record({ woId: "WO-A", caseId: "C-A" }),
-      record({ woId: "WO-B", caseId: "C-A" }), // case id already used
-      record({ woId: "WO-A", caseId: "C-C" }), // wo id already used
+      record({ woId: "WO-B", caseId: "C-A" }), // same case, different job — KEEP
+      record({ woId: "WO-A", caseId: "C-C" }), // same work order — genuine duplicate
     ]);
 
-    expect(written).toBe(1);
+    expect(written).toBe(2);
   });
 });
 
@@ -175,5 +181,75 @@ describe("replaceCaseClosureDates", () => {
       await replaceCaseClosureDates([record({ woId: "", caseId: "" })]),
     ).toBe(0);
     expect(mocks.connect).not.toHaveBeenCalled();
+  });
+});
+
+describe("a Case Id carrying several work orders (migration 065)", () => {
+  /**
+   * Production shapes from 2026-08-28. Before 065 these were rejected outright: 19
+   * completed, billable closures discarded on every import for no reason but a shared
+   * case.
+   */
+  it("stores every work order on one case instead of dropping the later ones", async () => {
+    await mergeCaseClosureDates([
+      record({ woId: "WO-035340079", caseId: "5162524657" }),
+      record({ woId: "WO-035252057", caseId: "5162524657" }),
+      record({ woId: "WO-035372074", caseId: "5162524657" }),
+    ]);
+
+    const inserts = mocks.clientQuery.mock.calls.filter((c) =>
+      String(c[0]).startsWith("INSERT INTO case_closure_dates"),
+    );
+    expect(inserts).toHaveLength(3);
+  });
+
+  it("keeps a revisit filed as -1 as its own work order", async () => {
+    const written = await mergeCaseClosureDates([
+      record({ woId: "WO-035260625", caseId: "5162554102" }),
+      record({ woId: "WO-035260625-1", caseId: "5162554102" }),
+    ]);
+    expect(written).toBe(2);
+  });
+
+  it("still collapses a genuine duplicate of the SAME work order", async () => {
+    const written = await mergeCaseClosureDates([
+      record({ woId: "WO-1", caseId: "C-1" }),
+      record({ woId: "WO-1", caseId: "C-1" }),
+    ]);
+    expect(written).toBe(1);
+  });
+
+  it("scopes the merge delete to work orders, never to shared cases", async () => {
+    // The destructive shape this guards: a rolling import holding WO-A must not delete
+    // its sibling WO-B, which shares the case but is outside this file's date range.
+    await mergeCaseClosureDates([record({ woId: "WO-A", caseId: "SHARED" })]);
+
+    const del = mocks.clientQuery.mock.calls.find((c) =>
+      String(c[0]).includes("DELETE FROM case_closure_dates"),
+    );
+    expect(del).toBeDefined();
+    const [sql, params] = del as [string, unknown[]];
+    expect(sql).toContain("wo_id = ANY($1::text[])");
+    expect(params[0]).toEqual(["WO-A"]);
+    // The case set carries ONLY rows that have no work order of their own.
+    expect(params[1]).toEqual([]);
+  });
+
+  it("still matches a keyless row by its case id", async () => {
+    await mergeCaseClosureDates([record({ woId: "", caseId: "ONLY-CASE" })]);
+    const del = mocks.clientQuery.mock.calls.find((c) =>
+      String(c[0]).includes("DELETE FROM case_closure_dates"),
+    );
+    const [, params] = del as [string, unknown[]];
+    expect(params[0]).toEqual([]);
+    expect(params[1]).toEqual(["ONLY-CASE"]);
+  });
+
+  it("cannot tell two keyless rows on one case apart, so keeps one", async () => {
+    const written = await mergeCaseClosureDates([
+      record({ woId: "", caseId: "SAME" }),
+      record({ woId: "", caseId: "SAME" }),
+    ]);
+    expect(written).toBe(1);
   });
 });

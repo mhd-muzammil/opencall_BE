@@ -60,26 +60,36 @@ function insertParams(row: CaseClosureRecordInput): unknown[] {
 }
 
 /**
- * Drops rows that would collide with either partial unique index. The table has TWO
- * (`wo_id` and `case_id`), so a row is only insertable when BOTH of its non-blank keys
- * are still free. First occurrence wins — the parser has already chosen the best row per
- * work order, so anything reaching here is a genuine cross-key clash.
+ * Drops rows that would collide on IDENTITY, which is the work order.
+ *
+ * This used to reject a row whose `case_id` was already taken, because 029 made case_id
+ * UNIQUE as well. The vendor's data does not work that way: a customer who calls back
+ * gets a NEW work order on the SAME case, and Flex closes that one too. Measured on prod
+ * for one bill cycle, that rule silently discarded 19 completed, billable closures —
+ * every one "WO Closed" with a valid closure date, rejected only for sharing a case.
+ * Migration 065 drops the index; this is the code half of the same fix.
+ *
+ * A row carrying no work order at all still falls back to its case id — that is the only
+ * identity it has, so two such rows on one case genuinely cannot be told apart.
  */
-function dedupeByBothKeys(
+function dedupeByWorkOrder(
   rows: readonly CaseClosureRecordInput[],
 ): CaseClosureRecordInput[] {
   const seenWo = new Set<string>();
-  const seenCase = new Set<string>();
+  const seenCaseWithoutWo = new Set<string>();
   const deduped: CaseClosureRecordInput[] = [];
 
   for (const row of rows) {
     const woId = normalizeKey(row.woId);
     const caseId = normalizeKey(row.caseId);
     if (!woId && !caseId) continue; // nothing to match on
-    if (woId && seenWo.has(woId)) continue;
-    if (caseId && seenCase.has(caseId)) continue;
-    if (woId) seenWo.add(woId);
-    if (caseId) seenCase.add(caseId);
+    if (woId) {
+      if (seenWo.has(woId)) continue;
+      seenWo.add(woId);
+    } else {
+      if (seenCaseWithoutWo.has(caseId)) continue;
+      seenCaseWithoutWo.add(caseId);
+    }
     deduped.push({ ...row, woId, caseId });
   }
 
@@ -97,7 +107,7 @@ function dedupeByBothKeys(
 export async function replaceCaseClosureDates(
   rows: readonly CaseClosureRecordInput[],
 ): Promise<number> {
-  const deduped = dedupeByBothKeys(rows);
+  const deduped = dedupeByWorkOrder(rows);
 
   // NEVER wipe the table for an empty batch. The DELETE below is unconditional, so an
   // import whose file parsed to no usable rows — a headers-only morning export, a
@@ -135,29 +145,38 @@ export async function replaceCaseClosureDates(
  * every other stored closure, from every earlier day, is left alone. This is what the
  * hourly today-only auto-sync uses.
  *
- * Shape: key-scoped delete, then insert. Not `ON CONFLICT`, because the table carries
- * two partial unique indexes (`wo_id` and `case_id`) and a single conflict target cannot
- * cover both. The delete is scoped by BOTH key sets — scoping by `wo_id` alone would
- * leave a stale row holding this batch's `case_id` and the insert would violate
- * `case_closure_dates_case_id_uidx`.
+ * Shape: key-scoped delete, then insert, keyed on IDENTITY — the work order.
+ *
+ * The delete used to be scoped by case_id as well, because 029 made that unique too and
+ * a stale row holding this batch's case would have broken the insert. Migration 065
+ * removed that index, and keeping the case-scoped delete would now be actively
+ * destructive: with several work orders legitimately on one case, an import carrying
+ * WO-A would delete its sibling WO-B — closed weeks earlier, outside this file's range —
+ * and never insert it back. That is exactly the shape of a rolling-window sync.
  */
 export async function mergeCaseClosureDates(
   rows: readonly CaseClosureRecordInput[],
 ): Promise<number> {
-  const deduped = dedupeByBothKeys(rows);
+  const deduped = dedupeByWorkOrder(rows);
   if (deduped.length === 0) return 0;
 
-  const woIds = deduped.map((row) => row.woId).filter((id) => id !== "");
-  const caseIds = deduped.map((row) => row.caseId).filter((id) => id !== "");
+  const woIds = deduped.filter((row) => row.woId !== "").map((row) => row.woId);
+  // Only rows that have NO work order of their own are matched by case. Deleting every
+  // stored row sharing a case would be destructive now that a case legitimately carries
+  // several work orders: a rolling import holding WO-A would delete its sibling WO-B —
+  // closed weeks earlier and outside this file's range — and never put it back.
+  const keylessCaseIds = deduped
+    .filter((row) => row.woId === "" && row.caseId !== "")
+    .map((row) => row.caseId);
 
   const client: PoolClient = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query(
       `DELETE FROM case_closure_dates
-        WHERE (wo_id   <> '' AND wo_id   = ANY($1::text[]))
-           OR (case_id <> '' AND case_id = ANY($2::text[]))`,
-      [woIds, caseIds],
+        WHERE (wo_id <> '' AND wo_id = ANY($1::text[]))
+           OR (wo_id  = '' AND case_id <> '' AND case_id = ANY($2::text[]))`,
+      [woIds, keylessCaseIds],
     );
 
     for (const row of deduped) {
@@ -228,6 +247,19 @@ export async function loadClosureDateLookup(): Promise<ClosureDateLookup> {
 
   const byWoId = new Map<string, ClosureRecord>();
   const byCaseId = new Map<string, ClosureRecord>();
+  // How many closures each case carries. Since 065 a case may hold several, and the
+  // Case-id fallback then has no way to tell which one a row means — the old
+  // last-write-wins picked whichever the query happened to return last. An ambiguous
+  // case is dropped from the fallback entirely: a row whose own WO id matches still
+  // resolves exactly, and a row that only matches by case gets nothing rather than a
+  // coin-flip closure. Guessing here is what stamped a Vellore row with a Kanchipuram
+  // closure.
+  const caseCounts = new Map<string, number>();
+  for (const row of result.rows) {
+    if (row.case_id) {
+      caseCounts.set(row.case_id, (caseCounts.get(row.case_id) ?? 0) + 1);
+    }
+  }
   for (const row of result.rows) {
     const record: ClosureRecord = {
       woId: row.wo_id,
@@ -241,7 +273,9 @@ export async function loadClosureDateLookup(): Promise<ClosureDateLookup> {
       workLocation: row.work_location ?? "",
     };
     if (row.wo_id) byWoId.set(row.wo_id, record);
-    if (row.case_id) byCaseId.set(row.case_id, record);
+    if (row.case_id && caseCounts.get(row.case_id) === 1) {
+      byCaseId.set(row.case_id, record);
+    }
   }
   return { byWoId, byCaseId };
 }

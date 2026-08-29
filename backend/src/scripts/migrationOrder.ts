@@ -72,6 +72,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyQuotationPaymentWatchMigration", // 062 what the reply said, and who acted on it
   "applyQuotationSendVerificationMigration", // 063 when the Sent folder was last asked
   "applyFieldezSlaMigration", // 064 FieldEZ's SLA for each open call
+  "applyClosureCaseIdMultiWoMigration", // 065 a Case Id may carry several work orders
 ];
 
 /**

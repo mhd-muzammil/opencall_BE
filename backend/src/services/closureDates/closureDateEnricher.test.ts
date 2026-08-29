@@ -261,3 +261,48 @@ describe("enrichReportWithClosureDates — one closure, one row", () => {
     expect(enriched.rows.filter((r) => "Flex Status" in r.output)).toHaveLength(1);
   });
 });
+
+describe("an ambiguous Case Id is not guessed at", () => {
+  /**
+   * Since migration 065 a case may hold several closures. The Case-id fallback then has
+   * no way to know which one a row means, and the old last-write-wins picked whichever
+   * the query happened to return last — that is how a Vellore row ended up stamped with
+   * a Kanchipuram closure.
+   *
+   * `loadClosureDateLookup` therefore leaves an ambiguous case out of `byCaseId`
+   * entirely. These tests pin the enricher's half of that contract.
+   */
+  it("still overlays a row whose own WO id matches", async () => {
+    const owner = closure({ woId: "WO-035340079", caseId: "5162524657" });
+    mocks.loadClosureDateLookup.mockResolvedValue({
+      byWoId: new Map([[owner.woId, owner]]),
+      byCaseId: new Map(), // ambiguous case withheld by the repository
+    });
+
+    const report = reportWith(
+      [{ "Ticket ID": "WO-035340079", "Case ID": "5162524657" }],
+      "2026-08-01",
+      true,
+    );
+    const enriched = await enrichReportWithClosureDates(report);
+    expect(enriched.rows[0]!.output["Flex Status"]).toBe("WO Closed");
+  });
+
+  it("leaves a sibling row unstamped rather than guessing a closure for it", async () => {
+    const owner = closure({ woId: "WO-035340079", caseId: "5162524657" });
+    mocks.loadClosureDateLookup.mockResolvedValue({
+      byWoId: new Map([[owner.woId, owner]]),
+      byCaseId: new Map(),
+    });
+
+    // Shares the case but is a different job; its own closure is a separate record.
+    const report = reportWith(
+      [{ "Ticket ID": "WO-035252057", "Case ID": "5162524657" }],
+      "2026-08-01",
+      true,
+    );
+    const enriched = await enrichReportWithClosureDates(report);
+    expect(enriched.rows[0]!.output).not.toHaveProperty("Flex Status");
+    expect(enriched.rows[0]!.output).not.toHaveProperty("Case Closed Date");
+  });
+});
