@@ -3,6 +3,7 @@ import {
   getClosureDatesStatusController,
   getClosureDatesSummaryController,
   getClosureReconciliationController,
+  getRepeatVisitsController,
   importClosureDatesController,
   listClosureDateRecordsController,
 } from "../controllers/closureDateController.js";
@@ -33,6 +34,13 @@ closureDateRouter.get(
   "/records",
   requirePrincipal,
   listClosureDateRecordsController,
+);
+
+// Repeat visits inside the vendor's unpaid window — region-scoped like /records.
+closureDateRouter.get(
+  "/repeat-visits",
+  requirePrincipal,
+  getRepeatVisitsController,
 );
 
 // "Did Flex agree with us on this day?" — region-scoped like /records.

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { sameCalendarDay } from "./dateMatch.js";
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
 import { runFieldezSlaSync } from "./fieldezSlaJob.js";
 
@@ -259,9 +260,14 @@ async function fillDateRange(
         `${labels[index] ?? `date field ${index}`} stayed empty after setting "${value}"`,
       );
     }
-    if (actual !== value) {
+    if (!sameCalendarDay(actual, value)) {
       // Not fatal — the widget may reformat — but the range we actually asked for
       // must be visible in the logs, not inferred.
+      //
+      // Compared as a DAY, not as text: FieldEZ echoes the month back without its
+      // leading zero ("2026-8-22" for "2026-08-22"), so a literal compare warned on
+      // every single cycle. A warning that always fires is a warning nobody reads —
+      // and it would have hidden a date that genuinely failed to apply.
       log(`[closure] ⚠️ ${labels[index]} shows "${actual}" after setting "${value}"`);
     }
     filled += 1;

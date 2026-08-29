@@ -489,13 +489,17 @@ const CLOSURE_ASP_CODE_SQL = `COALESCE(NULLIF(closure.work_location, ''), by_wo.
  * tested before CLOSE. A CASE evaluates its WHENs in order, which is why the list maps
  * onto it directly. Substrings are rule constants, never user input.
  */
-const CLOSURE_STATUS_GROUP_SQL = `CASE
+function closureStatusGroupSql(column = "closure.closure_status"): string {
+  return `CASE
        ${CLOSURE_STATUS_MATCHERS.map(
          (m) =>
-           `WHEN UPPER(COALESCE(closure.closure_status, '')) LIKE '%${m.substring}%' THEN '${m.group}'`,
+           `WHEN UPPER(COALESCE(${column}, '')) LIKE '%${m.substring}%' THEN '${m.group}'`,
        ).join("\n       ")}
        ELSE 'other'
      END`;
+}
+
+const CLOSURE_STATUS_GROUP_SQL = closureStatusGroupSql();
 
 /**
  * Groups the imported closures by ASP region.
@@ -612,6 +616,149 @@ export async function summarizeCaseClosureDatesByAsp(
     byAsp,
     byAspMonth,
     months: [...monthSet].sort(),
+  };
+}
+
+/**
+ * How soon a second visit to the same case counts as a callback rather than new work.
+ *
+ * HP does not pay for a case reopened within this many days of its last closure: the
+ * work order differs but the case is the same, so the second visit is unpaid. Fifteen
+ * days is the vendor's rule, not ours — it belongs here as a named constant so the API,
+ * the card totals and any future report all read the same number.
+ */
+export const REPEAT_VISIT_WINDOW_DAYS = 15;
+
+/** One closure, positioned against the previous closure on the same case. */
+export interface RepeatVisitRow {
+  woId: string;
+  caseId: string;
+  aspCode: string;
+  /** YYYY-MM-DD. */
+  closedOn: string;
+  status: string;
+  /** The closure this one followed on the same case, or '' when it is the first. */
+  previousWoId: string;
+  /** YYYY-MM-DD of that previous closure, or ''. */
+  previousClosedOn: string;
+  /** Days since the previous closure on this case, or null when there is none. */
+  gapDays: number | null;
+  /** True when this visit falls inside the window and so is not billable. */
+  unpaid: boolean;
+}
+
+export interface RepeatVisitSummary {
+  windowDays: number;
+  /** Completed closures in range — what the card headlines. */
+  closed: number;
+  /** Of those, repeat visits inside the window. Not billable. */
+  unpaid: number;
+  /** closed - unpaid. */
+  payable: number;
+  byAsp: Array<{ aspCode: string; closed: number; unpaid: number; payable: number }>;
+  /** Every unpaid visit, newest first. */
+  rows: RepeatVisitRow[];
+}
+
+/**
+ * Repeat visits: a case closed again within `REPEAT_VISIT_WINDOW_DAYS` of its previous
+ * closure, which HP does not pay for.
+ *
+ * The LAG runs over EVERY stored closure, not just the ones in range, then the range
+ * filter is applied afterwards. That ordering matters: a visit on 26 July whose original
+ * closed on 20 July is unpaid, and a query that only ever saw the range would call it a
+ * first closure and count it as billable.
+ *
+ * Cancellations are excluded from the sequence entirely — a cancelled call is not a
+ * visit, so a completion following one is genuine first-fix work, not a callback.
+ */
+export async function summarizeRepeatVisits(opts: {
+  dateFrom: string;
+  dateTo: string;
+  allowedAspCodes?: string[] | null;
+}): Promise<RepeatVisitSummary> {
+  const result = await query<{
+    wo_id: string;
+    case_id: string;
+    asp_code: string;
+    closed_on: string;
+    closure_status: string | null;
+    prev_wo_id: string | null;
+    prev_closed_on: string | null;
+    gap_days: string | null;
+  }>(
+    `WITH completed AS (
+       SELECT wo_id, case_id,
+              UPPER(TRIM(COALESCE(work_location, ''))) AS asp_code,
+              closed_on, closure_status
+         FROM case_closure_dates
+        WHERE closed_on IS NOT NULL
+          AND ${closureStatusGroupSql("closure_status")} = 'closed'
+     ),
+     seq AS (
+       SELECT c.*,
+              LAG(c.wo_id)     OVER w AS prev_wo_id,
+              LAG(c.closed_on) OVER w AS prev_closed_on
+         FROM completed c
+        WHERE c.case_id <> ''
+       WINDOW w AS (PARTITION BY c.case_id ORDER BY c.closed_on, c.wo_id)
+     )
+     SELECT wo_id, case_id, asp_code,
+            to_char(closed_on, 'YYYY-MM-DD')      AS closed_on,
+            closure_status,
+            COALESCE(prev_wo_id, '')              AS prev_wo_id,
+            to_char(prev_closed_on, 'YYYY-MM-DD') AS prev_closed_on,
+            (closed_on - prev_closed_on)::TEXT    AS gap_days
+       FROM seq
+      WHERE closed_on BETWEEN $1::date AND $2::date
+        AND ($3::text[] IS NULL OR asp_code = ANY($3::text[]))
+      ORDER BY closed_on DESC, wo_id`,
+    [opts.dateFrom, opts.dateTo, opts.allowedAspCodes ?? null],
+  );
+
+  const rows: RepeatVisitRow[] = [];
+  const byAsp = new Map<string, { closed: number; unpaid: number }>();
+  let closed = 0;
+  let unpaid = 0;
+
+  for (const row of result.rows) {
+    const gapDays = row.gap_days === null ? null : Number(row.gap_days);
+    const isUnpaid = gapDays !== null && gapDays <= REPEAT_VISIT_WINDOW_DAYS;
+    closed += 1;
+    const entry = byAsp.get(row.asp_code) ?? { closed: 0, unpaid: 0 };
+    entry.closed += 1;
+    if (isUnpaid) {
+      unpaid += 1;
+      entry.unpaid += 1;
+      rows.push({
+        woId: row.wo_id,
+        caseId: row.case_id,
+        aspCode: row.asp_code,
+        closedOn: row.closed_on,
+        status: row.closure_status ?? "",
+        previousWoId: row.prev_wo_id ?? "",
+        previousClosedOn: row.prev_closed_on ?? "",
+        gapDays,
+        unpaid: true,
+      });
+    }
+    byAsp.set(row.asp_code, entry);
+  }
+
+  return {
+    windowDays: REPEAT_VISIT_WINDOW_DAYS,
+    closed,
+    unpaid,
+    payable: closed - unpaid,
+    byAsp: [...byAsp.entries()]
+      .map(([aspCode, e]) => ({
+        aspCode,
+        closed: e.closed,
+        unpaid: e.unpaid,
+        payable: e.closed - e.unpaid,
+      }))
+      .sort((a, b) => b.closed - a.closed),
+    rows,
   };
 }
 

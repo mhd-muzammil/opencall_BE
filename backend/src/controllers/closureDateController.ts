@@ -15,6 +15,7 @@ import {
   getClosureImportStatus,
   listCaseClosureDatesForAsp,
   summarizeCaseClosureDatesByAsp,
+  summarizeRepeatVisits,
 } from "../repositories/caseClosureDateRepository.js";
 import { reconcileClosuresForDate } from "../services/closureDates/closureReconciliationService.js";
 import { monthRange } from "../utils/monthRange.js";
@@ -290,6 +291,28 @@ export const getClosureReconciliationController: RequestHandler = asyncHandler(
         ...(toDate ? { toDate } : {}),
         allowedAspCodes: aspScopeToArray(allowed),
         aspCode: asp,
+      }),
+    });
+  },
+);
+
+/**
+ * Repeat visits: a case closed again within the vendor's 15-day window, which HP does
+ * not pay for. Query params `from` / `to` ("YYYY-MM-DD") scope the range, exactly as
+ * /summary does, so the panel and the cards always describe the same period.
+ *
+ * Region-scoped like /records: the repository takes the principal's ASP scope so an
+ * empty scope can never widen to regions the caller may not read.
+ */
+export const getRepeatVisitsController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const { from, to } = monthRange(request.query.from, request.query.to);
+    const allowed = await allowedAspCodesForRequest(request);
+    response.json({
+      data: await summarizeRepeatVisits({
+        dateFrom: from,
+        dateTo: to,
+        allowedAspCodes: aspScopeToArray(allowed),
       }),
     });
   },

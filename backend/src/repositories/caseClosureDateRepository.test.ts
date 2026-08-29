@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   mergeCaseClosureDates,
   replaceCaseClosureDates,
+  summarizeRepeatVisits,
   type CaseClosureRecordInput,
 } from "./caseClosureDateRepository.js";
 
@@ -251,5 +252,86 @@ describe("a Case Id carrying several work orders (migration 065)", () => {
       record({ woId: "", caseId: "SAME" }),
     ]);
     expect(written).toBe(1);
+  });
+});
+
+describe("summarizeRepeatVisits", () => {
+  function row(over: Record<string, unknown> = {}) {
+    return {
+      wo_id: "WO-2", case_id: "C-1", asp_code: "ASPS01461",
+      closed_on: "2026-08-07", closure_status: "WO Closed",
+      prev_wo_id: "WO-1", prev_closed_on: "2026-08-05", gap_days: "2",
+      ...over,
+    };
+  }
+
+  it("counts a visit inside the 15-day window as unpaid", async () => {
+    mocks.query.mockResolvedValue({ rows: [row()] });
+    const out = await summarizeRepeatVisits({ dateFrom: "2026-08-01", dateTo: "2026-08-31" });
+    expect(out.windowDays).toBe(15);
+    expect(out.closed).toBe(1);
+    expect(out.unpaid).toBe(1);
+    expect(out.payable).toBe(0);
+    expect(out.rows[0]).toMatchObject({ woId: "WO-2", previousWoId: "WO-1", gapDays: 2 });
+  });
+
+  it("treats a first closure as payable", async () => {
+    mocks.query.mockResolvedValue({
+      rows: [row({ prev_wo_id: null, prev_closed_on: null, gap_days: null })],
+    });
+    const out = await summarizeRepeatVisits({ dateFrom: "2026-08-01", dateTo: "2026-08-31" });
+    expect(out.unpaid).toBe(0);
+    expect(out.payable).toBe(1);
+    expect(out.rows).toHaveLength(0);
+  });
+
+  it("treats a repeat past the window as payable — a new problem, not a callback", async () => {
+    // 16 days: one day the far side of the rule. Prod case 5162933744 is exactly this.
+    mocks.query.mockResolvedValue({ rows: [row({ gap_days: "16" })] });
+    const out = await summarizeRepeatVisits({ dateFrom: "2026-08-01", dateTo: "2026-08-31" });
+    expect(out.unpaid).toBe(0);
+    expect(out.payable).toBe(1);
+  });
+
+  it("counts the boundary day itself as unpaid", async () => {
+    mocks.query.mockResolvedValue({ rows: [row({ gap_days: "15" })] });
+    const out = await summarizeRepeatVisits({ dateFrom: "2026-08-01", dateTo: "2026-08-31" });
+    expect(out.unpaid).toBe(1);
+  });
+
+  it("splits closed / unpaid / payable per region", async () => {
+    mocks.query.mockResolvedValue({
+      rows: [
+        row({ asp_code: "ASPS01489", gap_days: "3" }),
+        row({ asp_code: "ASPS01489", wo_id: "WO-3", gap_days: "3" }),
+        row({ asp_code: "ASPS01461", gap_days: null, prev_wo_id: null, prev_closed_on: null }),
+      ],
+    });
+    const out = await summarizeRepeatVisits({ dateFrom: "2026-08-01", dateTo: "2026-08-31" });
+    expect(out.byAsp).toEqual([
+      { aspCode: "ASPS01489", closed: 2, unpaid: 2, payable: 0 },
+      { aspCode: "ASPS01461", closed: 1, unpaid: 0, payable: 1 },
+    ]);
+  });
+
+  it("looks for the previous closure OUTSIDE the range, then filters", async () => {
+    // The ordering that matters: a 26 Jul visit whose original closed 20 Jul is unpaid.
+    // A query that only ever saw the range would call it a first closure and bill it.
+    mocks.query.mockResolvedValue({ rows: [] });
+    await summarizeRepeatVisits({ dateFrom: "2026-07-25", dateTo: "2026-08-24" });
+    const sql = String(mocks.query.mock.calls[0]![0]).replace(/\s+/g, " ");
+    const lagAt = sql.indexOf("LAG(");
+    const rangeAt = sql.indexOf("closed_on BETWEEN");
+    expect(lagAt).toBeGreaterThan(-1);
+    expect(rangeAt).toBeGreaterThan(lagAt);
+  });
+
+  it("excludes cancellations from the sequence", async () => {
+    // A cancelled call is not a visit, so a completion after one is first-fix work.
+    mocks.query.mockResolvedValue({ rows: [] });
+    await summarizeRepeatVisits({ dateFrom: "2026-08-01", dateTo: "2026-08-31" });
+    const sql = String(mocks.query.mock.calls[0]![0]).replace(/\s+/g, " ");
+    expect(sql).toContain("'closed'");
+    expect(sql).toContain("CANCEL");
   });
 });
