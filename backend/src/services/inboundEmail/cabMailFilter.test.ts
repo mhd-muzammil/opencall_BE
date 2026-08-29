@@ -24,6 +24,35 @@ describe("isCabMail", () => {
     expect(isCabMail("x@example.com", "Two cabs booked")).toBe(true);
   });
 
+  it("finds the big spare / big part / big product mail from the same desk", () => {
+    expect(isCabMail("x@example.com", "BIG SPARE PART required")).toBe(true);
+    expect(isCabMail("x@example.com", "Big Parts pending approval")).toBe(true);
+    expect(isCabMail("x@example.com", "Big Product replacement")).toBe(true);
+    expect(isCabMail("x@example.com", "Re: big spares for WO-035640797")).toBe(true);
+    expect(isCabMail("bigparts@example.com", "anything")).toBe(true);
+  });
+
+  it("joins big to its word across punctuation, or none at all", () => {
+    expect(isCabMail("x@example.com", "BIG-SPARE approval")).toBe(true);
+    expect(isCabMail("x@example.com", "[BIG_PART] 4471")).toBe(true);
+    expect(isCabMail("x@example.com", "bigspare request")).toBe(true);
+  });
+
+  it("does NOT match bigger, however it is followed", () => {
+    // The separator between big and its word must actually be a separator. Without that,
+    // "bigger part" reads as big + part and every mail about a larger anything arrives.
+    expect(isCabMail("x@example.com", "bigger part needed")).toBe(false);
+    expect(isCabMail("x@example.com", "biggest product in stock")).toBe(false);
+    expect(isCabMail("x@example.com", "Bigham spare")).toBe(false);
+  });
+
+  it("does NOT match big on its own, or big beside anything else", () => {
+    // "Big" alone is a common word; the button would fill with mail about big customers,
+    // big issues and big delays.
+    expect(isCabMail("x@example.com", "Big delay on this call")).toBe(false);
+    expect(isCabMail("x@example.com", "big customer escalation")).toBe(false);
+  });
+
   it("does NOT match a word that merely contains those letters", () => {
     // The reason the rule is a word and not a substring. A filter that pulled in every mail
     // about a cable would be worse than no filter — the button exists to leave everything

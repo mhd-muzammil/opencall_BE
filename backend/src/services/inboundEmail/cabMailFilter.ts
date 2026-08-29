@@ -1,14 +1,16 @@
 /**
- * Which of the mail in the inbox is about cabs.
+ * Which of the mail in the inbox belongs behind the CAB button.
  *
- * There is no field that says so — cab mail arrives in the same region mailboxes as
- * everything else — so it is recognised by the word itself, in the sender's address or in
- * the subject.
+ * Two kinds, both from the same desk and read together: cab mail, and the big spare / big
+ * part / big product traffic. There is no field that says so — it all arrives in the same
+ * region mailboxes as everything else — so it is recognised by the words themselves, in the
+ * sender's address or in the subject.
  *
  * A PLAIN SUBSTRING WOULD BE WRONG. "cab" sits inside cable, cabinet, cabling and Cabot, and
- * a filter that pulled in every mail about a cable would be worse than no filter: the whole
- * point of the button is to see cab mail without everything else. So the word has to stand
- * alone — bounded by something that is not a letter or a digit, or by the start or end.
+ * "big" sits inside bigger; a filter that pulled in every mail about a cable would be worse
+ * than no filter, because the whole point of the button is to see this desk's mail without
+ * everything else. So each word has to stand alone — bounded by something that is not a
+ * letter or a digit, or by the start or end.
  *
  * ONE PATTERN, USED TWICE. The filtering happens in SQL, because the mail for one week can
  * be older than the page the list happens to hold and a filter applied to the loaded page
@@ -21,8 +23,22 @@
  * so an explicit character class is used instead and both read it identically.
  */
 
-/** `cab` or `cabs`, standing as its own word. Case-insensitive at the point of use. */
-export const CAB_MAIL_PATTERN = "(^|[^a-z0-9])cabs?([^a-z0-9]|$)";
+/**
+ * What the CAB button matches: `cab`/`cabs` as a word, or `big` followed by spare/part/
+ * product.
+ *
+ * The second half is the same desk's other traffic — "Big Spare Part", "Big Parts required",
+ * "Big Product replacement" — which is read alongside the cab mail and was arriving in the
+ * inbox with everything else. The button's name stays CAB because that is what it says on
+ * screen; what it gathers is that desk's mail.
+ *
+ * `big` is bounded on its left and joined to the next word by anything that is not a letter
+ * or a digit, so "bigger part" cannot match — after `big` comes `g`, and the separator must
+ * be a separator. Zero separators are allowed too, which catches "bigspare" without letting
+ * "bigger" through.
+ */
+export const CAB_MAIL_PATTERN =
+  "(^|[^a-z0-9])(cabs?([^a-z0-9]|$)|big[^a-z0-9]*(spare|part|product))";
 
 /**
  * Does this message look like cab mail?

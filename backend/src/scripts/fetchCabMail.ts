@@ -45,12 +45,23 @@ import {
  * is guarded by the same message_id conflict the sweep uses — a message already held is a
  * no-op. Nothing is ever deleted.
  *
- *   node dist/scripts/fetchCabMail.js            # every mailbox, last 2 months
- *   node dist/scripts/fetchCabMail.js 3          # last 3 months instead
+ *   node dist/scripts/fetchCabMail.js            # every mailbox, last 3 months
+ *   node dist/scripts/fetchCabMail.js 6          # last 6 months instead
  */
 
-/** How far back to reach. Two months is what was asked for; the argument overrides it. */
-const DEFAULT_MONTHS = 2;
+/** How far back to reach. Three months is what was asked for; the argument overrides it. */
+const DEFAULT_MONTHS = 3;
+
+/**
+ * What to ask the server for, per mailbox.
+ *
+ * Deliberately broader than the rule that decides what gets stored. IMAP SEARCH matches
+ * substrings, so "big" brings back bigger, Bigham and every big delay along with the big
+ * spare parts — and `isCabMail` throws those out before anything is written. Asking the
+ * server for the exact phrase instead would be neater and would miss "BIG-SPARE", which
+ * matches no phrase but is plainly one of these.
+ */
+const SEARCH_WORDS = ["cab", "big"] as const;
 
 /** Per mailbox, per run. A guard against a search that matches half an inbox. */
 const MAX_PER_MAILBOX = Number(process.env.CAB_FETCH_MAX ?? 500) || 500;
@@ -183,7 +194,7 @@ async function run(): Promise<void> {
 
   console.log("=".repeat(74));
   console.log(`CAB MAIL BACKFILL — last ${months} month(s), from ${since.toISOString().slice(0, 10)}`);
-  console.log("Only mail whose sender or subject carries the word cab is stored.");
+  console.log("Only mail whose sender or subject carries cab, or big spare/part/product.");
   console.log("The ingest watermark is NOT touched, and nothing is ever deleted.");
   console.log("=".repeat(74));
 
@@ -238,14 +249,14 @@ async function run(): Promise<void> {
           continue;
         }
         try {
-          // Two questions of the server, deduplicated: the word in the subject, and the word
-          // in the sender. Asking only about the subject would miss a booking desk that
-          // writes nothing useful in it.
+          // Each word asked of the subject and of the sender, deduplicated. Asking only
+          // about the subject would miss a booking desk that writes nothing useful in it.
           const uids = new Set<number>();
-          for (const criteria of [
-            { since, subject: "cab" },
-            { since, from: "cab" },
-          ]) {
+          const searches = SEARCH_WORDS.flatMap((word) => [
+            { since, subject: word },
+            { since, from: word },
+          ]);
+          for (const criteria of searches) {
             try {
               const found = await client.search(criteria, { uid: true });
               for (const uid of Array.isArray(found) ? found : []) {
@@ -303,14 +314,14 @@ async function run(): Promise<void> {
     }
 
     console.log(
-      `${mailbox.email} — ${stored} new cab message(s) stored` +
-        (notCab > 0 ? `, ${notCab} skipped (cable/cabinet, not cab)` : ""),
+      `${mailbox.email} — ${stored} new CAB message(s) stored` +
+        (notCab > 0 ? `, ${notCab} skipped (cable, bigger, big delay — not this desk)` : ""),
     );
     storedTotal += stored;
   }
 
   console.log(
-    `\nDone. ${storedTotal} new cab message(s) stored.\n` +
+    `\nDone. ${storedTotal} new CAB message(s) stored.\n` +
       `Open Customer Emails and press CAB — the last ${months} months are there now.`,
   );
 }
