@@ -243,9 +243,26 @@ export interface LiveEngineer {
   active_case_number: string | null;
 }
 
+
+/**
+ * The same trail with each fix moved onto the road it was taken on. Payroll
+ * caches this per engineer-day, so reading it costs nothing extra.
+ *
+ * `source` says how much of it is real: "ola" all of it, "partial" a snapped
+ * body with the newest few fixes still raw, "raw" none of it — Payroll has no
+ * key, or Ola was unreachable. Absent entirely when no date was asked for.
+ */
+export interface RoadPath {
+  points: Array<[number, number]>;
+  snapped: number;
+  raw: number;
+  source: "ola" | "partial" | "raw";
+}
+
 export interface TrackPath {
   count: number;
   total_km: number;
+  road_path?: RoadPath;
   points: Array<{
     latitude: number;
     longitude: number;
@@ -362,6 +379,7 @@ export interface EngineerDay {
     accuracy: number | null;
     status: string;
   }>;
+  road_path?: RoadPath;
 }
 
 export async function getEngineerDay(engineerId: number, date?: string): Promise<EngineerDay> {
