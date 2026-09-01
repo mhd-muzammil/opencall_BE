@@ -19,10 +19,10 @@ const mocks = vi.hoisted(() => ({
   findPreviousFinalReportRowsForManualCarryForward: vi.fn(),
   findFlexStatusHistoryForUnchangedDays: vi.fn(),
   findSameDayUserSetEveningRows: vi.fn(),
-  adoptReportRowEveningStatusFromAuthority: vi.fn(),
+  adoptReportRowEveningStatusFromAuthorityBulk: vi.fn(),
   findDailyCallPlanReportRowMetadataByReportId: vi.fn(),
-  backfillMissingDailyCallPlanReportRowCarryForward: vi.fn(),
-  overwriteCarriedForwardFieldValues: vi.fn(),
+  backfillMissingDailyCallPlanReportRowCarryForwardBulk: vi.fn(),
+  overwriteCarriedForwardFieldValuesBulk: vi.fn(),
   createDailyCallPlanReport: vi.fn(),
   insertDailyCallPlanReportRows: vi.fn(),
   findOrCreateCompletedHistorySessionForReport: vi.fn(),
@@ -44,10 +44,10 @@ vi.mock("../../repositories/businessRuleRepository.js", () => ({
 }));
 
 vi.mock("../../repositories/dailyCallPlanReportRepository.js", () => ({
-  backfillMissingDailyCallPlanReportRowCarryForward:
-    mocks.backfillMissingDailyCallPlanReportRowCarryForward,
-  overwriteCarriedForwardFieldValues:
-    mocks.overwriteCarriedForwardFieldValues,
+  backfillMissingDailyCallPlanReportRowCarryForwardBulk:
+    mocks.backfillMissingDailyCallPlanReportRowCarryForwardBulk,
+  overwriteCarriedForwardFieldValuesBulk:
+    mocks.overwriteCarriedForwardFieldValuesBulk,
   createDailyCallPlanReport: mocks.createDailyCallPlanReport,
   findDailyCallPlanReportRowMetadataByReportId:
     mocks.findDailyCallPlanReportRowMetadataByReportId,
@@ -56,7 +56,7 @@ vi.mock("../../repositories/dailyCallPlanReportRepository.js", () => ({
   findFlexStatusHistoryForUnchangedDays:
     mocks.findFlexStatusHistoryForUnchangedDays,
   findSameDayUserSetEveningRows: mocks.findSameDayUserSetEveningRows,
-  adoptReportRowEveningStatusFromAuthority: mocks.adoptReportRowEveningStatusFromAuthority,
+  adoptReportRowEveningStatusFromAuthorityBulk: mocks.adoptReportRowEveningStatusFromAuthorityBulk,
   insertDailyCallPlanReportRows: mocks.insertDailyCallPlanReportRows,
   findMaxDailyCallPlanReportRowSerialNo:
     mocks.findMaxDailyCallPlanReportRowSerialNo,
@@ -241,7 +241,7 @@ describe("generateDailyCallPlanReport", () => {
     mocks.findMaxDailyCallPlanReportRowSerialNo.mockResolvedValue(0);
     // Default: no user-set same-day Evening statuses.
     mocks.findSameDayUserSetEveningRows.mockResolvedValue([]);
-    mocks.adoptReportRowEveningStatusFromAuthority.mockResolvedValue(undefined);
+    mocks.adoptReportRowEveningStatusFromAuthorityBulk.mockResolvedValue(undefined);
   });
 
   it("does not let blank persisted RTPL erase previous-final carry-forward on existing reports", async () => {
@@ -303,13 +303,16 @@ describe("generateDailyCallPlanReport", () => {
     expect(report.rows[0]?.enriched.rtpl_status).toBe("Part Pending");
     expect(report.rows[0]?.output["RTPL status"]).toBe("Part Pending");
     expect(
-      mocks.backfillMissingDailyCallPlanReportRowCarryForward,
+      mocks.backfillMissingDailyCallPlanReportRowCarryForwardBulk,
     ).toHaveBeenCalledWith(
       client,
-      expect.objectContaining({
-        rowId: "row-1",
-        rtplStatus: "Part Pending",
-      }),
+      // One batched write now carries every repaired row; this one must be in it.
+      expect.arrayContaining([
+        expect.objectContaining({
+          rowId: "row-1",
+          rtplStatus: "Part Pending",
+        }),
+      ]),
     );
   });
 
@@ -385,14 +388,14 @@ describe("generateDailyCallPlanReport", () => {
     // Nothing may be written back over the clear either — the repair path is
     // how the old name reached the database in the first place.
     expect(
-      mocks.backfillMissingDailyCallPlanReportRowCarryForward,
+      mocks.backfillMissingDailyCallPlanReportRowCarryForwardBulk,
     ).not.toHaveBeenCalledWith(
       client,
-      expect.objectContaining({ engineer: "Priya" }),
+      expect.arrayContaining([expect.objectContaining({ engineer: "Priya" })]),
     );
-    expect(mocks.overwriteCarriedForwardFieldValues).not.toHaveBeenCalledWith(
+    expect(mocks.overwriteCarriedForwardFieldValuesBulk).not.toHaveBeenCalledWith(
       client,
-      expect.objectContaining({ engineer: "Priya" }),
+      expect.arrayContaining([expect.objectContaining({ engineer: "Priya" })]),
     );
   });
 
@@ -526,13 +529,17 @@ describe("generateDailyCallPlanReport", () => {
     expect(report.rows[0]?.enriched.rtpl_status).toBe("Escalated");
     expect(report.rows[0]?.output["RTPL status"]).toBe("Escalated");
     // And it is persisted via an overwrite (not the fill-if-empty backfill).
-    expect(mocks.overwriteCarriedForwardFieldValues).toHaveBeenCalledWith(
+    expect(mocks.overwriteCarriedForwardFieldValuesBulk).toHaveBeenCalledWith(
       client,
-      expect.objectContaining({ rowId: "row-1", rtplStatus: "Escalated" }),
+      expect.arrayContaining([
+        expect.objectContaining({ rowId: "row-1", rtplStatus: "Escalated" }),
+      ]),
     );
+    // The batched writer is always invoked; what matters is that it was handed
+    // nothing — the row took the overwrite branch, not the fill-if-empty one.
     expect(
-      mocks.backfillMissingDailyCallPlanReportRowCarryForward,
-    ).not.toHaveBeenCalled();
+      mocks.backfillMissingDailyCallPlanReportRowCarryForwardBulk,
+    ).toHaveBeenCalledWith(client, []);
   });
 
   // Regression for the production "Evening status disappears against Scheduled
@@ -675,11 +682,16 @@ describe("generateDailyCallPlanReport", () => {
     });
 
     expect(report.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
-    expect(mocks.adoptReportRowEveningStatusFromAuthority).toHaveBeenCalledWith(client, {
-      rowId: "row-1",
-      eveningRtplStatus: "Case-Closed",
-      authorityEveningUpdatedAt: "2026-05-26 17:30:00+05:30",
-    });
+    expect(mocks.adoptReportRowEveningStatusFromAuthorityBulk).toHaveBeenCalledWith(
+      client,
+      [
+        {
+          rowId: "row-1",
+          eveningRtplStatus: "Case-Closed",
+          authorityEveningUpdatedAt: "2026-05-26 17:30:00+05:30",
+        },
+      ],
+    );
   });
 
   /**
@@ -764,11 +776,16 @@ describe("generateDailyCallPlanReport", () => {
     });
 
     expect(report.rows[0]?.enriched.evening_rtpl_status).toBe("Attended");
-    expect(mocks.adoptReportRowEveningStatusFromAuthority).toHaveBeenCalledWith(client, {
-      rowId: "row-1",
-      eveningRtplStatus: "Attended",
-      authorityEveningUpdatedAt: "2026-05-26 18:00:00+05:30",
-    });
+    expect(mocks.adoptReportRowEveningStatusFromAuthorityBulk).toHaveBeenCalledWith(
+      client,
+      [
+        {
+          rowId: "row-1",
+          eveningRtplStatus: "Attended",
+          authorityEveningUpdatedAt: "2026-05-26 18:00:00+05:30",
+        },
+      ],
+    );
   });
 
   it("never heals over a row whose EVENING was cleared after the authority entry", async () => {
@@ -838,7 +855,11 @@ describe("generateDailyCallPlanReport", () => {
     });
 
     expect(report.rows[0]?.enriched.evening_rtpl_status ?? null).toBeNull();
-    expect(mocks.adoptReportRowEveningStatusFromAuthority).not.toHaveBeenCalled();
+    // Invoked, but with nothing queued: no row asked to be healed.
+    expect(mocks.adoptReportRowEveningStatusFromAuthorityBulk).toHaveBeenCalledWith(
+      client,
+      [],
+    );
   });
 
   // Regression (prod 2026-07-30): the heal compared rows.updated_at, which
@@ -911,11 +932,16 @@ describe("generateDailyCallPlanReport", () => {
     });
 
     expect(report.rows[0]?.enriched.evening_rtpl_status).toBe("Case-Closed");
-    expect(mocks.adoptReportRowEveningStatusFromAuthority).toHaveBeenCalledWith(client, {
-      rowId: "row-1",
-      eveningRtplStatus: "Case-Closed",
-      authorityEveningUpdatedAt: "2026-05-26 17:00:00+05:30",
-    });
+    expect(mocks.adoptReportRowEveningStatusFromAuthorityBulk).toHaveBeenCalledWith(
+      client,
+      [
+        {
+          rowId: "row-1",
+          eveningRtplStatus: "Case-Closed",
+          authorityEveningUpdatedAt: "2026-05-26 17:00:00+05:30",
+        },
+      ],
+    );
   });
 
   // Regression for the 2026-07-23 mass-close: regenerating an EXISTING report

@@ -7,7 +7,7 @@ import {
   OPTIONAL_MANUAL_CARRY_FORWARD_FIELDS,
 } from "../types/reportGeneration.js";
 import {
-  adoptReportRowEveningStatusFromAuthority,
+  adoptReportRowEveningStatusFromAuthorityBulk,
   findDailyCallPlanReportRowMetadataByReportId,
   findPreviousFinalReportRowsForManualCarryForward,
   findSameDayUserSetEveningRows,
@@ -131,8 +131,10 @@ function generatedRow(): GeneratedDailyCallPlanRow {
 
 describe("insertDailyCallPlanReportRows", () => {
   it("persists carry-forward metadata on final report rows", async () => {
+    // RETURNING now carries serial_no: the INSERT is a chunked multi-row statement and
+    // results are paired back to their row by serial, never by result position.
     const query = vi.fn().mockResolvedValue({
-      rows: [{ id: "row-1", updated_at: null, updated_by: null }],
+      rows: [{ serial_no: 1, id: "row-1", updated_at: null, updated_by: null }],
     });
     const client = { query } as unknown as PoolClient;
 
@@ -161,6 +163,67 @@ describe("insertDailyCallPlanReportRows", () => {
     expect(values[41]).toBeNull();
     // same_day_closed is appended last.
     expect(values[42]).toBe(false);
+  });
+
+  it("writes many rows in ONE statement and pairs results by serial, not position", async () => {
+    // The whole point of the batched INSERT: a production report is thousands of rows,
+    // and one statement per row ran them serially inside the transaction that holds the
+    // generation advisory lock.
+    const rows = [1, 2, 3].map((serialNo) => ({
+      ...generatedRow(),
+      serialNo,
+      enriched: { ...generatedRow().enriched, ticket_id: `WO-${serialNo}` },
+    }));
+    // Deliberately out of VALUES order: Postgres makes no promise about RETURNING order
+    // for a multi-row INSERT, and pairing by position would hand a row another row's id.
+    const query = vi.fn().mockResolvedValue({
+      rows: [
+        { serial_no: 3, id: "row-3", updated_at: null, updated_by: null },
+        { serial_no: 1, id: "row-1", updated_at: null, updated_by: null },
+        { serial_no: 2, id: "row-2", updated_at: null, updated_by: null },
+      ],
+    });
+    const client = { query } as unknown as PoolClient;
+
+    await insertDailyCallPlanReportRows(client, "report-1", rows);
+
+    expect(query).toHaveBeenCalledOnce();
+    const [sql, values] = query.mock.calls[0] as [string, unknown[]];
+    // Three tuples of 45 columns, one statement.
+    expect(values).toHaveLength(135);
+    expect(sql).toContain("$45");
+    expect(sql).toContain("$90");
+    expect(sql).toContain("$135");
+    // The casts must follow the column into every tuple, not just the first.
+    expect(sql).toContain("$35::jsonb");
+    expect(sql).toContain("$80::jsonb");
+    expect(sql).toContain("$39::text[]");
+    expect(sql).toContain("$84::text[]");
+
+    expect(rows.map((row) => row.id)).toEqual(["row-1", "row-2", "row-3"]);
+  });
+
+  it("splits past the parameter limit into several statements", async () => {
+    const rows = Array.from({ length: 401 }, (_, index) => ({
+      ...generatedRow(),
+      serialNo: index + 1,
+    }));
+    const query = vi.fn().mockImplementation((_sql: string, values: unknown[]) => ({
+      rows: Array.from({ length: values.length / 45 }, (_, index) => ({
+        serial_no: values[index * 45 + 1],
+        id: `row-${String(values[index * 45 + 1])}`,
+        updated_at: null,
+        updated_by: null,
+      })),
+    }));
+    const client = { query } as unknown as PoolClient;
+
+    await insertDailyCallPlanReportRows(client, "report-1", rows);
+
+    // 400 rows x 45 params = 18,000, comfortably under Postgres' 65,535 cap.
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(rows[0]?.id).toBe("row-1");
+    expect(rows[400]?.id).toBe("row-401");
   });
 
   it("loads persisted manual fields for regenerated history reports", async () => {
@@ -381,11 +444,13 @@ describe("insertDailyCallPlanReportRows", () => {
     const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 1 });
     const client = { query } as unknown as PoolClient;
 
-    await adoptReportRowEveningStatusFromAuthority(client, {
-      rowId: "row-1",
-      eveningRtplStatus: "Case-Closed",
-      authorityEveningUpdatedAt: "2026-08-07 17:30:00+05:30",
-    });
+    await adoptReportRowEveningStatusFromAuthorityBulk(client, [
+      {
+        rowId: "row-1",
+        eveningRtplStatus: "Case-Closed",
+        authorityEveningUpdatedAt: "2026-08-07 17:30:00+05:30",
+      },
+    ]);
 
     const [sql, values] = query.mock.calls[0] as [string, unknown[]];
 
@@ -394,35 +459,63 @@ describe("insertDailyCallPlanReportRows", () => {
     // today's reports never reached it — the "it comes back to the same old
     // status" complaint that survived four rounds of vanishing-Evening fixes.
     expect(sql).not.toContain(
-      "NULLIF(TRIM(COALESCE(evening_rtpl_status, '')), '') IS NULL",
+      "NULLIF(TRIM(COALESCE(target.evening_rtpl_status, '')), '') IS NULL",
     );
-    expect(sql).toContain("evening_rtpl_status_updated_at IS NULL");
-    expect(sql).toContain("evening_rtpl_status_updated_at < $3");
+    expect(sql).toContain("target.evening_rtpl_status_updated_at IS NULL");
+    expect(sql).toContain(
+      "target.evening_rtpl_status_updated_at < src.authority_evening_updated_at",
+    );
 
-    // Still guarded in-SQL so a concurrent save always wins.
-    expect(sql).toContain("evening_rtpl_status IS DISTINCT FROM $2");
+    // Still guarded in-SQL so a concurrent save always wins. Batching moved the
+    // guards from bind parameters onto the joined record set; it did not remove one.
+    expect(sql).toContain(
+      "target.evening_rtpl_status IS DISTINCT FROM src.evening_rtpl_status",
+    );
 
     // A system copy of another report's user edit — must NOT stamp either
     // timestamp, or it would outrank the original in the authority ordering.
-    expect(sql).not.toContain("SET evening_rtpl_status = $2,");
+    expect(sql).not.toContain("evening_rtpl_status = src.evening_rtpl_status,");
     expect(sql).not.toContain("updated_at = NOW()");
-    expect(values).toEqual(["row-1", "Case-Closed", "2026-08-07 17:30:00+05:30"]);
+    expect(JSON.parse(String(values[0]))).toEqual([
+      {
+        row_id: "row-1",
+        evening_rtpl_status: "Case-Closed",
+        authority_evening_updated_at: "2026-08-07 17:30:00+05:30",
+      },
+    ]);
   });
 
   it("still writes when the authority has no Evening timestamp", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 1 });
     const client = { query } as unknown as PoolClient;
 
-    await adoptReportRowEveningStatusFromAuthority(client, {
-      rowId: "row-1",
-      eveningRtplStatus: "Attended",
-      authorityEveningUpdatedAt: null,
-    });
+    await adoptReportRowEveningStatusFromAuthorityBulk(client, [
+      {
+        rowId: "row-1",
+        eveningRtplStatus: "Attended",
+        authorityEveningUpdatedAt: null,
+      },
+    ]);
 
     const [, values] = query.mock.calls[0] as [string, unknown[]];
     // Null is passed through; the SQL then only adopts onto rows that were
     // never Evening-edited, so a real user edit here is never clobbered.
-    expect(values).toEqual(["row-1", "Attended", null]);
+    expect(JSON.parse(String(values[0]))).toEqual([
+      {
+        row_id: "row-1",
+        evening_rtpl_status: "Attended",
+        authority_evening_updated_at: null,
+      },
+    ]);
+  });
+
+  it("sends nothing to the database when no row asked to be healed", async () => {
+    const query = vi.fn();
+    const client = { query } as unknown as PoolClient;
+
+    await adoptReportRowEveningStatusFromAuthorityBulk(client, []);
+
+    expect(query).not.toHaveBeenCalled();
   });
 
   it("updates only the addressed report row for persisted manual edits", async () => {
