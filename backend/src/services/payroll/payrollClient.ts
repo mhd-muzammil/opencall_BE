@@ -215,6 +215,48 @@ export async function bulkDispatchCases(
   });
 }
 
+// ---- Engineer scorecards (OpenCall -> Payroll) --------------------------
+
+export interface PayrollScorecardRow {
+  engineer_name: string;
+  engineer_email?: string;
+  engineer_phone?: string;
+  assigned: number;
+  attended: number;
+  closed: number;
+  /** Closes since the 1st of the month, for the month-to-date target. */
+  month_closed: number;
+}
+
+export interface PayrollScorecardResult {
+  saved: number;
+  zeroed: number;
+  skipped: Array<{ engineer_name: string | null; reason: string }>;
+}
+
+/**
+ * Push today's Assigned / Attended / Closed per engineer, plus the standing
+ * target, so the engineer's own phone shows the same figures as the Engineer
+ * Productivity page. One row per engineer, replaced in place on the Payroll
+ * side; an engineer Payroll cannot match is reported, not fatal.
+ */
+export async function pushEngineerScorecards(input: {
+  asOf: string;
+  dailyTarget: number;
+  monthlyTarget: number;
+  rows: PayrollScorecardRow[];
+}): Promise<PayrollScorecardResult> {
+  return authed<PayrollScorecardResult>("/api/cases/scorecards/", {
+    method: "POST",
+    body: JSON.stringify({
+      as_of: input.asOf,
+      daily_target: input.dailyTarget,
+      monthly_target: input.monthlyTarget,
+      rows: input.rows,
+    }),
+  });
+}
+
 // ---- Live tracking (Payroll -> OpenCall) --------------------------------
 
 export interface LiveEngineer {

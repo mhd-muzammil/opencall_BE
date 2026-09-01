@@ -14,6 +14,7 @@
 import { istTodayIso } from "@opencall/shared";
 import { isPayrollConfigured } from "./payrollClient.js";
 import { syncAssignedCasesForDate } from "./syncAssignedCases.js";
+import { syncEngineerScorecardsForDate } from "./syncEngineerScorecards.js";
 
 // Every 2 minutes. The push is idempotent on ticket id and a whole day is only a
 // few dozen rows, so the cost is negligible next to an engineer sitting in front
@@ -45,6 +46,31 @@ async function runOnce(): Promise<void> {
   } catch (error) {
     console.error(
       `[payroll] auto-sync ${date} failed:`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+
+  // Then the numbers. Its own try/catch on purpose: the case sync above is what
+  // an engineer's whole day depends on, and a scorecard that fails to push must
+  // cost nothing but a scorecard. Runs after, never before, for the same reason.
+  try {
+    const scorecards = await syncEngineerScorecardsForDate(date);
+    if (scorecards.payroll) {
+      const { saved, zeroed, skipped } = scorecards.payroll;
+      console.log(
+        `[payroll] scorecards ${date}: saved=${saved} zeroed=${zeroed}` +
+          (skipped.length
+            ? ` unmatched=[${skipped.map((s) => s.engineer_name ?? "?").join(", ")}]`
+            : ""),
+      );
+    } else {
+      console.log(
+        `[payroll] scorecards ${date}: nothing pushed — ${scorecards.message ?? "no reason given"}`,
+      );
+    }
+  } catch (error) {
+    console.error(
+      `[payroll] scorecards ${date} failed:`,
       error instanceof Error ? error.message : error,
     );
   }
