@@ -89,10 +89,19 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
   // The engineer-facing detail for each ticket, from the very row the call was
   // assigned on: customer, contact, product, and the postal address that tells
   // them where to actually go.
+  //
+  // Only the assigned tickets. The lateral join into the Flex WIP records costs
+  // a lookup per row, so fetching the whole 3,800-row report to read a few dozen
+  // of them was most of the query's cost spent on rows the loop below never asks
+  // for — and enough of it to cross statement_timeout and stop the sync outright.
   let detailByTicket = new Map<string, TicketDetailRow>();
+  const assignedTickets = [...new Set([...assignedByEngineer.values()].flatMap((set) => [...set]))];
   const session = await findLatestCompletedSessionByReportDate(workingDate);
-  if (session?.daily_call_plan_report_id) {
-    detailByTicket = await findTicketDetailsByReportId(session.daily_call_plan_report_id);
+  if (session?.daily_call_plan_report_id && assignedTickets.length > 0) {
+    detailByTicket = await findTicketDetailsByReportId(
+      session.daily_call_plan_report_id,
+      assignedTickets,
+    );
   }
 
   // Resolve each engineer's email + phone once (reliable Payroll match keys).

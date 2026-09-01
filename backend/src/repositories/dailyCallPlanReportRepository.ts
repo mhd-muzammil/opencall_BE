@@ -819,10 +819,29 @@ export interface TicketDetailRow {
  * live only on the Flex WIP record, so the latest one per ticket is joined in.
  * The join normalises the ticket id the same way the matching engine does
  * (upper case, non-alphanumerics stripped) rather than trusting the raw text.
+ *
+ * `onlyTickets` narrows it to the tickets the caller is actually going to read.
+ * The lateral join costs a lookup PER ROW, so asking for a whole 3,800-row
+ * report to use a few dozen of them is most of the query's cost thrown away —
+ * and it was enough cost to cross statement_timeout and stop the Payroll sync
+ * outright. Omit it and every row comes back, exactly as before.
  */
 export async function findTicketDetailsByReportId(
   reportId: string,
+  onlyTickets?: readonly string[],
 ): Promise<Map<string, TicketDetailRow>> {
+  // Normalised the same way the returned map is keyed and the index is built
+  // (daily_call_plan_report_rows_ticket_upper_id_idx is on UPPER(TRIM(...))),
+  // so the filter can be served from the index instead of scanning.
+  const wanted = onlyTickets
+    ? [...new Set(onlyTickets.map((t) => t.trim().toUpperCase()).filter(Boolean))]
+    : null;
+  // An explicit but EMPTY list means the caller wants nothing, which is not the
+  // same as not asking — returning the whole report there would be the bug this
+  // parameter exists to fix.
+  if (wanted && wanted.length === 0) {
+    return new Map<string, TicketDetailRow>();
+  }
   const result = await query<{
     ticket_id: string | null;
     case_id: string | null;
@@ -869,9 +888,10 @@ export async function findTicketDetailsByReportId(
         LIMIT 1
       ) f ON TRUE
       WHERE r.report_id = $1 AND NOT r.is_excluded
+        ${wanted ? "AND UPPER(TRIM(r.ticket_id)) = ANY($2::text[])" : ""}
       ORDER BY r.serial_no ASC, r.id ASC
     `,
-    [reportId],
+    wanted ? [reportId, wanted] : [reportId],
   );
 
   const text = (value: string | null) => (value ?? "").trim();
