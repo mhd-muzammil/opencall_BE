@@ -27,9 +27,31 @@ export async function createApp() {
   }
 
   // gzip/deflate all responses. The daily call-plan report JSON is large
-  // (hundreds of rows × ~30 columns, plus merged raw Excel columns) and
-  // compresses ~85%, cutting the post-login report download substantially.
-  app.use(compression());
+  // (thousands of rows × ~30 columns, plus merged raw Excel columns) and
+  // compresses ~93%, cutting the post-login report download substantially.
+  //
+  // Level 2, not zlib's default 6. Compression here is SYNCHRONOUS CPU on the one
+  // thread that also runs every other request: while the report is being compressed,
+  // nothing else in the process progresses and no database connection is released.
+  // Measured on a ~16 MB report payload:
+  //
+  //   level 6   1.04 MB   267 ms      level 2   1.18 MB   120 ms
+  //   level 9   0.98 MB  1733 ms      level 1   1.62 MB   123 ms
+  //
+  // So level 2 buys back 55% of the CPU for 140 KB, and strictly beats level 1 on
+  // both axes. Level 9 is never worth it. Override with COMPRESSION_LEVEL if a
+  // deployment is bandwidth-bound rather than CPU-bound.
+  const compressionLevel = Number.parseInt(process.env.COMPRESSION_LEVEL ?? "", 10);
+  app.use(
+    compression({
+      level:
+        Number.isFinite(compressionLevel) &&
+        compressionLevel >= 0 &&
+        compressionLevel <= 9
+          ? compressionLevel
+          : 2,
+    }),
+  );
 
   app.use(
     helmet({

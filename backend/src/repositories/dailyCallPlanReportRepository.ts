@@ -12,6 +12,8 @@ interface DailyReportRow {
 }
 
 interface InsertedDailyReportRow {
+  /** Returned so a chunked multi-row INSERT can pair each result with its own row. */
+  serial_no: number | string;
   id: string;
   updated_at: string | null;
   updated_by: string | null;
@@ -521,136 +523,207 @@ export async function findMaxDailyCallPlanReportRowSerialNo(
   return Number(result.rows[0]?.max_serial ?? 0);
 }
 
+/**
+ * Columns of `daily_call_plan_report_rows` written at generation, in parameter order.
+ *
+ * Kept beside the value builder below so the two cannot drift: a column added to one
+ * and not the other is a compile error, not a runtime `INSERT has more target columns
+ * than expressions`.
+ */
+const REPORT_ROW_INSERT_COLUMNS = [
+  "report_id",
+  "serial_no",
+  "ticket_id",
+  "case_id",
+  "case_created_time",
+  "wip_aging",
+  "status_aging",
+  "rtpl_status",
+  "evening_rtpl_status",
+  "segment",
+  "engineer",
+  "product",
+  "product_line_name",
+  "work_location",
+  "flex_status",
+  "hp_owner_status",
+  "wo_otc_code",
+  "account_name",
+  "customer_name",
+  "customer_type",
+  "product_serial_no",
+  "location",
+  "contact",
+  "part",
+  "wip_aging_category",
+  "tat",
+  "customer_mail",
+  "rca",
+  "remarks",
+  "manual_notes",
+  "change_type",
+  "previous_flex_status",
+  "previous_rtpl_status",
+  "previous_wip_aging",
+  "changed_fields",
+  "change_summary",
+  "carried_forward_fields",
+  "manual_fields_completed",
+  "manual_fields_missing",
+  "match_status",
+  "match_notes",
+  "flex_status_unchanged_days",
+  "same_day_closed",
+  "distance_km",
+  "distance_bearing",
+] as const;
+
+/** Casts the placeholders that need one, by 1-based position in the list above. */
+const REPORT_ROW_INSERT_CASTS: Readonly<Record<number, string>> = {
+  35: "::jsonb", // changed_fields
+  37: "::jsonb", // carried_forward_fields
+  39: "::text[]", // manual_fields_missing
+  41: "::jsonb", // match_notes
+};
+
+function reportRowInsertValues(
+  reportId: string,
+  row: GeneratedDailyCallPlanRow,
+): unknown[] {
+  return [
+    reportId,
+    row.serialNo,
+    row.enriched.ticket_id,
+    row.enriched.case_id || null,
+    row.enriched.case_created_time,
+    row.enriched.wip_aging,
+    row.enriched.status_aging,
+    row.enriched.rtpl_status,
+    row.enriched.evening_rtpl_status ?? null,
+    row.enriched.segment,
+    row.enriched.engineer,
+    row.enriched.product,
+    row.enriched.product_line_name,
+    row.enriched.work_location,
+    row.enriched.flex_status,
+    row.enriched.hp_owner_status,
+    row.enriched.wo_otc_code,
+    row.enriched.account_name,
+    row.enriched.customer_name,
+    row.enriched.customer_type,
+    row.enriched.product_serial_no,
+    row.enriched.location,
+    row.enriched.contact,
+    row.enriched.part,
+    row.enriched.wip_aging_category,
+    row.enriched.tat,
+    row.enriched.customer_mail,
+    row.enriched.rca,
+    row.enriched.remarks,
+    row.enriched.manual_notes,
+    row.comparison?.changeType ?? null,
+    row.comparison?.previousFlexStatus ?? null,
+    row.comparison?.previousRtplStatus ?? null,
+    row.comparison?.previousWipAging ?? null,
+    JSON.stringify(row.comparison?.changedFields ?? {}),
+    row.comparison?.changeSummary ?? null,
+    JSON.stringify(row.carryForward.carriedForwardFields),
+    row.carryForward.manualFieldsCompleted,
+    row.carryForward.manualFieldsMissing,
+    row.enriched.match_status,
+    JSON.stringify(row.match.notes),
+    row.comparison?.flexStatusUnchangedDays ?? null,
+    row.carryForward.sameDayClosedRow,
+    row.enriched.distance_km,
+    row.enriched.distance_bearing,
+  ];
+}
+
+/**
+ * Rows per INSERT statement.
+ *
+ * Postgres caps a statement at 65535 bound parameters; at 45 columns that is 1456 rows.
+ * 400 keeps a comfortable margin and bounds the size of any single statement.
+ */
+const REPORT_ROW_INSERT_CHUNK = 400;
+
+/**
+ * Persists a report's rows.
+ *
+ * Written as chunked multi-row INSERTs rather than one statement per row. A full
+ * production report is several thousand rows, and one round-trip each ran them
+ * strictly serially inside the generation transaction — which holds
+ * `pg_advisory_xact_lock` for its whole duration, so every other generation of the
+ * same report queued behind it. The work is identical; it is the round-trips that
+ * were the cost.
+ *
+ * `RETURNING` is mapped back by `serial_no` (UNIQUE per report) rather than by result
+ * position: Postgres does not promise that a multi-row INSERT returns rows in VALUES
+ * order, and silently pairing a row with another row's id would mis-attribute every
+ * later edit.
+ */
 export async function insertDailyCallPlanReportRows(
   client: PoolClient,
   reportId: string,
   rows: readonly GeneratedDailyCallPlanRow[],
 ): Promise<void> {
-  for (const row of rows) {
+  const columnList = REPORT_ROW_INSERT_COLUMNS.join(",\n          ");
+
+  for (let offset = 0; offset < rows.length; offset += REPORT_ROW_INSERT_CHUNK) {
+    const chunk = rows.slice(offset, offset + REPORT_ROW_INSERT_CHUNK);
+    const values: unknown[] = [];
+    const tuples: string[] = [];
+
+    for (const row of chunk) {
+      const rowValues = reportRowInsertValues(reportId, row);
+      const placeholders = rowValues.map((_, index) => {
+        const position = index + 1;
+        return `$${values.length + position}${REPORT_ROW_INSERT_CASTS[position] ?? ""}`;
+      });
+      values.push(...rowValues);
+      tuples.push(`(${placeholders.join(", ")})`);
+    }
+
     const result = await client.query<InsertedDailyReportRow>(
       `
         INSERT INTO daily_call_plan_report_rows (
-          report_id,
+          ${columnList}
+        )
+        VALUES
+        ${tuples.join(",\n        ")}
+        RETURNING
           serial_no,
-          ticket_id,
-          case_id,
-          case_created_time,
-          wip_aging,
-          status_aging,
-          rtpl_status,
-          evening_rtpl_status,
-          segment,
-          engineer,
-          product,
-          product_line_name,
-          work_location,
-          flex_status,
-          hp_owner_status,
-          wo_otc_code,
-          account_name,
-          customer_name,
-          customer_type,
-          product_serial_no,
-          location,
-          contact,
-          part,
-          wip_aging_category,
-          tat,
-          customer_mail,
-          rca,
-          remarks,
-          manual_notes,
-          change_type,
-          previous_flex_status,
-          previous_rtpl_status,
-          previous_wip_aging,
-          changed_fields,
-          change_summary,
-          carried_forward_fields,
-          manual_fields_completed,
-          manual_fields_missing,
-          match_status,
-          match_notes,
-          flex_status_unchanged_days,
-          same_day_closed,
-          distance_km,
-          distance_bearing
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8,
-          $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24,
-          $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35::jsonb, $36, $37::jsonb, $38, $39::text[],
-          $40, $41::jsonb, $42, $43, $44, $45
-        )
-        RETURNING id, updated_at::TEXT AS updated_at, updated_by::TEXT AS updated_by
+          id,
+          updated_at::TEXT AS updated_at,
+          updated_by::TEXT AS updated_by
       `,
-      [
-        reportId,
-        row.serialNo,
-        row.enriched.ticket_id,
-        row.enriched.case_id || null,
-        row.enriched.case_created_time,
-        row.enriched.wip_aging,
-        row.enriched.status_aging,
-        row.enriched.rtpl_status,
-        row.enriched.evening_rtpl_status ?? null,
-        row.enriched.segment,
-        row.enriched.engineer,
-        row.enriched.product,
-        row.enriched.product_line_name,
-        row.enriched.work_location,
-        row.enriched.flex_status,
-        row.enriched.hp_owner_status,
-        row.enriched.wo_otc_code,
-        row.enriched.account_name,
-        row.enriched.customer_name,
-        row.enriched.customer_type,
-        row.enriched.product_serial_no,
-        row.enriched.location,
-        row.enriched.contact,
-        row.enriched.part,
-        row.enriched.wip_aging_category,
-        row.enriched.tat,
-        row.enriched.customer_mail,
-        row.enriched.rca,
-        row.enriched.remarks,
-        row.enriched.manual_notes,
-        row.comparison?.changeType ?? null,
-        row.comparison?.previousFlexStatus ?? null,
-        row.comparison?.previousRtplStatus ?? null,
-        row.comparison?.previousWipAging ?? null,
-        JSON.stringify(row.comparison?.changedFields ?? {}),
-        row.comparison?.changeSummary ?? null,
-        JSON.stringify(row.carryForward.carriedForwardFields),
-        row.carryForward.manualFieldsCompleted,
-        row.carryForward.manualFieldsMissing,
-        row.enriched.match_status,
-        JSON.stringify(row.match.notes),
-        row.comparison?.flexStatusUnchangedDays ?? null,
-        row.carryForward.sameDayClosedRow,
-        row.enriched.distance_km,
-        row.enriched.distance_bearing,
-      ],
+      values,
     );
-    const inserted = result.rows[0] as InsertedDailyReportRow | undefined;
-    if (!inserted) {
-      throw new Error("Daily call plan report row insert did not return a row");
-    }
 
-    row.id = inserted.id;
-    row.updatedAt = inserted.updated_at;
-    row.updatedBy = inserted.updated_by;
+    const insertedBySerial = new Map(
+      result.rows.map((inserted) => [Number(inserted.serial_no), inserted]),
+    );
 
-    if (row.enriched.case_id && row.enriched.part) {
-      syncPartToInventory({
-        case_id: row.enriched.case_id,
-        ticket_id: row.enriched.ticket_id,
-        part: row.enriched.part,
-        work_location: row.enriched.work_location,
-        engineer: row.enriched.engineer,
-        customer_name: row.enriched.customer_name,
-      });
+    for (const row of chunk) {
+      const inserted = insertedBySerial.get(row.serialNo);
+      if (!inserted) {
+        throw new Error("Daily call plan report row insert did not return a row");
+      }
+
+      row.id = inserted.id;
+      row.updatedAt = inserted.updated_at;
+      row.updatedBy = inserted.updated_by;
+
+      if (row.enriched.case_id && row.enriched.part) {
+        syncPartToInventory({
+          case_id: row.enriched.case_id,
+          ticket_id: row.enriched.ticket_id,
+          part: row.enriched.part,
+          work_location: row.enriched.work_location,
+          engineer: row.enriched.engineer,
+          customer_name: row.enriched.customer_name,
+        });
+      }
     }
   }
 }
@@ -1058,54 +1131,6 @@ export async function findSameDayUserSetEveningRows(
   }));
 }
 
-/**
- * Adopts the same-day Evening authority onto a persisted report row.
- *
- * This used to be fill-if-BLANK only, which handled "the Evening vanished" but
- * not the commoner complaint: "I change it and it comes back to the same OLD
- * status". A row holding a stale NON-blank Evening was skipped entirely, so a
- * newer value saved on another of today's reports never reached it — and with
- * the FieldEZ worker minting a report every ~15 minutes, the report a user is
- * shown is very often not the one they typed into.
- *
- * The guard is now a timestamp comparison rather than a blank check, done
- * IN SQL so a save landing concurrently always wins: the row is only rewritten
- * when its own Evening is older than the authority's, or was never
- * Evening-edited at all. A clear made on THIS row after the authority entry
- * therefore stands, and is never resurrected.
- *
- * Deliberately does NOT touch updated_at or evening_rtpl_status_updated_at:
- * this is a system copy of a user's edit made elsewhere, not a user edit on
- * this row. Stamping it would make the copy outrank the original at the next
- * generation.
- */
-export async function adoptReportRowEveningStatusFromAuthority(
-  client: PoolClient,
-  payload: {
-    rowId: string;
-    eveningRtplStatus: string;
-    /** When the authority's Evening was set. Null-safe: see the SQL guard. */
-    authorityEveningUpdatedAt: string | null;
-  },
-): Promise<void> {
-  await client.query(
-    `
-      UPDATE daily_call_plan_report_rows
-      SET evening_rtpl_status = $2
-      WHERE id = $1
-        AND evening_rtpl_status IS DISTINCT FROM $2
-        AND (
-          -- Never Evening-edited here, so nothing of the user's to protect.
-          evening_rtpl_status_updated_at IS NULL
-          -- Or this row's own Evening predates the authority's.
-          OR ($3::timestamptz IS NOT NULL
-              AND evening_rtpl_status_updated_at < $3::timestamptz)
-        )
-    `,
-    [payload.rowId, payload.eveningRtplStatus, payload.authorityEveningUpdatedAt],
-  );
-}
-
 /** One ticket's Flex Status within a prior report. */
 export interface FlexStatusHistoryEntry {
   ticketId: string;
@@ -1360,132 +1385,238 @@ export async function updateDailyCallPlanReportRowManualFields(
   return mapped;
 }
 
-export async function backfillMissingDailyCallPlanReportRowCarryForward(
-  client: PoolClient,
-  payload: ReportRowCarryForwardBackfillPayload,
+/**
+ * Rows per batched UPDATE. Each carries one small JSON document, so this is about
+ * keeping any single statement bounded rather than about the parameter cap.
+ */
+const REPORT_ROW_UPDATE_CHUNK = 500;
+
+async function inChunks<T>(
+  items: readonly T[],
+  run: (chunk: readonly T[]) => Promise<void>,
 ): Promise<void> {
-  await client.query(
-    `
-      UPDATE daily_call_plan_report_rows
-      SET
-        rtpl_status = CASE
-          WHEN $2::text IS NOT NULL AND NULLIF(TRIM(COALESCE(rtpl_status, '')), '') IS NULL THEN $2
-          ELSE rtpl_status
-        END,
-        segment = CASE
-          WHEN $3::text IS NOT NULL AND NULLIF(TRIM(COALESCE(segment, '')), '') IS NULL THEN $3
-          ELSE segment
-        END,
-        engineer = CASE
-          WHEN $4::text IS NOT NULL AND NULLIF(TRIM(COALESCE(engineer, '')), '') IS NULL THEN $4
-          ELSE engineer
-        END,
-        location = CASE
-          WHEN $5::text IS NOT NULL AND NULLIF(TRIM(COALESCE(location, '')), '') IS NULL THEN $5
-          ELSE location
-        END,
-        case_created_time = CASE
-          WHEN $6::timestamptz IS NOT NULL AND case_created_time IS NULL THEN $6::timestamptz
-          ELSE case_created_time
-        END,
-        status_aging = CASE
-          WHEN $7::text IS NOT NULL AND NULLIF(TRIM(COALESCE(status_aging, '')), '') IS NULL THEN $7
-          ELSE status_aging
-        END,
-        hp_owner_status = CASE
-          WHEN $8::text IS NOT NULL AND NULLIF(TRIM(COALESCE(hp_owner_status, '')), '') IS NULL THEN $8
-          ELSE hp_owner_status
-        END,
-        customer_mail = CASE
-          WHEN $9::text IS NOT NULL AND NULLIF(TRIM(COALESCE(customer_mail, '')), '') IS NULL THEN $9
-          ELSE customer_mail
-        END,
-        rca = CASE
-          WHEN $10::text IS NOT NULL AND NULLIF(TRIM(COALESCE(rca, '')), '') IS NULL THEN $10
-          ELSE rca
-        END,
-        remarks = CASE
-          WHEN $11::text IS NOT NULL AND NULLIF(TRIM(COALESCE(remarks, '')), '') IS NULL THEN $11
-          ELSE remarks
-        END,
-        manual_notes = CASE
-          WHEN $12::text IS NOT NULL AND NULLIF(TRIM(COALESCE(manual_notes, '')), '') IS NULL THEN $12
-          ELSE manual_notes
-        END,
-        carried_forward_fields = $13::jsonb,
-        manual_fields_completed = $14,
-        manual_fields_missing = $15::text[]
-      WHERE id = $1
-    `,
-    [
-      payload.rowId,
-      payload.rtplStatus,
-      payload.segment,
-      payload.engineer,
-      payload.location,
-      payload.caseCreatedTime,
-      payload.statusAging,
-      payload.hpOwnerStatus,
-      payload.customerMail,
-      payload.rca,
-      payload.remarks,
-      payload.manualNotes,
-      JSON.stringify(payload.carriedForwardFields),
-      payload.manualFieldsCompleted,
-      payload.manualFieldsMissing,
-    ],
-  );
+  for (let offset = 0; offset < items.length; offset += REPORT_ROW_UPDATE_CHUNK) {
+    await run(items.slice(offset, offset + REPORT_ROW_UPDATE_CHUNK));
+  }
 }
 
 /**
- * Overwrites the given inherited (carried-forward) manual fields on a report
- * row, unconditionally, and rewrites the carry-forward metadata. Unlike
- * {@link backfillMissingDailyCallPlanReportRowCarryForward} this replaces
- * existing values, so a report that only inherited a field always tracks the
- * latest value from its source rather than freezing the snapshot taken when it
- * was generated. Segment is intentionally excluded (recomputed each run). Only
- * called when a value actually changed, so it does not run on every poll.
+ * The same-day Evening heal, for many rows at once.
+ *
+ * Every guard is still evaluated per row, by the same SQL that ran when this was one
+ * statement per row — but in a single round-trip rather than one each. It
+ * runs inside the generation transaction, which holds `pg_advisory_xact_lock`, so its
+ * duration is time every other generation of the same report spends waiting.
  */
-export async function overwriteCarriedForwardFieldValues(
+export async function adoptReportRowEveningStatusFromAuthorityBulk(
   client: PoolClient,
-  payload: ReportRowCarryForwardOverwritePayload,
+  payloads: readonly {
+    rowId: string;
+    eveningRtplStatus: string;
+    authorityEveningUpdatedAt: string | null;
+  }[],
 ): Promise<void> {
-  await client.query(
-    `
-      UPDATE daily_call_plan_report_rows
-      SET
-        rtpl_status = $2,
-        engineer = $3,
-        location = $4,
-        case_created_time = $5::timestamptz,
-        status_aging = $6,
-        hp_owner_status = $7,
-        customer_mail = $8,
-        rca = $9,
-        remarks = $10,
-        manual_notes = $11,
-        carried_forward_fields = $12::jsonb,
-        manual_fields_completed = $13,
-        manual_fields_missing = $14::text[]
-      WHERE id = $1
-    `,
-    [
-      payload.rowId,
-      payload.rtplStatus,
-      payload.engineer,
-      payload.location,
-      payload.caseCreatedTime,
-      payload.statusAging,
-      payload.hpOwnerStatus,
-      payload.customerMail,
-      payload.rca,
-      payload.remarks,
-      payload.manualNotes,
-      JSON.stringify(payload.carriedForwardFields),
-      payload.manualFieldsCompleted,
-      payload.manualFieldsMissing,
-    ],
+  if (payloads.length === 0) return;
+
+  await inChunks(payloads, async (chunk) => {
+    await client.query(
+      `
+        UPDATE daily_call_plan_report_rows AS target
+        SET evening_rtpl_status = src.evening_rtpl_status
+        FROM jsonb_to_recordset($1::jsonb) AS src(
+          row_id uuid,
+          evening_rtpl_status text,
+          authority_evening_updated_at timestamptz
+        )
+        WHERE target.id = src.row_id
+          AND target.evening_rtpl_status IS DISTINCT FROM src.evening_rtpl_status
+          AND (
+            -- Never Evening-edited here, so nothing of the user's to protect.
+            target.evening_rtpl_status_updated_at IS NULL
+            -- Or this row's own Evening predates the authority's.
+            OR (src.authority_evening_updated_at IS NOT NULL
+                AND target.evening_rtpl_status_updated_at < src.authority_evening_updated_at)
+          )
+      `,
+      [
+        JSON.stringify(
+          chunk.map((payload) => ({
+            row_id: payload.rowId,
+            evening_rtpl_status: payload.eveningRtplStatus,
+            authority_evening_updated_at: payload.authorityEveningUpdatedAt,
+          })),
+        ),
+      ],
+    );
+  });
+}
+
+/** Shared `jsonb_to_recordset` column list for the two carry-forward writers. */
+const CARRY_FORWARD_SRC_COLUMNS = `
+          row_id uuid,
+          rtpl_status text,
+          segment text,
+          engineer text,
+          location text,
+          case_created_time timestamptz,
+          status_aging text,
+          hp_owner_status text,
+          customer_mail text,
+          rca text,
+          remarks text,
+          manual_notes text,
+          carried_forward_fields jsonb,
+          manual_fields_completed boolean,
+          -- Read as jsonb and expanded below: a JSON array reaches a text[] column
+          -- only through an explicit expansion.
+          manual_fields_missing jsonb`;
+
+function carryForwardSrcJson(
+  payloads: readonly (
+    | ReportRowCarryForwardBackfillPayload
+    | ReportRowCarryForwardOverwritePayload
+  )[],
+): string {
+  return JSON.stringify(
+    payloads.map((payload) => ({
+      row_id: payload.rowId,
+      rtpl_status: payload.rtplStatus,
+      // Absent from the overwrite payload by design: segment is recomputed from the
+      // source file every run and is never carried forward.
+      segment: "segment" in payload ? payload.segment : null,
+      engineer: payload.engineer,
+      location: payload.location,
+      case_created_time: payload.caseCreatedTime,
+      status_aging: payload.statusAging,
+      hp_owner_status: payload.hpOwnerStatus,
+      customer_mail: payload.customerMail,
+      rca: payload.rca,
+      remarks: payload.remarks,
+      manual_notes: payload.manualNotes,
+      carried_forward_fields: payload.carriedForwardFields,
+      manual_fields_completed: payload.manualFieldsCompleted,
+      manual_fields_missing: payload.manualFieldsMissing,
+    })),
   );
+}
+
+/** `manual_fields_missing` as a text[], expanded from the JSON array it arrives as. */
+const MANUAL_FIELDS_MISSING_ARRAY =
+  "ARRAY(SELECT jsonb_array_elements_text(src.manual_fields_missing))::text[]";
+
+/**
+ * Fill-if-empty carry-forward repair, for many rows at once.
+ *
+ * Every `CASE WHEN ... IS NULL` guard is preserved verbatim from the row-at-a-time form
+ * this replaced, now reading `target.<column>` instead of the bare column name. It is the write that
+ * fires hardest on the day's FIRST report, when the previous day's manual work has to be
+ * repaired onto every row at once — the load where one round-trip per row hurt most.
+ */
+export async function backfillMissingDailyCallPlanReportRowCarryForwardBulk(
+  client: PoolClient,
+  payloads: readonly ReportRowCarryForwardBackfillPayload[],
+): Promise<void> {
+  if (payloads.length === 0) return;
+
+  await inChunks(payloads, async (chunk) => {
+    await client.query(
+      `
+        UPDATE daily_call_plan_report_rows AS target
+        SET
+          rtpl_status = CASE
+            WHEN src.rtpl_status IS NOT NULL AND NULLIF(TRIM(COALESCE(target.rtpl_status, '')), '') IS NULL THEN src.rtpl_status
+            ELSE target.rtpl_status
+          END,
+          segment = CASE
+            WHEN src.segment IS NOT NULL AND NULLIF(TRIM(COALESCE(target.segment, '')), '') IS NULL THEN src.segment
+            ELSE target.segment
+          END,
+          engineer = CASE
+            WHEN src.engineer IS NOT NULL AND NULLIF(TRIM(COALESCE(target.engineer, '')), '') IS NULL THEN src.engineer
+            ELSE target.engineer
+          END,
+          location = CASE
+            WHEN src.location IS NOT NULL AND NULLIF(TRIM(COALESCE(target.location, '')), '') IS NULL THEN src.location
+            ELSE target.location
+          END,
+          case_created_time = CASE
+            WHEN src.case_created_time IS NOT NULL AND target.case_created_time IS NULL THEN src.case_created_time
+            ELSE target.case_created_time
+          END,
+          status_aging = CASE
+            WHEN src.status_aging IS NOT NULL AND NULLIF(TRIM(COALESCE(target.status_aging, '')), '') IS NULL THEN src.status_aging
+            ELSE target.status_aging
+          END,
+          hp_owner_status = CASE
+            WHEN src.hp_owner_status IS NOT NULL AND NULLIF(TRIM(COALESCE(target.hp_owner_status, '')), '') IS NULL THEN src.hp_owner_status
+            ELSE target.hp_owner_status
+          END,
+          customer_mail = CASE
+            WHEN src.customer_mail IS NOT NULL AND NULLIF(TRIM(COALESCE(target.customer_mail, '')), '') IS NULL THEN src.customer_mail
+            ELSE target.customer_mail
+          END,
+          rca = CASE
+            WHEN src.rca IS NOT NULL AND NULLIF(TRIM(COALESCE(target.rca, '')), '') IS NULL THEN src.rca
+            ELSE target.rca
+          END,
+          remarks = CASE
+            WHEN src.remarks IS NOT NULL AND NULLIF(TRIM(COALESCE(target.remarks, '')), '') IS NULL THEN src.remarks
+            ELSE target.remarks
+          END,
+          manual_notes = CASE
+            WHEN src.manual_notes IS NOT NULL AND NULLIF(TRIM(COALESCE(target.manual_notes, '')), '') IS NULL THEN src.manual_notes
+            ELSE target.manual_notes
+          END,
+          carried_forward_fields = src.carried_forward_fields,
+          manual_fields_completed = src.manual_fields_completed,
+          manual_fields_missing = ${MANUAL_FIELDS_MISSING_ARRAY}
+        FROM jsonb_to_recordset($1::jsonb) AS src(${CARRY_FORWARD_SRC_COLUMNS}
+        )
+        WHERE target.id = src.row_id
+      `,
+      [carryForwardSrcJson(chunk)],
+    );
+  });
+}
+
+/**
+ * Overwrite of inherited fields whose source value changed, for many rows at once.
+ *
+ * Unconditional per column, as it has always been: an inherited field whose source
+ * moved must be replaced, not filled-if-empty, or the stale value survives into
+ * the next day's carry-forward.
+ */
+export async function overwriteCarriedForwardFieldValuesBulk(
+  client: PoolClient,
+  payloads: readonly ReportRowCarryForwardOverwritePayload[],
+): Promise<void> {
+  if (payloads.length === 0) return;
+
+  await inChunks(payloads, async (chunk) => {
+    await client.query(
+      `
+        UPDATE daily_call_plan_report_rows AS target
+        SET
+          rtpl_status = src.rtpl_status,
+          engineer = src.engineer,
+          location = src.location,
+          case_created_time = src.case_created_time,
+          status_aging = src.status_aging,
+          hp_owner_status = src.hp_owner_status,
+          customer_mail = src.customer_mail,
+          rca = src.rca,
+          remarks = src.remarks,
+          manual_notes = src.manual_notes,
+          carried_forward_fields = src.carried_forward_fields,
+          manual_fields_completed = src.manual_fields_completed,
+          manual_fields_missing = ${MANUAL_FIELDS_MISSING_ARRAY}
+        FROM jsonb_to_recordset($1::jsonb) AS src(${CARRY_FORWARD_SRC_COLUMNS}
+        )
+        WHERE target.id = src.row_id
+      `,
+      [carryForwardSrcJson(chunk)],
+    );
+  });
 }
 
 export async function findDailyCallPlanReportRowForEdit(

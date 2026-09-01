@@ -22,6 +22,23 @@ export interface RegionOffice extends GeoPoint {
 }
 
 /**
+ * Whether a table is there, asked without raising.
+ *
+ * These lookups sit inside report generation's transaction. A query against a
+ * missing table raises 42P01, and in Postgres that aborts the ENTIRE transaction —
+ * catching it in JavaScript does not undo that, it only hides which statement
+ * broke, and every later statement fails with 25P02 instead. `to_regclass`
+ * returns NULL for a name that does not resolve, so nothing is ever raised.
+ */
+async function tableExists(client: PoolClient, table: string): Promise<boolean> {
+  const result = await client.query<{ present: boolean }>(
+    "SELECT to_regclass($1) IS NOT NULL AS present",
+    [table],
+  );
+  return result.rows[0]?.present === true;
+}
+
+/**
  * Branch office coordinates, keyed by the ASP work-location code that report
  * rows already carry.
  *
@@ -123,11 +140,21 @@ export function addressRoadDistanceKey(aspCode: string, addressKey: string): str
  * Tolerates the table not existing (a push deploys BEFORE its migration can
  * run — the 2026-08-06 lesson): the map is empty and every row keeps its
  * pincode distance, which is exactly the pre-geocoding behaviour.
+ *
+ * ASKED FIRST, NOT CAUGHT AFTERWARDS. This runs inside report generation's
+ * transaction, so the "missing table" error it used to swallow left that
+ * transaction ABORTED: every statement after it failed with 25P02 and no report
+ * could be generated at all — precisely the outage the tolerance exists to
+ * prevent. `to_regclass` answers without raising.
  */
 export async function findPreciseWorkOrderCoordinates(
   client: PoolClient,
 ): Promise<Map<string, PreciseWorkOrderCoordinate>> {
-  try {
+  if (!(await tableExists(client, "work_order_geocodes"))) {
+    return new Map();
+  }
+
+  {
     const result = await client.query<{
       normalized_ticket_id: string;
       address_key: string;
@@ -152,23 +179,24 @@ export async function findPreciseWorkOrderCoordinates(
         },
       ]),
     );
-  } catch (error) {
-    if ((error as { code?: string }).code === "42P01") {
-      return new Map();
-    }
-    throw error;
   }
 }
 
 /**
  * Routed road distances per (office, geocoded address) — the precise tier's
- * counterpart of `findRoadDistances`. Same missing-table tolerance as above:
- * migration 055 lands only after the code that reads it has deployed.
+ * counterpart of `findRoadDistances`. Same missing-table tolerance as above,
+ * asked the same way and for the same reason: migration 055 lands only after the
+ * code that reads it has deployed, and catching its absence mid-transaction would
+ * take the whole generation down with it.
  */
 export async function findAddressRoadDistances(
   client: PoolClient,
 ): Promise<Map<string, number>> {
-  try {
+  if (!(await tableExists(client, "office_address_distances"))) {
+    return new Map();
+  }
+
+  {
     const result = await client.query<{
       asp_code: string;
       address_key: string;
@@ -183,10 +211,5 @@ export async function findAddressRoadDistances(
         Number(row.road_km),
       ]),
     );
-  } catch (error) {
-    if ((error as { code?: string }).code === "42P01") {
-      return new Map();
-    }
-    throw error;
   }
 }

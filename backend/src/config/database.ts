@@ -15,10 +15,32 @@ import { env } from "./env.js";
  */
 const sessionOptions = process.env.PG_SESSION_OPTIONS?.trim();
 
+/**
+ * How many connections the API may hold at once.
+ *
+ * This is not a throughput knob, it is the blast radius of a slow endpoint. Report
+ * generation holds ONE connection for the whole of its transaction, and it is
+ * regenerated on every page load and again whenever the FieldEZ worker publishes a
+ * newer report (every ~15 min, which every open tab then switches onto). At a pool of
+ * 10, ten staff opening the dashboard together took every connection, and
+ * `connectionTimeoutMillis` then failed everything else in the app after five
+ * seconds — the trivial `GET /admin/rtpl-statuses/dropdown` included, which is why a
+ * slow report showed up as unrelated 500s across the whole page.
+ *
+ * Raising this does not make generation faster; it stops one slow endpoint from being
+ * an outage for every other one. Keep it comfortably under the server's
+ * `max_connections` once the workers (FieldEZ, warranty, geocoding, mail) and AdminJS
+ * have taken their share — each keeps its own pool.
+ */
+const poolMax = Number.parseInt(process.env.PG_POOL_MAX ?? "", 10);
+
 export const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
-  max: 10,
+  max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 20,
   idleTimeoutMillis: 30_000,
+  // Deliberately short, and deliberately an ERROR rather than a wait: a request that
+  // cannot get a connection should say so, not hang until the browser gives up. The
+  // 500s it produces are the symptom of a starved pool, never the cause.
   connectionTimeoutMillis: 5_000,
   ...(sessionOptions ? { options: sessionOptions } : {}),
 });

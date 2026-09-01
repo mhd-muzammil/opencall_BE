@@ -104,6 +104,21 @@ const FEATURE_TABLES = [
   // migrate:vendor-access — the vendor portal + case assignment 500 without these.
   "vendor_access",
   "vendor_case_assignments",
+  // migrate:geocoding / migrate:office-distance / migrate:office-address-distances.
+  //
+  // Report generation reads all five, and it runs on EVERY page load — so an
+  // unapplied geo migration is not a broken corner of the app, it is the whole
+  // dashboard. They were invisible here while the readers caught the missing-table
+  // error, which looked tolerant and was not: the catch cannot un-abort the
+  // transaction the read sits in, so generation died anyway with a 25P02 from some
+  // later statement. The readers ask `to_regclass` now, but the deploy still needs to
+  // be able to SEE that the migration is outstanding.
+  "pincode_geo",
+  "geocode_cache",
+  "work_order_geocodes",
+  "region_offices",
+  "office_pincode_distances",
+  "office_address_distances",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [

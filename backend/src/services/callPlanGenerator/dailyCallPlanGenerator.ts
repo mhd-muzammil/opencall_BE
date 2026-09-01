@@ -13,17 +13,19 @@ import {
   findAreaNameByPincode,
 } from "../../repositories/businessRuleRepository.js";
 import {
-  backfillMissingDailyCallPlanReportRowCarryForward,
+  backfillMissingDailyCallPlanReportRowCarryForwardBulk,
   createDailyCallPlanReport,
-  adoptReportRowEveningStatusFromAuthority,
+  adoptReportRowEveningStatusFromAuthorityBulk,
   findDailyCallPlanReportRowMetadataByReportId,
   findFlexStatusHistoryForUnchangedDays,
   findMaxDailyCallPlanReportRowSerialNo,
   findPreviousFinalReportRowsForManualCarryForward,
   findSameDayUserSetEveningRows,
   insertDailyCallPlanReportRows,
-  overwriteCarriedForwardFieldValues,
+  overwriteCarriedForwardFieldValuesBulk,
   type FlexStatusHistoryReport,
+  type ReportRowCarryForwardBackfillPayload,
+  type ReportRowCarryForwardOverwritePayload,
 } from "../../repositories/dailyCallPlanReportRepository.js";
 import { findOrCreateCompletedHistorySessionForReport } from "../../repositories/historyRepository.js";
 import {
@@ -515,6 +517,20 @@ async function applyPersistedRowMetadata(
     metadata.map((row) => [getNormalizedTicketKey(row.ticketId), row]),
   );
 
+  // Collected across the loop and written in batches below. These used to be one
+  // UPDATE round-trip per row, awaited in place: on the day's first report, where the
+  // previous day's manual work has to be repaired onto nearly every row, that was
+  // thousands of serial round-trips inside the transaction holding the generation
+  // advisory lock — so every other viewer of the same report queued behind it. The
+  // writes and their guards are unchanged; only the number of round-trips is.
+  const eveningAdoptions: {
+    rowId: string;
+    eveningRtplStatus: string;
+    authorityEveningUpdatedAt: string | null;
+  }[] = [];
+  const carryForwardOverwrites: ReportRowCarryForwardOverwritePayload[] = [];
+  const carryForwardBackfills: ReportRowCarryForwardBackfillPayload[] = [];
+
   for (const row of rows) {
     const ticketKey = getNormalizedTicketKey(row.enriched.ticket_id);
     const persisted = metadataByTicket.get(ticketKey);
@@ -671,7 +687,7 @@ async function applyPersistedRowMetadata(
       // the whole-row updated_at, which every field edit stamps.
       if (authorityEntry && !rowSpeaksForItself) {
         row.enriched.evening_rtpl_status = authorityEntry.eveningRtplStatus;
-        await adoptReportRowEveningStatusFromAuthority(client, {
+        eveningAdoptions.push({
           rowId: persisted.id,
           eveningRtplStatus: authorityEntry.eveningRtplStatus,
           authorityEveningUpdatedAt: authorityEntry.eveningUpdatedAt ?? null,
@@ -690,7 +706,7 @@ async function applyPersistedRowMetadata(
       // Overwrite: an inherited field's source value actually changed, so the
       // frozen snapshot must be replaced (fill-if-empty would keep the stale
       // value and lose the newer work on the next day's carry-forward).
-      await overwriteCarriedForwardFieldValues(client, {
+      carryForwardOverwrites.push({
         rowId: persisted.id,
         rtplStatus: row.enriched.rtpl_status,
         engineer: row.enriched.engineer,
@@ -707,7 +723,7 @@ async function applyPersistedRowMetadata(
         manualFieldsMissing: row.carryForward.manualFieldsMissing,
       });
     } else if (repairedFields.length > 0) {
-      await backfillMissingDailyCallPlanReportRowCarryForward(client, {
+      carryForwardBackfills.push({
         rowId: persisted.id,
         rtplStatus: row.enriched.rtpl_status,
         segment: row.enriched.segment,
@@ -726,6 +742,17 @@ async function applyPersistedRowMetadata(
       });
     }
   }
+
+  // Flushed after the loop, in the same order the single-row writes ran: the Evening
+  // heal first, then the carry-forward writes. No row appears in both carry-forward
+  // lists — the branch above is an if/else — so their order between themselves cannot
+  // matter, and every guard still lives in the SQL, evaluated per row.
+  await adoptReportRowEveningStatusFromAuthorityBulk(client, eveningAdoptions);
+  await overwriteCarriedForwardFieldValuesBulk(client, carryForwardOverwrites);
+  await backfillMissingDailyCallPlanReportRowCarryForwardBulk(
+    client,
+    carryForwardBackfills,
+  );
 
   return rows.filter((row) => {
     const ticketKey = getNormalizedTicketKey(row.enriched.ticket_id);

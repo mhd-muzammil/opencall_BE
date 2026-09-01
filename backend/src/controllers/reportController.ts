@@ -13,6 +13,7 @@ import { recordActivity } from "../services/audit/activityLogger.js";
 import type { GeneratedDailyCallPlanReport } from "../types/reportGeneration.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { reportGenerationRequestSchema } from "../validators/reportGenerationRequestValidator.js";
+import { toClientReport } from "../services/callPlanGenerator/reportResponseProjection.js";
 
 function aspCodesForRegions(regions: readonly Region[]): Set<string> {
   const codes = new Set<string>();
@@ -105,14 +106,18 @@ export const generateDailyCallPlanReportController: RequestHandler =
 
     if (isRegionAdmin && allowedRegions && allowedRegions.length > 0) {
       response.status(201).json({
-        data: await enrichReportWithClosureDates(
-          filterReportForRegions(report, allowedRegions),
+        // Projected last: the closure enrichment writes into `row.output`, and the
+        // region filter reads `row.enriched.work_location` — both need the full row.
+        data: toClientReport(
+          await enrichReportWithClosureDates(
+            filterReportForRegions(report, allowedRegions),
+          ),
         ),
       });
       return;
     }
 
     response.status(201).json({
-      data: await enrichReportWithClosureDates(report),
+      data: toClientReport(await enrichReportWithClosureDates(report)),
     });
   });

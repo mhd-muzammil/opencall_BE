@@ -47,6 +47,12 @@ const FEATURE_TABLES = [
   "flex_raw_records",
   "vendor_access",
   "vendor_case_assignments",
+  "pincode_geo",
+  "geocode_cache",
+  "work_order_geocodes",
+  "region_offices",
+  "office_pincode_distances",
+  "office_address_distances",
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
