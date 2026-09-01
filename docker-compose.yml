@@ -86,9 +86,12 @@ services:
       - "${API_PORT:-4000}:4000"
     <<: *runtime-hardening
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4000/api/v1/health/runtime').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      # Liveness, not readiness — see the long note beside HEALTHCHECK in Dockerfile.
+      # /health/runtime queries the database through the shared pool, so a starved
+      # pool made this probe time out and Swarm killed a working API.
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4000/api/v1/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       start_period: 60s
       retries: 5
     ulimits:
