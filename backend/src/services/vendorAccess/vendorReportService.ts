@@ -1,13 +1,14 @@
 import type { VendorAccessPrincipal } from "../../types/auth.js";
-import type { GeneratedDailyCallPlanReport } from "../../types/reportGeneration.js";
+import type { ClientReport } from "../../types/reportResponse.js";
 import { generateDailyCallPlanReport } from "../callPlanGenerator/dailyCallPlanGenerator.js";
 import { findLatestCompletedReportSession } from "../../repositories/historyRepository.js";
 import { getNormalizedTicketKey } from "../normalization/dedupeRowsByTicket.js";
 import { loadAssignedKeysForVendor } from "../../repositories/vendorCaseAssignmentRepository.js";
 import { enrichReportWithClosureDates } from "../closureDates/closureDateEnricher.js";
+import { toClientReport } from "../callPlanGenerator/reportResponseProjection.js";
 
 export interface VendorScopedReportResult {
-  report: GeneratedDailyCallPlanReport | null;
+  report: ClientReport | null;
   permissionLevel: VendorAccessPrincipal["permissionLevel"];
 }
 
@@ -58,14 +59,18 @@ export async function loadAssignedReportForVendor(
   // Same serve-time enrichment the admin report gets, so a vendor and an admin never
   // disagree on a case's Flex Status or Case Closed Date.
   return {
-    report: await enrichReportWithClosureDates({
-      ...report,
-      rows: filteredRows,
-      totalRows: filteredRows.length,
-      regionBreakdown: report.regionBreakdown.filter((entry) =>
-        presentCodes.has(entry.aspCode.toUpperCase()),
-      ),
-    }),
+    // Projected to the client contract last: the scoping filter above reads
+    // `row.enriched.work_location` and the enrichment writes into `row.output`.
+    report: toClientReport(
+      await enrichReportWithClosureDates({
+        ...report,
+        rows: filteredRows,
+        totalRows: filteredRows.length,
+        regionBreakdown: report.regionBreakdown.filter((entry) =>
+          presentCodes.has(entry.aspCode.toUpperCase()),
+        ),
+      }),
+    ),
     ...base,
   };
 }

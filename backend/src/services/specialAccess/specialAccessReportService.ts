@@ -1,10 +1,11 @@
 import type { SpecialAccessPrincipal } from "../../types/auth.js";
-import type { GeneratedDailyCallPlanReport } from "../../types/reportGeneration.js";
+import type { ClientReport } from "../../types/reportResponse.js";
 import { generateDailyCallPlanReport } from "../callPlanGenerator/dailyCallPlanGenerator.js";
 import { findLatestCompletedReportSessionForRegions } from "../../repositories/historyRepository.js";
 import { findRegionById } from "../../repositories/regionRepository.js";
 import { aspCodesForRegion } from "../rbac/regionRowAccess.js";
 import { enrichReportWithClosureDates } from "../closureDates/closureDateEnricher.js";
+import { toClientReport } from "../callPlanGenerator/reportResponseProjection.js";
 
 // --- warranty / trade classification (mirrors the frontend caseClassification.ts) ---
 
@@ -66,7 +67,7 @@ async function allowedAspCodesFor(
 }
 
 export interface ScopedReportResult {
-  report: GeneratedDailyCallPlanReport | null;
+  report: ClientReport | null;
   dataScope: SpecialAccessPrincipal["dataScope"];
   permissionLevel: SpecialAccessPrincipal["permissionLevel"];
   /** The day the returned report covers, so the browser can label a past date. */
@@ -144,12 +145,16 @@ export async function loadScopedReportForPrincipal(
   // closure overlay, customer feedback). Without it a special-access login and an admin
   // looking at the same work order would disagree on its Flex Status.
   return {
-    report: await enrichReportWithClosureDates({
-      ...report,
-      rows: filteredRows,
-      totalRows: filteredRows.length,
-      regionBreakdown: filteredRegionBreakdown,
-    }),
+    // Projected to the client contract last: the scoping filters above read
+    // `row.enriched.work_location` and the enrichment writes into `row.output`.
+    report: toClientReport(
+      await enrichReportWithClosureDates({
+        ...report,
+        rows: filteredRows,
+        totalRows: filteredRows.length,
+        regionBreakdown: filteredRegionBreakdown,
+      }),
+    ),
     reportDate: session.report_date ?? null,
     ...base,
   };
