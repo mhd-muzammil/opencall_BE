@@ -68,6 +68,30 @@ EXPOSE 4000
 # reported by /health/runtime for deploys and dashboards to read; it just no longer
 # gets to kill a working API. The wider timeout and retry count are headroom for the
 # event loop being briefly blocked serializing a large report.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=5 \
+# start-period covers the migrations below as well as boot now. Sixty-odd
+# migrations, each a spawned node process that mostly no-ops, is twenty to
+# thirty seconds before the server even starts listening — and a probe firing
+# during that is the restart loop described above, all over again.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
     CMD node -e "fetch('http://127.0.0.1:4000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "dist/server.js"]
+# Migrations, then the server.
+#
+# A Dokploy deploy ships code and runs nothing else, so every migration in this
+# repo has always been applied by hand — and twice now that gap has been an
+# outage. On 2026-08-06 a missing column 500ed report history, generation and
+# productivity (see applyAllMigrations.ts). On 2026-09-01 an index that was
+# written, reviewed and pushed simply never reached the database, and engineers'
+# case lists stayed empty while everyone believed the fix was deployed.
+#
+# applyAllMigrations is built for exactly this: every script guards its own DDL,
+# so an already-applied migration is a no-op and running the whole list on every
+# boot is safe.
+#
+# `||` and not `&&`: a failed migration must NOT stop the server. This image has
+# already learned once that a container which will not stay up is worse than one
+# serving degraded — the healthcheck kill loop described above took every
+# in-flight request with it. Schema readiness is reported by /health/runtime,
+# which is where a deploy should look; the API keeps answering meanwhile.
+#
+# exec, so the server is PID 1 and a stop signal reaches it rather than the shell.
+CMD ["sh", "-c", "node dist/scripts/applyAllMigrations.js || echo '!!! MIGRATIONS FAILED - starting the API anyway. Check /health/runtime and the log above.'; exec node dist/server.js"]
