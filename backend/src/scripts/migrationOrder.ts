@@ -74,6 +74,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyFieldezSlaMigration", // 064 FieldEZ's SLA for each open call
   "applyClosureCaseIdMultiWoMigration", // 065 a Case Id may carry several work orders
   "applyFlexWipLatestPerTicketMigration", // 066 newest flex record per ticket, for the Payroll sync
+  "applySourceBatchIndexesMigration", // 067 the batch/session lookup indexes report generation has needed since 001
 ];
 
 /**

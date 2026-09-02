@@ -71,6 +71,7 @@
     "quotations:mark-existing-sent": "tsx src/scripts/markExistingQuotationsSent.ts",
     "quotations:undo-mark-existing-sent": "tsx src/scripts/undoMarkExistingQuotationsSent.ts",
     "migrate:flex-wip-latest": "tsx src/scripts/applyFlexWipLatestPerTicketMigration.ts",
+    "migrate:source-batch-indexes": "tsx src/scripts/applySourceBatchIndexesMigration.ts",
     "migrate:all": "tsx src/scripts/applyAllMigrations.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "fieldez:worker": "tsx src/worker/fieldezSyncWorker.ts",
