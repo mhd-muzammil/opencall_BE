@@ -317,10 +317,13 @@ describe("insertDailyCallPlanReportRows", () => {
     const [sql, values] = query.mock.calls[0] as [string, unknown[]];
 
     // Same-day reports must be eligible so an afternoon re-upload inherits the
-    // morning report's manual work, not just yesterday's final report.
-    expect(sql).toContain("effective_report_date <= $1::date");
-    // The report being (re)generated must never be its own carry-forward source.
-    expect(sql).toContain("report_id::text <> $2::text");
+    // morning report's manual work, not just yesterday's final report. Both
+    // candidate branches bound by the date; neither may drop the bound.
+    expect(sql).toContain("reports.report_date <= $1::date");
+    expect(sql).toContain("undated.effective_report_date <= $1::date");
+    // The report being (re)generated must never be its own carry-forward source —
+    // in EITHER branch, or it would source from itself through the other one.
+    expect(sql.split("reports.id::text <> $2::text")).toHaveLength(3);
     expect(values).toEqual(["2026-07-08", "report-current"]);
   });
 

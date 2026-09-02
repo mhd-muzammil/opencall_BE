@@ -979,31 +979,47 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
 ): Promise<FinalReportManualCarryForwardRow[]> {
   const result = await client.query<FinalReportManualCarryForwardDbRow>(
     `
-      WITH completed_sessions AS (
+      -- TWO BOUNDED CANDIDATES, NOT ONE SCAN OF EVERY SESSION.
+      --
+      -- This used to build one set over EVERY completed session — running the title
+      -- regex on each — and only then filter and take the newest one. That is a full
+      -- scan plus a regex per row on a table the FieldEZ worker appends to every
+      -- fifteen minutes, and it runs on every page load. It was a large part of a
+      -- ~15s report generation.
+      --
+      -- The regex only ever mattered as a FALLBACK for reports with no stored
+      -- report_date (legacy rows, backfilled by migration 016). Splitting the two
+      -- cases lets the overwhelmingly common one — a report that HAS a date — be an
+      -- indexed lookup that reads a single row, and confines the regex to the handful
+      -- of dateless rows.
+      --
+      -- Semantics are unchanged: the same candidates, compared by the same
+      -- effective date, resolved by the same ordering. Each branch is bounded to its
+      -- own best match, and the two are then ranked against each other exactly as the
+      -- single ORDER BY did.
+      WITH dated_candidate AS (
         SELECT
           sessions.id,
           sessions.created_at,
-          reports.id AS report_id,
-          COALESCE(
-            reports.report_date,
-            CASE
-              WHEN title_date.parts IS NULL THEN NULL
-              ELSE make_date(
-                (title_date.parts)[3]::INT,
-                (title_date.parts)[1]::INT,
-                (title_date.parts)[2]::INT
-              )
-            END
-          ) AS effective_report_date
+          reports.report_date AS effective_report_date
         FROM report_history_sessions sessions
         JOIN daily_call_plan_reports reports
           ON reports.id = sessions.daily_call_plan_report_id
-        LEFT JOIN LATERAL regexp_match(
-          sessions.title,
-          'Report Session\s+([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})'
-        ) AS title_date(parts) ON TRUE
         WHERE sessions.status = 'COMPLETED'
           AND sessions.daily_call_plan_report_id IS NOT NULL
+          AND reports.report_date IS NOT NULL
+          -- On or before today: multiple reports are uploaded per day, and each
+          -- new report must inherit the accumulated manual work from the most
+          -- recent prior report (e.g. this morning's), not just yesterday's.
+          AND reports.report_date <= $1::date
+          AND ($2::text IS NULL OR reports.id::text <> $2::text)
+        -- Prefer the latest report: newest date, then newest UPLOAD. Ordering
+        -- by created_at (not updated_at) keeps the true latest report the
+        -- source even after an older same-day report is reopened (reopening
+        -- bumps updated_at, which used to promote a stale report over the one
+        -- holding the day's Evening work).
+        ORDER BY reports.report_date DESC, sessions.created_at DESC, sessions.id DESC
+        LIMIT 1
         -- Deliberately NOT filtered by sessions.region_id: completed reports
         -- are shared all-region artifacts (each report row set spans every
         -- region; region-scoped uploads retain out-of-scope rows). Filtering
@@ -1012,19 +1028,46 @@ export async function findPreviousFinalReportRowsForManualCarryForward(
         -- carry-forward fell back to a PRIOR day and the day-boundary rule
         -- wiped every Evening entered earlier today.
       ),
+      undated_candidate AS (
+        -- Only reports with NO stored date reach the regex. A title that does not
+        -- match yields no row (CROSS JOIN LATERAL), which is the same outcome the
+        -- old NULL effective date had: excluded by the date bound.
+        SELECT id, created_at, effective_report_date
+        FROM (
+          SELECT
+            sessions.id,
+            sessions.created_at,
+            make_date(
+              (title_date.parts)[3]::INT,
+              (title_date.parts)[1]::INT,
+              (title_date.parts)[2]::INT
+            ) AS effective_report_date
+          FROM report_history_sessions sessions
+          JOIN daily_call_plan_reports reports
+            ON reports.id = sessions.daily_call_plan_report_id
+          CROSS JOIN LATERAL regexp_match(
+            sessions.title,
+            'Report Session\s+([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})'
+          ) AS title_date(parts)
+          WHERE sessions.status = 'COMPLETED'
+            AND sessions.daily_call_plan_report_id IS NOT NULL
+            AND reports.report_date IS NULL
+            AND ($2::text IS NULL OR reports.id::text <> $2::text)
+        ) undated
+        WHERE undated.effective_report_date <= $1::date
+        ORDER BY
+          undated.effective_report_date DESC,
+          undated.created_at DESC,
+          undated.id DESC
+        LIMIT 1
+      ),
       previous_session AS (
         SELECT id, effective_report_date
-        FROM completed_sessions
-        -- On or before today: multiple reports are uploaded per day, and each
-        -- new report must inherit the accumulated manual work from the most
-        -- recent prior report (e.g. this morning's), not just yesterday's.
-        WHERE effective_report_date <= $1::date
-          AND ($2::text IS NULL OR report_id::text <> $2::text)
-        -- Prefer the latest report: newest date, then newest UPLOAD. Ordering
-        -- by created_at (not updated_at) keeps the true latest report the
-        -- source even after an older same-day report is reopened (reopening
-        -- bumps updated_at, which used to promote a stale report over the one
-        -- holding the day's Evening work).
+        FROM (
+          SELECT id, created_at, effective_report_date FROM dated_candidate
+          UNION ALL
+          SELECT id, created_at, effective_report_date FROM undated_candidate
+        ) candidates
         ORDER BY effective_report_date DESC, created_at DESC, id DESC
         LIMIT 1
       )
