@@ -394,7 +394,72 @@ async function syncCasePartsViaApi(
   }
 }
 
+/**
+ * How many inventory syncs may touch the database at once.
+ *
+ * This is a backpressure valve, not a speed setting. `syncPartToInventory` is called
+ * ONCE PER REPORT ROW from `insertDailyCallPlanReportRows`, and deliberately not
+ * awaited — it is a side-effect that must never slow report generation down. Each
+ * call then runs up to four pool queries of its own.
+ *
+ * Un-throttled that is not a background job, it is a stampede: the FieldEZ worker
+ * creates a report of ~3,800 rows every fifteen minutes, so ~15,000 queries were
+ * fired at a 45-connection pool in one burst. The pool emptied, and everything else
+ * in the API — saves, dropdowns, page loads — failed with "timeout exceeded when
+ * trying to connect" while the log filled with
+ * `[InventorySync] parts lookup failed`. Users experienced it as "I click save and
+ * it doesn't save".
+ *
+ * Two at a time keeps the sync entirely out of the way of live requests. It finishes
+ * later than it used to; nothing waits for it, so later is free.
+ */
+const MAX_CONCURRENT_SYNCS = 2;
+
+let activeSyncs = 0;
+const syncQueue: (() => void)[] = [];
+
+/** Resolves when a slot is free. */
+function acquireSyncSlot(): Promise<void> {
+  if (activeSyncs < MAX_CONCURRENT_SYNCS) {
+    activeSyncs += 1;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    syncQueue.push(() => {
+      activeSyncs += 1;
+      resolve();
+    });
+  });
+}
+
+function releaseSyncSlot(): void {
+  activeSyncs -= 1;
+  const next = syncQueue.shift();
+  if (next) next();
+}
+
+/**
+ * Queued so a bulk insert cannot flood the pool. See MAX_CONCURRENT_SYNCS.
+ *
+ * Callers already treat this as fire-and-forget, so waiting for a slot changes
+ * nothing for them — the work is simply spread out instead of arriving all at once.
+ */
 export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
+  if (!row.case_id || !row.part) {
+    return;
+  }
+
+  await acquireSyncSlot();
+  try {
+    await syncPartToInventoryUnthrottled(row);
+  } finally {
+    releaseSyncSlot();
+  }
+}
+
+async function syncPartToInventoryUnthrottled(row: SyncRowInput): Promise<void> {
+  // Re-asserted rather than assumed: the caller above checks these, but the check
+  // has to be visible HERE for the compiler to narrow them away below.
   if (!row.case_id || !row.part) {
     return;
   }
