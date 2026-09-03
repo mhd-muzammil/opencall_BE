@@ -404,6 +404,8 @@ export interface EngineerDay {
     fixes: number;
     case_id: number | null;
     case_number: string | null;
+    // The WO number, which is what everyone outside Payroll calls the job.
+    case_ref?: string | null;
   }>;
   events: Array<{
     at: string;
@@ -413,6 +415,7 @@ export interface EngineerDay {
     latitude?: number;
     longitude?: number;
     case_number?: string | null;
+    case_ref?: string | null;
   }>;
   points: Array<{
     latitude: number;
