@@ -968,6 +968,107 @@ export async function findProductivityRowsByReportId(
   }));
 }
 
+/**
+ * The descriptive columns behind a day's productivity rows, keyed EXACTLY as the
+ * shared calculation keys its tickets: the trimmed Ticket ID, or the serial
+ * number when the report carries none.
+ *
+ * Separate from findProductivityRowsByReportId, which stays deliberately narrow
+ * — it runs for every day of every range and the counting needs six columns.
+ * This one is read only when a caller asks for `detail=1`, so the everyday path
+ * keeps its slim query. (Report reads have starved the pool before; widening the
+ * hot query to serve an occasional export would be the same mistake in a new
+ * place.)
+ */
+export interface ProductivityDetailRow {
+  woOtcCode: string;
+  customerName: string;
+  location: string;
+  product: string;
+  segment: string;
+  caseCreatedTime: string | null;
+  wipAging: string;
+  tat: string | null;
+  /**
+   * The three statuses AS AT this report's day. Read here rather than off the
+   * narrow productivity rows because a fully-frozen day answers from snapshots
+   * and never materialises those rows per region.
+   */
+  flexStatus: string;
+  rtplStatus: string;
+  eveningStatus: string;
+}
+
+export async function findProductivityDetailRowsByReportId(
+  reportId: string,
+): Promise<Map<string, ProductivityDetailRow>> {
+  const result = await query<{
+    serial_no: number;
+    ticket_id: string | null;
+    wo_otc_code: string | null;
+    customer_name: string | null;
+    location: string | null;
+    product_line_name: string | null;
+    product: string | null;
+    segment: string | null;
+    case_created_time: Date | null;
+    wip_aging: string | null;
+    tat: Date | null;
+    flex_status: string | null;
+    rtpl_status: string | null;
+    evening_rtpl_status: string | null;
+  }>(
+    `
+      SELECT
+        serial_no,
+        ticket_id,
+        wo_otc_code,
+        customer_name,
+        location,
+        product_line_name,
+        product,
+        segment,
+        case_created_time,
+        wip_aging,
+        tat,
+        flex_status,
+        rtpl_status,
+        evening_rtpl_status
+      FROM daily_call_plan_report_rows
+      WHERE report_id = $1 AND NOT is_excluded
+      ORDER BY serial_no ASC, id ASC
+    `,
+    [reportId],
+  );
+
+  const text = (value: string | null) => (value ?? "").trim();
+  const iso = (value: Date | null) => (value ? value.toISOString() : null);
+  const byKey = new Map<string, ProductivityDetailRow>();
+
+  for (const row of result.rows) {
+    // Same fallback as computeEngineerProductivity, or the blank-ticket rows it
+    // counts would find no detail here and export as empty lines.
+    const key = text(row.ticket_id) || String(row.serial_no);
+    byKey.set(key, {
+      woOtcCode: text(row.wo_otc_code),
+      customerName: text(row.customer_name),
+      location: text(row.location),
+      // Product Line Name is the reportable one; `product` is the fallback the
+      // report itself uses when the line name never arrived from Flex.
+      product: text(row.product_line_name) || text(row.product),
+      segment: text(row.segment),
+      caseCreatedTime: iso(row.case_created_time),
+      wipAging: text(row.wip_aging),
+      tat: iso(row.tat),
+      flexStatus: text(row.flex_status),
+      rtplStatus: text(row.rtpl_status),
+      eveningStatus: text(row.evening_rtpl_status),
+    });
+  }
+
+  return byKey;
+}
+
 export async function findPreviousFinalReportRowsForManualCarryForward(
   client: PoolClient,
   input: {

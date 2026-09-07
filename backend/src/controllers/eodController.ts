@@ -103,6 +103,14 @@ export const getReportProductivityController: RequestHandler = asyncHandler(
 const productivityRangeQuerySchema = z.object({
   from: workingDateSchema,
   to: workingDateSchema,
+  /**
+   * Ask for the row-level call-days behind the counts. Off by default: a bill
+   * cycle is ~2400 rows and the table that renders every day needs none of them.
+   */
+  detail: z
+    .enum(["0", "1", "true", "false"])
+    .optional()
+    .transform((value) => value === "1" || value === "true"),
 });
 
 /**
@@ -114,10 +122,12 @@ const productivityRangeQuerySchema = z.object({
 export const getReportProductivityRangeController: RequestHandler = asyncHandler(
   async (request, response) => {
     requireCurrentUser(request.currentUser);
-    const { from, to } = productivityRangeQuerySchema.parse(request.query);
+    const { from, to, detail } = productivityRangeQuerySchema.parse(
+      request.query,
+    );
 
     response.json({
-      data: await getReportProductivityRange(from, to),
+      data: await getReportProductivityRange(from, to, { detail }),
     });
   },
 );

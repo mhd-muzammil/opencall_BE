@@ -593,3 +593,98 @@ export function mergeEngineerProductivityResults(
     totalAttended: list.reduce((sum, item) => sum + item.attended, 0),
   };
 }
+
+/**
+ * One assigned call-day: an engineer, a WO, and the day that WO was in that
+ * engineer's plan.
+ *
+ * The atom every multi-day view is made of. A range is the days ADDED TOGETHER,
+ * so the same WO booked on twelve days is twelve call-days — not a duplicate,
+ * and the reason a cycle total (2441) dwarfs the distinct WO count. That is only
+ * legible when the day travels with the ticket, and today it does not:
+ * mergeEngineerProductivityResults concatenates the ticket lists and the day is
+ * gone, leaving a bare WO string repeated twelve times with nothing to explain
+ * why. This carries it.
+ *
+ * Derived from the ticket lists a result ALREADY has, so a region's frozen
+ * snapshot yields call-days exactly like a live compute does. Nothing about the
+ * persisted payload shape changes and every day already frozen in
+ * region_productivity_snapshot still reads back — which it would not if the
+ * ticket arrays had been widened into objects instead.
+ */
+export interface ProductivityCallDay {
+  /** The working day this booking counted on, YYYY-MM-DD. */
+  date: string;
+  /** Canonical engineer name — the same key the table groups by. */
+  engineer: string;
+  regionCode: string;
+  regionName: string;
+  /**
+   * The WO. Falls back to the row's serial number when the report carries no
+   * Ticket ID, because that is what the counts key themselves on (see
+   * computeEngineerProductivity) and the two must not drift apart.
+   */
+  ticketId: string;
+  /** The one bucket this call-day landed in. Every call-day is Assigned. */
+  bucket: ProductivityBucket;
+}
+
+/**
+ * Every assigned call-day in ONE DAY's result, one per ticket per engineer.
+ *
+ * The buckets are mutually exclusive by construction — addToProductivityCounts
+ * takes exactly one branch per call — so classifying the assigned superset
+ * against the sub-lists recovers each call's original bucket exactly. The
+ * call-days then reconcile the whole summary: their count IS Assigned, and
+ * filtering by bucket gives every other column back.
+ *
+ * SINGLE DAY ONLY. Pass a per-day result (a live compute or one region's frozen
+ * snapshot), never one that mergeEngineerProductivityResults has already summed
+ * across days. In a merged result the ticket lists are concatenated, so a WO
+ * closed on the fifth day appears in closedTickets once while sitting in
+ * assignedTickets twelve times — and every one of those twelve call-days would
+ * be classified CLOSED. Call this per day and merge the call-days after.
+ */
+export function productivityCallDays(
+  result: EngineerProductivityResult,
+  date: string,
+): ProductivityCallDay[] {
+  const callDays: ProductivityCallDay[] = [];
+
+  for (const entry of result.list) {
+    // Sub-lists as sets first, so the assigned superset classifies in one pass
+    // rather than re-scanning six arrays per ticket.
+    const closed = new Set(entry.closedTickets);
+    const partOrdered = new Set(entry.partOrderedTickets);
+    const underObservation = new Set(entry.underObservationTickets);
+    const cxReschedule = new Set(entry.cxRescheduleTickets);
+    const engineerDelay = new Set(entry.engineerDelayTickets);
+    const attended = new Set(entry.attendedTickets);
+
+    for (const ticketId of entry.assignedTickets) {
+      // Order mirrors addToProductivityCounts: the three named outcomes are
+      // sub-counts of Attended, CX Reschedule and Engineer Delay are assigned
+      // but NOT attended, and attended-with-no-named-outcome is ATTENDED_OTHER
+      // (the 60 calls that make Closed + Part + Under Observation fall short of
+      // Attended). Anything left was booked and never worked.
+      let bucket: ProductivityBucket = "SCHEDULED";
+      if (closed.has(ticketId)) bucket = "CLOSED";
+      else if (partOrdered.has(ticketId)) bucket = "PART_ORDER";
+      else if (underObservation.has(ticketId)) bucket = "UNDER_OBSERVATION";
+      else if (cxReschedule.has(ticketId)) bucket = "CX_RESCHEDULE";
+      else if (engineerDelay.has(ticketId)) bucket = "ENGINEER_DELAY";
+      else if (attended.has(ticketId)) bucket = "ATTENDED_OTHER";
+
+      callDays.push({
+        date,
+        engineer: entry.name,
+        regionCode: entry.regionCode,
+        regionName: entry.regionName,
+        ticketId,
+        bucket,
+      });
+    }
+  }
+
+  return callDays;
+}

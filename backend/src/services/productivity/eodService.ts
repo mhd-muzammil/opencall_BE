@@ -16,18 +16,22 @@ import {
   computeEngineerProductivity,
   isProductivityVisibleRow,
   mergeEngineerProductivityResults,
+  productivityCallDays,
   type EngineerProductivityResult,
   type ProductivityReportRow,
   type RegionEodStateEntry,
   type RegionEodStateResponse,
   type RegionProductivityEntry,
+  type ProductivityCallDayDetail,
   type RegionProductivityRangeEntry,
   type ReportProductivityRangeResponse,
   type ReportProductivityResponse,
 } from "@opencall/shared";
 import { withTransaction } from "../../config/database.js";
 import {
+  findProductivityDetailRowsByReportId,
   findProductivityRowsByReportId,
+  type ProductivityDetailRow,
   type ProductivityPersistedRow,
 } from "../../repositories/dailyCallPlanReportRepository.js";
 import { findLatestCompletedSessionByReportDate } from "../../repositories/historyRepository.js";
@@ -131,6 +135,23 @@ async function loadDayProductivityRowsOrNull(
     session.daily_call_plan_report_id,
   );
   return rows.map(toProductivityRow);
+}
+
+/**
+ * The day's descriptive columns, by ticket key. Empty when the day has no
+ * completed report — a range spanning a quiet day is still a range, and the
+ * counts already treat that day as contributing nothing.
+ */
+async function loadDayProductivityDetailsOrEmpty(
+  workingDate: string,
+): Promise<Map<string, ProductivityDetailRow>> {
+  const session = await findLatestCompletedSessionByReportDate(workingDate);
+  if (!session?.daily_call_plan_report_id) {
+    return new Map();
+  }
+  return findProductivityDetailRowsByReportId(
+    session.daily_call_plan_report_id,
+  );
 }
 
 /**
@@ -325,10 +346,12 @@ export async function getRegionEodState(
 async function productivityEntriesForDay(
   workingDate: string,
   regions: readonly Region[],
-  opts: { countCalls?: boolean } = {},
+  opts: { countCalls?: boolean; detail?: boolean } = {},
 ): Promise<{
   entries: RegionProductivityEntry[];
   calls: Map<string, number>;
+  /** Descriptive columns by ticket key; empty unless `detail` was asked for. */
+  details: Map<string, ProductivityDetailRow>;
 } | null> {
   const [states, snapshots] = await Promise.all([
     findEodStatesForDate(workingDate),
@@ -351,6 +374,13 @@ async function productivityEntriesForDay(
     if (rows === null) return null;
     liveRows = rows;
   }
+
+  // The descriptive columns for this day, read only for a detail request. A
+  // fully-frozen day answers from snapshots and may not have loaded any rows
+  // above, so this stands on its own session lookup rather than reusing them.
+  const details = opts.detail
+    ? await loadDayProductivityDetailsOrEmpty(workingDate)
+    : new Map<string, ProductivityDetailRow>();
 
   // Calls the region had at all today, before the Scheduled gate — counted off
   // the same visible-row set the productivity calculation starts from, so the
@@ -385,7 +415,7 @@ async function productivityEntriesForDay(
     };
   });
 
-  return { entries, calls };
+  return { entries, calls, details };
 }
 
 export async function getReportProductivity(
@@ -443,6 +473,7 @@ function enumerateWorkingDates(from: string, to: string): string[] {
 export async function getReportProductivityRange(
   fromRaw: string,
   toRaw: string,
+  opts: { detail?: boolean } = {},
 ): Promise<ReportProductivityRangeResponse> {
   assertValidWorkingDate(fromRaw);
   assertValidWorkingDate(toRaw);
@@ -461,6 +492,10 @@ export async function getReportProductivityRange(
 
   const days: string[] = [];
   const missingDays: string[] = [];
+  // Collected per day so each call-day keeps the day it counted on. Merging the
+  // per-day results first would concatenate the ticket lists and lose exactly
+  // that, which is why productivityCallDays is called here and not after.
+  const callDays: ProductivityCallDayDetail[] = [];
   const perRegion = new Map<
     string,
     {
@@ -476,7 +511,10 @@ export async function getReportProductivityRange(
     const settled = await Promise.all(
       batch.map(async (date) => ({
         date,
-        day: await productivityEntriesForDay(date, regions, { countCalls: true }),
+        day: await productivityEntriesForDay(date, regions, {
+          countCalls: true,
+          detail: opts.detail === true,
+        }),
       })),
     );
 
@@ -496,6 +534,33 @@ export async function getReportProductivityRange(
         else bucket.live += 1;
         bucket.calls += day.calls.get(entry.regionId) ?? 0;
         bucket.results.push(entry.productivity);
+
+        if (opts.detail) {
+          for (const callDay of productivityCallDays(entry.productivity, date)) {
+            const detail = day.details.get(callDay.ticketId);
+            callDays.push({
+              ...callDay,
+              regionId: entry.regionId,
+              woOtcCode: detail?.woOtcCode ?? "",
+              customerName: detail?.customerName ?? "",
+              location: detail?.location ?? "",
+              product: detail?.product ?? "",
+              segment: detail?.segment ?? "",
+              caseCreatedTime: detail?.caseCreatedTime ?? null,
+              wipAging: detail?.wipAging ?? "",
+              tat: detail?.tat ?? null,
+              // As at this day. A frozen region answers from its snapshot, whose
+              // rows are still this day's rows, so these stay day-accurate.
+              flexStatus: detail?.flexStatus ?? "",
+              rtplStatus: detail?.rtplStatus ?? "",
+              eveningStatus: detail?.eveningStatus ?? "",
+              // Filled once the whole range is known — a booking cannot know it
+              // is "2 of 3" until every day has been walked.
+              bookingIndex: 0,
+              bookingCount: 0,
+            });
+          }
+        }
       }
     }
   }
@@ -520,5 +585,52 @@ export async function getReportProductivityRange(
     };
   });
 
-  return { from, to, days, missingDays, regions: entries };
+  if (!opts.detail) {
+    return { from, to, days, missingDays, regions: entries };
+  }
+
+  // "1 of 3", "2 of 3": which booking of this call this row is, per engineer.
+  //
+  // Without it three identical-looking rows for the same WO read as duplicated
+  // data rather than as three days it was genuinely booked — the complaint this
+  // whole endpoint exists to answer. Sorted by date first so the numbering runs
+  // in the order the days happened, not the order regions were walked.
+  callDays.sort(
+    (a, b) =>
+      a.date.localeCompare(b.date) ||
+      a.engineer.localeCompare(b.engineer) ||
+      a.ticketId.localeCompare(b.ticketId),
+  );
+
+  const bookingKey = (callDay: ProductivityCallDayDetail) =>
+    `${callDay.engineer.toLowerCase()} ${callDay.ticketId}`;
+
+  const bookingTotals = new Map<string, number>();
+  for (const callDay of callDays) {
+    const key = bookingKey(callDay);
+    bookingTotals.set(key, (bookingTotals.get(key) ?? 0) + 1);
+  }
+
+  const bookingSeen = new Map<string, number>();
+  for (const callDay of callDays) {
+    const key = bookingKey(callDay);
+    const index = (bookingSeen.get(key) ?? 0) + 1;
+    bookingSeen.set(key, index);
+    callDay.bookingIndex = index;
+    callDay.bookingCount = bookingTotals.get(key) ?? 1;
+  }
+
+  return {
+    from,
+    to,
+    days,
+    missingDays,
+    regions: entries,
+    callDays,
+    // Distinct CALLS behind the call-days — the "912" in "2441 day-bookings
+    // across 912 calls". Across all engineers, so a call reassigned mid-cycle
+    // is one call, not one per engineer (which is why this cannot be derived
+    // from bookingCount).
+    uniqueCallCount: new Set(callDays.map((callDay) => callDay.ticketId)).size,
+  };
 }

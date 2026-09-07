@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => {
     key,
     generateDailyCallPlanReport: vi.fn(),
     findProductivityRowsByReportId: vi.fn(),
+    findProductivityDetailRowsByReportId: vi.fn(),
     findLatestCompletedSessionByReportDate: vi.fn(),
     findAllowedRegionsForUser: vi.fn(),
     findRegionById: vi.fn(),
@@ -48,6 +49,8 @@ vi.mock("../callPlanGenerator/dailyCallPlanGenerator.js", () => ({
 
 vi.mock("../../repositories/dailyCallPlanReportRepository.js", () => ({
   findProductivityRowsByReportId: mocks.findProductivityRowsByReportId,
+  findProductivityDetailRowsByReportId:
+    mocks.findProductivityDetailRowsByReportId,
 }));
 
 vi.mock("../../repositories/historyRepository.js", () => ({
@@ -220,6 +223,7 @@ beforeEach(() => {
     [chennai, vellore].find((r) => r.id === id) ?? null,
   );
   mocks.listRegions.mockResolvedValue([chennai, vellore]);
+  mocks.findProductivityDetailRowsByReportId.mockResolvedValue(new Map());
   mocks.findLatestCompletedSessionByReportDate.mockResolvedValue({
     id: "session-1",
     daily_call_plan_report_id: "report-1",
@@ -546,5 +550,106 @@ describe("getReportProductivityRange callsInPeriod", () => {
     const chennaiEntry = range.regions.find((r) => r.regionId === chennai.id);
     expect(chennaiEntry?.source).toBe("FROZEN");
     expect(chennaiEntry?.callsInPeriod).toBe(2);
+  });
+});
+
+describe("getReportProductivityRange detail", () => {
+  it("returns nothing extra unless detail is asked for", async () => {
+    const range = await getReportProductivityRange("2026-07-15", "2026-07-17");
+
+    // The table renders every range change and needs none of this; a bill cycle
+    // is ~2400 rows to serialise for nobody.
+    expect(range.callDays).toBeUndefined();
+    expect(range.uniqueCallCount).toBeUndefined();
+    expect(mocks.findProductivityDetailRowsByReportId).not.toHaveBeenCalled();
+  });
+
+  it("returns one dated call-day per assigned booking", async () => {
+    const range = await getReportProductivityRange("2026-07-15", "2026-07-17", {
+      detail: true,
+    });
+
+    const chennaiEntry = range.regions.find((r) => r.regionId === chennai.id);
+    const chennaiCallDays = range.callDays?.filter(
+      (callDay) => callDay.regionId === chennai.id,
+    );
+
+    // The row count IS the Assigned total — the promise the drill-down makes.
+    expect(chennaiCallDays).toHaveLength(
+      chennaiEntry?.productivity.list[0]?.assigned ?? -1,
+    );
+    expect(new Set(chennaiCallDays?.map((callDay) => callDay.date))).toEqual(
+      new Set(["2026-07-15", "2026-07-16", "2026-07-17"]),
+    );
+  });
+
+  it("numbers the bookings of a call across the days it was booked", async () => {
+    const range = await getReportProductivityRange("2026-07-15", "2026-07-17", {
+      detail: true,
+    });
+
+    // The two Chennai rows are the SAME two tickets on all three days, which is
+    // exactly the shape that reads as duplicated data without this numbering.
+    const ticketId = range.callDays?.[0]?.ticketId ?? "";
+    const bookings = range.callDays
+      ?.filter(
+        (callDay) =>
+          callDay.ticketId === ticketId && callDay.regionId === chennai.id,
+      )
+      .map((callDay) => `${callDay.bookingIndex} of ${callDay.bookingCount}`);
+
+    expect(bookings).toEqual(["1 of 3", "2 of 3", "3 of 3"]);
+  });
+
+  it("counts distinct calls, not bookings, for the header", async () => {
+    const range = await getReportProductivityRange("2026-07-15", "2026-07-17", {
+      detail: true,
+    });
+
+    const distinct = new Set(range.callDays?.map((callDay) => callDay.ticketId));
+    expect(range.uniqueCallCount).toBe(distinct.size);
+    // The whole point: the two numbers differ, and both are correct.
+    expect(range.callDays!.length).toBeGreaterThan(range.uniqueCallCount!);
+  });
+
+  it("attaches the descriptive columns the summary cannot carry", async () => {
+    mocks.findProductivityDetailRowsByReportId.mockResolvedValue(
+      new Map([
+        [
+          "W1",
+          {
+            woOtcCode: "OTC-9",
+            customerName: "Ramesh",
+            location: "Adyar",
+            product: "LaserJet",
+            segment: "Consumer",
+            caseCreatedTime: "2026-07-10T04:30:00.000Z",
+            wipAging: "5",
+            tat: null,
+            flexStatus: "Open",
+            rtplStatus: "Scheduled",
+            eveningStatus: "",
+          },
+        ],
+      ]),
+    );
+
+    const range = await getReportProductivityRange("2026-07-15", "2026-07-15", {
+      detail: true,
+    });
+
+    const enriched = range.callDays?.find(
+      (callDay) => callDay.ticketId === "W1",
+    );
+    expect(enriched?.customerName).toBe("Ramesh");
+    expect(enriched?.woOtcCode).toBe("OTC-9");
+
+    // A call with no detail row still appears — it was counted, so leaving it
+    // out would make the rows disagree with the number they explain.
+    const missingDetail = range.callDays?.find(
+      (callDay) => callDay.ticketId !== "W1",
+    );
+    expect(missingDetail).toBeDefined();
+    expect(missingDetail?.customerName).toBe("");
   });
 });

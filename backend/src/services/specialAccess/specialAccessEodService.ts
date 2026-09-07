@@ -94,18 +94,34 @@ export async function getReportProductivityRangeForSpecialAccess(
   principal: SpecialAccessPrincipal,
   from: string,
   to: string,
+  opts: { detail?: boolean } = {},
 ): Promise<ReportProductivityRangeResponse> {
   if (!principal.sections.includes("productivity")) {
     throw forbidden("Engineer Productivity is not granted to this login");
   }
-  const range = await getReportProductivityRange(from, to);
+  const range = await getReportProductivityRange(from, to, opts);
   const granted = grantedRegionIds(principal);
   if (!granted) {
     return range;
   }
+  // The detail rows are filtered by the SAME granted set as the summary. Leaving
+  // callDays whole would hand a region-restricted login every other region's
+  // work order numbers and customer names through the export button — the
+  // summary would look correctly scoped while the rows behind it were not.
+  const callDays = range.callDays?.filter((callDay) =>
+    granted.has(callDay.regionId),
+  );
   return {
     ...range,
     regions: range.regions.filter((region) => granted.has(region.regionId)),
+    ...(callDays
+      ? {
+          callDays,
+          // Recounted over the rows that survive the filter, or the header would
+          // quote a distinct-call figure covering regions this login cannot see.
+          uniqueCallCount: new Set(callDays.map((day) => day.ticketId)).size,
+        }
+      : {}),
   };
 }
 

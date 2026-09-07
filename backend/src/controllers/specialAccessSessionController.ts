@@ -202,14 +202,27 @@ export const getSpecialAccessEodStateController: RequestHandler = asyncHandler(
 const eodRangeQuerySchema = z.object({
   from: workingDateSchema,
   to: workingDateSchema,
+  /**
+   * Ask for the row-level call-days behind the counts. Off by default: a bill
+   * cycle is ~2400 rows and the table that renders every day needs none of them.
+   */
+  detail: z
+    .enum(["0", "1", "true", "false"])
+    .optional()
+    .transform((value) => value === "1" || value === "true"),
 });
 
 export const getSpecialAccessProductivityRangeController: RequestHandler =
   asyncHandler(async (request, response) => {
     const principal = requireSpecialAccess(request);
-    const { from, to } = eodRangeQuerySchema.parse(request.query);
+    const { from, to, detail } = eodRangeQuerySchema.parse(request.query);
     response.json({
-      data: await getReportProductivityRangeForSpecialAccess(principal, from, to),
+      data: await getReportProductivityRangeForSpecialAccess(
+        principal,
+        from,
+        to,
+        { detail },
+      ),
     });
   });
 

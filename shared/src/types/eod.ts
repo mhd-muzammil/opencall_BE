@@ -1,4 +1,7 @@
-import type { EngineerProductivityResult } from "../analytics/engineerProductivity.js";
+import type {
+  EngineerProductivityResult,
+  ProductivityCallDay,
+} from "../analytics/engineerProductivity.js";
 
 export type RegionEodStatus = "OPEN" | "CLOSED";
 
@@ -86,4 +89,67 @@ export interface ReportProductivityRangeResponse {
    */
   missingDays: string[];
   regions: RegionProductivityRangeEntry[];
+  /**
+   * One row per assigned call-day, present ONLY when the caller asked for
+   * `detail=1`. Omitted by default: a bill cycle is ~2400 of these and the
+   * table that renders every day needs none of them.
+   */
+  callDays?: ProductivityCallDayDetail[];
+  /**
+   * Distinct calls behind those call-days, across the whole range.
+   *
+   * The second half of "2441 day-bookings across 912 calls". Computed here so
+   * the drill-down header and the Excel cover sheet cannot quote two different
+   * figures for the same range. Distinct by ticket id across ALL engineers, so
+   * a call reassigned mid-cycle counts once, not once per engineer.
+   */
+  uniqueCallCount?: number;
+}
+
+/**
+ * One assigned call-day with the descriptive fields the summary cannot carry —
+ * the row behind the number, served by GET /reports/productivity/range?detail=1.
+ *
+ * Feeds BOTH the Excel detail sheet and the on-screen drill-down, so clicking a
+ * total and exporting it can never show different sets of rows. That divergence
+ * is the bug this whole feature exists to close: the drill-down used to filter
+ * the ONE report the browser holds, so a month's total opened onto today's
+ * still-open calls and a 2441 landed on 30.
+ */
+export interface ProductivityCallDayDetail extends ProductivityCallDay {
+  /**
+   * The region that counted this call-day.
+   *
+   * Carried as the ID, not just the ASP code the calculation groups by, because
+   * special access filters what it returns by granted region ID. Without it the
+   * region filter can only be applied to the summary and every restricted login
+   * would receive every region's rows in `callDays`.
+   */
+  regionId: string;
+  woOtcCode: string;
+  customerName: string;
+  location: string;
+  product: string;
+  segment: string;
+  /** ISO timestamp, or null when the report carried none. */
+  caseCreatedTime: string | null;
+  wipAging: string;
+  /** ISO timestamp, or null. */
+  tat: string | null;
+  /** The three statuses AS AT this day — the range walks every day's rows. */
+  flexStatus: string;
+  rtplStatus: string;
+  eveningStatus: string;
+  /**
+   * Which booking of this call this row is, and how many the range holds for
+   * the same engineer: "1 of 3", "2 of 3".
+   *
+   * The whole reason a repeated WO is not a duplicate. A call booked on three
+   * days IS three call-days, and without this the three rows are identical
+   * except for a date nobody reads as significant. Counted per ENGINEER, because
+   * a call reassigned mid-cycle is a fresh sequence for whoever picks it up —
+   * their second booking is not "3 of 5" of somebody else's work.
+   */
+  bookingIndex: number;
+  bookingCount: number;
 }
