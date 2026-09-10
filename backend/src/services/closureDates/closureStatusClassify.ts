@@ -36,6 +36,25 @@ export function classifyClosureStatus(status: unknown): ClosureStatusGroup {
   return "other";
 }
 
+/**
+ * The same ordered rule, expressed in SQL, so a query can group by closure outcome without
+ * pulling every row into Node.
+ *
+ * GENERATED from `CLOSURE_STATUS_MATCHERS` rather than hand-written: two hand-maintained
+ * copies of an order-sensitive rule is exactly how "Closed - Canceled" ends up counted as
+ * a completion on one screen and not another. A CASE evaluates its WHENs in order, which
+ * is why the matcher list maps onto it directly — CANCEL is tested before CLOSE.
+ *
+ * The substrings are rule constants, never user input.
+ */
+export function closureStatusGroupSql(column: string): string {
+  const whens = CLOSURE_STATUS_MATCHERS.map(
+    (matcher) =>
+      `WHEN UPPER(COALESCE(${column}, '')) LIKE '%${matcher.substring}%' THEN '${matcher.group}'`,
+  ).join(" ");
+  return `CASE ${whens} ELSE 'other' END`;
+}
+
 /** Tally helper for import summaries and activity metadata. */
 export interface ClosureStatusTally {
   closed: number;

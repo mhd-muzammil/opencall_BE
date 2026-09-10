@@ -242,8 +242,9 @@ describe("reconcileClosuresForDate — the day's row set", () => {
       aspCode: "ASPS01461",
     });
 
-    expect(mocks.query).toHaveBeenCalledTimes(2);
-    // The scope is the LAST parameter of both queries; the two before it are the day bounds.
+    // Three now: the day's rows, Flex's closures, and the closures with no report row.
+    expect(mocks.query).toHaveBeenCalledTimes(3);
+    // The scope is the LAST parameter of every query; the two before it are the day bounds.
     for (const [, params] of mocks.query.mock.calls) {
       const list = params as unknown[];
       expect(list[list.length - 1]).toEqual(["ASPS01461"]);
@@ -260,6 +261,24 @@ describe("reconcileClosuresForDate — the day's row set", () => {
         expect.arrayContaining(["2026-07-31", "2026-07-31"]),
       );
     }
+  });
+
+  it("finds the closures with no report row in ONE pass, not one lookup each", async () => {
+    // daily_call_plan_report_rows has an index on UPPER(TRIM(ticket_id)) and none on the
+    // case id, so a per-closure NOT EXISTS on the case would sequentially scan the whole
+    // table roughly a thousand times for a month-long window. The keys are collected once
+    // and anti-joined instead.
+    await reconcileClosuresForDate({ date: "2026-07-31", allowedAspCodes: null });
+
+    const noRowQuery = (mocks.query.mock.calls as Array<[string, unknown[]]>).find(
+      ([sql]) => sql.includes("row_keys"),
+    );
+    expect(noRowQuery).toBeDefined();
+    const flat = (noRowQuery as [string, unknown[]])[0].replace(/\s+/g, " ");
+    expect(flat).toContain("UNION");
+    expect(flat).toContain("NOT EXISTS");
+    // Completions only — a cancellation with no report row is not a missing upload.
+    expect(flat).toContain("= 'closed'");
   });
 
   it("asks for the whole period when an end date is given", async () => {

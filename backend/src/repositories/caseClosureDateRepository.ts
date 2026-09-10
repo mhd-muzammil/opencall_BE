@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { pool, query } from "../config/database.js";
-import { CLOSURE_STATUS_MATCHERS } from "../services/closureDates/closureStatusClassify.js";
+import { closureStatusGroupSql } from "../services/closureDates/closureStatusClassify.js";
 
 /**
  * Imported case closure dates (from the Flex Closure ASP Report). Keyed by WO id and
@@ -480,26 +480,10 @@ async function buildLocationCteSql(): Promise<string> {
  */
 const CLOSURE_ASP_CODE_SQL = `COALESCE(NULLIF(closure.work_location, ''), by_wo.loc, by_case.loc, '')`;
 
-/**
- * `classifyClosureStatus` expressed in SQL, so a summary can be grouped without pulling
- * every row into Node. Generated from the SAME ordered matcher list the TS classifier
- * walks, so the two cannot drift.
- *
- * ORDER MATTERS: the literal "Closed - Canceled" contains BOTH words, so CANCEL is
- * tested before CLOSE. A CASE evaluates its WHENs in order, which is why the list maps
- * onto it directly. Substrings are rule constants, never user input.
- */
-function closureStatusGroupSql(column = "closure.closure_status"): string {
-  return `CASE
-       ${CLOSURE_STATUS_MATCHERS.map(
-         (m) =>
-           `WHEN UPPER(COALESCE(${column}, '')) LIKE '%${m.substring}%' THEN '${m.group}'`,
-       ).join("\n       ")}
-       ELSE 'other'
-     END`;
-}
-
-const CLOSURE_STATUS_GROUP_SQL = closureStatusGroupSql();
+// `classifyClosureStatus` in SQL form lives with the classifier itself
+// (services/closureDates/closureStatusClassify.ts), so the ordered rule has exactly one
+// definition: CANCEL is tested before CLOSE, because "Closed - Canceled" contains both.
+const CLOSURE_STATUS_GROUP_SQL = closureStatusGroupSql("closure.closure_status");
 
 /**
  * Groups the imported closures by ASP region.

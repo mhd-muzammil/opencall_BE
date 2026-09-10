@@ -1,5 +1,6 @@
 import { query } from "../../config/database.js";
 import { normalizeKey } from "../../repositories/caseClosureDateRepository.js";
+import { closureStatusGroupSql } from "./closureStatusClassify.js";
 
 /**
  * "Did Flex agree with us today?" — compares the calls the team closed on the Open Call
@@ -105,10 +106,25 @@ export interface ClosureReconciliation {
   closedHereNotInFlex: ReconciliationRow[];
   /** Flex closed it; our evening-first status does not say closed. */
   closedInFlexNotHere: ReconciliationRow[];
+  /**
+   * Flex closed it and we hold NO report row for it at all — not an open one, not a
+   * closed one, on any day.
+   *
+   * The three buckets above are all built from rows we DO hold, so a closure whose work
+   * order never appeared in a WIP file simply fell out of the comparison: it could not be
+   * matched, and it could not be "closed in Flex, not here" either, because that bucket
+   * only sees closures against the day's row set. This is the residue, and it is the one
+   * that means an upload is missing rather than a status being late.
+   *
+   * Omitted entirely when the caller did not ask for it, so a response is byte-identical
+   * to the old three-bucket one rather than carrying an empty field.
+   */
+  closedInFlexNoRow?: ReconciliationRow[] | undefined;
   counts: {
     matched: number;
     closedHereNotInFlex: number;
     closedInFlexNotHere: number;
+    closedInFlexNoRow?: number | undefined;
   };
 }
 
@@ -117,6 +133,19 @@ function hoursSince(iso: string | null, nowMs: number): number | null {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return null;
   return Math.max(0, Math.round(((nowMs - then) / 3_600_000) * 10) / 10);
+}
+
+/** A Flex closure as a reconciliation row: our side of it is simply unknown. */
+function closureAsRow(closure: FlexClosureRow): ReconciliationRow {
+  return {
+    ticketId: closure.woId,
+    caseId: closure.caseId,
+    aspCode: closure.aspCode,
+    rtplStatus: "",
+    closureStatus: closure.status,
+    closureDate: closure.closureDate,
+    hoursSinceClosedHere: null,
+  };
 }
 
 /**
@@ -133,6 +162,13 @@ export function bucketReconciliation(input: {
   closedHere: readonly ClosedHereRow[];
   flexClosures: readonly FlexClosureRow[];
   nowMs: number;
+  /**
+   * Closures in the window that match no report row at all. Loaded separately because it
+   * is the only question here that cannot be answered from the day's rows — it needs
+   * every row we have ever held. Undefined means "not asked for", and the field is then
+   * left off the result rather than reported as zero.
+   */
+  closedInFlexNoRow?: readonly FlexClosureRow[] | undefined;
 }): ClosureReconciliation {
   const flexByWo = new Map<string, FlexClosureRow>();
   const flexByCase = new Map<string, FlexClosureRow>();
@@ -178,25 +214,21 @@ export function bucketReconciliation(input: {
   // along so a "Closed - Canceled" is visibly different from a genuine "WO Closed".
   const closedInFlexNotHere: ReconciliationRow[] = input.flexClosures
     .filter((closure) => !consumed.has(closure))
-    .map((closure) => ({
-      ticketId: closure.woId,
-      caseId: closure.caseId,
-      aspCode: closure.aspCode,
-      rtplStatus: "",
-      closureStatus: closure.status,
-      closureDate: closure.closureDate,
-      hoursSinceClosedHere: null,
-    }));
+    .map(closureAsRow);
+
+  const noRow = input.closedInFlexNoRow?.map(closureAsRow);
 
   return {
     date: input.date,
     matched,
     closedHereNotInFlex,
     closedInFlexNotHere,
+    ...(noRow ? { closedInFlexNoRow: noRow } : {}),
     counts: {
       matched: matched.length,
       closedHereNotInFlex: closedHereNotInFlex.length,
       closedInFlexNotHere: closedInFlexNotHere.length,
+      ...(noRow ? { closedInFlexNoRow: noRow.length } : {}),
     },
   };
 }
@@ -329,6 +361,77 @@ async function loadFlexClosures(
   }));
 }
 
+/**
+ * Flex closures in the window that match NO report row we hold — by work order or by case,
+ * on any day.
+ *
+ * ONE pass over the report rows, not one lookup per closure. The keys are collected into a
+ * single de-duplicated set and anti-joined against, because `daily_call_plan_report_rows`
+ * carries an index on `UPPER(TRIM(ticket_id))` but none on the case id: a per-closure
+ * `NOT EXISTS` on the case would sequentially scan the table once for every closure in the
+ * window — around a thousand scans — and this codebase has already lost a morning to a
+ * missing index emptying the connection pool. The shape here is the same one
+ * `summarizeCaseClosureDatesByAsp` already uses to recover a closure's region.
+ *
+ * Completions only. A cancellation with no report row is not a missing upload, it is a
+ * call that was abandoned before it ever reached us.
+ */
+async function loadClosuresWithNoReportRow(
+  fromDate: string,
+  toDate: string,
+  allowedAspCodes: string[] | null,
+): Promise<FlexClosureRow[]> {
+  const result = await query<{
+    wo_id: string;
+    case_id: string;
+    asp_code: string;
+    closure_status: string | null;
+    closure_date: string | null;
+  }>(
+    `WITH window_closures AS (
+       SELECT wo_id,
+              case_id,
+              UPPER(TRIM(COALESCE(work_location, '')))  AS asp_code,
+              closure_status,
+              to_char(closure_date, 'DD-MM-YYYY')       AS closure_date
+         FROM case_closure_dates
+        WHERE closed_on BETWEEN $1::date AND $2::date
+          AND ${closureStatusGroupSql("closure_status")} = 'closed'
+          AND ($3::text[] IS NULL
+               OR UPPER(TRIM(COALESCE(work_location, ''))) = ANY($3::text[]))
+     ),
+     row_keys AS (
+       SELECT UPPER(TRIM(ticket_id)) AS key
+         FROM daily_call_plan_report_rows
+        WHERE COALESCE(TRIM(ticket_id), '') <> ''
+       UNION
+       SELECT UPPER(TRIM(case_id))
+         FROM daily_call_plan_report_rows
+        WHERE COALESCE(TRIM(case_id), '') <> ''
+     )
+     SELECT wo_id, case_id, asp_code, closure_status, closure_date
+       FROM window_closures closure
+      WHERE NOT EXISTS (
+              SELECT 1 FROM row_keys
+               WHERE closure.wo_id <> '' AND row_keys.key = closure.wo_id
+            )
+        AND NOT EXISTS (
+              SELECT 1 FROM row_keys
+               WHERE closure.case_id <> '' AND row_keys.key = closure.case_id
+            )
+      ORDER BY wo_id`,
+    [fromDate, toDate, allowedAspCodes],
+  );
+
+  return result.rows.map((row) => ({
+    woId: row.wo_id,
+    caseId: row.case_id,
+    aspCode: row.asp_code,
+    status: row.closure_status ?? "",
+    closureDate: row.closure_date ?? "",
+  }));
+}
+
 export async function reconcileClosuresForDate(input: {
   date: string;
   /**
@@ -348,15 +451,17 @@ export async function reconcileClosuresForDate(input: {
   const scope = asp ? [asp] : input.allowedAspCodes;
   const toDate = (input.toDate ?? "").trim() || input.date;
 
-  const [closedHere, flexClosures] = await Promise.all([
+  const [closedHere, flexClosures, closedInFlexNoRow] = await Promise.all([
     loadDayRows(input.date, toDate, scope),
     loadFlexClosures(input.date, toDate, scope),
+    loadClosuresWithNoReportRow(input.date, toDate, scope),
   ]);
 
   return bucketReconciliation({
     date: input.date,
     closedHere,
     flexClosures,
+    closedInFlexNoRow,
     nowMs: Date.now(),
   });
 }
