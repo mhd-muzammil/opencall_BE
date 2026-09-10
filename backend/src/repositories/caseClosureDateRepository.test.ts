@@ -321,9 +321,23 @@ describe("summarizeRepeatVisits", () => {
     await summarizeRepeatVisits({ dateFrom: "2026-07-25", dateTo: "2026-08-24" });
     const sql = String(mocks.query.mock.calls[0]![0]).replace(/\s+/g, " ");
     const lagAt = sql.indexOf("LAG(");
-    const rangeAt = sql.indexOf("closed_on BETWEEN");
+    const rangeAt = sql.indexOf("closed_on >= $1::date");
     expect(lagAt).toBeGreaterThan(-1);
     expect(rangeAt).toBeGreaterThan(lagAt);
+  });
+
+  it("treats an empty bound as unbounded instead of asking Postgres to cast ''", async () => {
+    // The Closed Calls page sends from="" / to="" for its All dates period. This used to
+    // be `BETWEEN $1::date AND $2::date`, which Postgres rejects with "invalid input
+    // syntax for type date" — a 500 the frontend swallowed, so the panel simply vanished
+    // and the unpaid repeat visits went unreported exactly when someone widened the
+    // period to look for them.
+    mocks.query.mockResolvedValue({ rows: [] });
+    await summarizeRepeatVisits({ dateFrom: "", dateTo: "" });
+    const sql = String(mocks.query.mock.calls[0]![0]).replace(/\s+/g, " ");
+    expect(sql).toContain("($1 = '' OR closed_on >= $1::date)");
+    expect(sql).toContain("($2 = '' OR closed_on <= $2::date)");
+    expect(sql).not.toContain("closed_on BETWEEN");
   });
 
   it("excludes cancellations from the sequence", async () => {

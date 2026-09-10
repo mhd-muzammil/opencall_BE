@@ -694,7 +694,16 @@ export async function summarizeRepeatVisits(opts: {
             to_char(prev_closed_on, 'YYYY-MM-DD') AS prev_closed_on,
             (closed_on - prev_closed_on)::TEXT    AS gap_days
        FROM seq
-      WHERE closed_on BETWEEN $1::date AND $2::date
+      -- An empty bound means "unbounded", the same convention
+      -- summarizeCaseClosureDatesByAsp uses. This was BETWEEN $1::date AND $2::date,
+      -- which Postgres rejects outright for '' ("invalid input syntax for type date"), so
+      -- the endpoint 500'd for every all-dates request — and the Closed Calls page sends
+      -- exactly that whenever its period is All dates. The frontend swallows the failure
+      -- and hides the panel, so this read on screen as "no repeat visits" rather than as
+      -- an error: free work going unreported precisely when someone widened the period to
+      -- look for it.
+      WHERE ($1 = '' OR closed_on >= $1::date)
+        AND ($2 = '' OR closed_on <= $2::date)
         AND ($3::text[] IS NULL OR asp_code = ANY($3::text[]))
       ORDER BY closed_on DESC, wo_id`,
     [opts.dateFrom, opts.dateTo, opts.allowedAspCodes ?? null],
