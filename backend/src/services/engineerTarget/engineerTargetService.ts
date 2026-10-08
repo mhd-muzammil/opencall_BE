@@ -7,6 +7,7 @@ import {
   type ProductivityPersistedRow,
 } from "../../repositories/dailyCallPlanReportRepository.js";
 import { findReportDaysInRange } from "../../repositories/engineerTargetRepository.js";
+import { ensureStatusBucketsLoaded } from "../rtplStatuses/statusBucketCache.js";
 
 /**
  * Engineer Target — how each engineer is tracking against the standing close target.
@@ -115,6 +116,7 @@ export async function getEngineerTargetProgress(input: {
 
   for (const day of bounded) {
     const persisted = await findProductivityRowsByReportId(day.reportId);
+    await ensureStatusBucketsLoaded();
     const productivity = computeEngineerProductivity(persisted.map(toProductivityRow));
 
     for (const entry of productivity.list) {

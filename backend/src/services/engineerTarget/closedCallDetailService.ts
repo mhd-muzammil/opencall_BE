@@ -11,6 +11,7 @@ import {
   type ClosedCallDetailRow,
 } from "../../repositories/closedCallDetailRepository.js";
 import { findReportDaysInRange } from "../../repositories/engineerTargetRepository.js";
+import { ensureStatusBucketsLoaded } from "../rtplStatuses/statusBucketCache.js";
 
 /**
  * Closed Calls detail — the individual calls behind an Engineer Target close count,
@@ -119,6 +120,7 @@ export async function getClosedCallDetails(input: {
 
   for (const day of bounded) {
     const persisted = await findProductivityRowsByReportId(day.reportId);
+    await ensureStatusBucketsLoaded();
     const productivity = computeEngineerProductivity(persisted.map(toProductivityRow));
 
     // Which tickets closed on this day, and under whose name/region. Region scoping is

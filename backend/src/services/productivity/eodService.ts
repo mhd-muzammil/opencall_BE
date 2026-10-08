@@ -54,6 +54,7 @@ import {
 import type { AuthenticatedUser } from "../../types/auth.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
 import { findAllowedRegionsForUser } from "../rbac/regionAccessService.js";
+import { ensureStatusBucketsLoaded } from "../rtplStatuses/statusBucketCache.js";
 import { aspCodesForRegion } from "../rbac/regionRowAccess.js";
 
 const WORKING_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -126,6 +127,8 @@ function toProductivityRow(row: ProductivityPersistedRow): ProductivityReportRow
 async function loadDayProductivityRowsOrNull(
   workingDate: string,
 ): Promise<ProductivityReportRow[] | null> {
+  // Every count below classifies statuses: use the admin's BOD/EOD rows.
+  await ensureStatusBucketsLoaded();
   const session = await findLatestCompletedSessionByReportDate(workingDate);
   if (!session?.daily_call_plan_report_id) {
     return null;

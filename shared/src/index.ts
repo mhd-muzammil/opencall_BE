@@ -11,6 +11,7 @@ export * from "./types/eod.js";
 export * from "./analytics/engineerProductivity.js";
 export * from "./analytics/flexClosure.js";
 export * from "./constants/scheduling.js";
+export * from "./constants/statusBuckets.js";
 export * from "./utils/dates.js";
 export * from "./utils/rcaText.js";
 export * from "./types/reportComparison.js";

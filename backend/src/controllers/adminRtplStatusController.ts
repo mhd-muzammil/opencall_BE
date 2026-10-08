@@ -1,9 +1,11 @@
 import type { RequestHandler } from "express";
+import { getCustomRowsForDashboardsService } from "../services/rtplStatuses/bodEodCustomRowService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { badRequest } from "../utils/httpError.js";
 import {
   createRtplStatusService,
   deleteRtplStatusService,
+  getRtplStatusBucketsService,
   getRtplStatusesDropdownService,
   listRtplStatusesService,
   setRtplStatusActiveService,
@@ -12,8 +14,12 @@ import {
 
 export const getRtplStatusesDropdownController: RequestHandler = asyncHandler(
   async (_request, response) => {
-    const statuses = await getRtplStatusesDropdownService();
-    response.json({ data: { statuses } });
+    const [statuses, buckets, rows] = await Promise.all([
+      getRtplStatusesDropdownService(),
+      getRtplStatusBucketsService(),
+      getCustomRowsForDashboardsService(),
+    ]);
+    response.json({ data: { statuses, buckets, rows } });
   },
 );
 
@@ -36,7 +42,7 @@ export const listAdminRtplStatusesController: RequestHandler = asyncHandler(
 
 export const createAdminRtplStatusController: RequestHandler = asyncHandler(
   async (request, response) => {
-    const { name, category, sortOrder } = request.body;
+    const { name, category, sortOrder, bodEodBucket } = request.body;
 
     if (!name || typeof name !== "string") {
       throw badRequest("name is required");
@@ -45,6 +51,7 @@ export const createAdminRtplStatusController: RequestHandler = asyncHandler(
     const input: Parameters<typeof createRtplStatusService>[1] = { name };
     if (category !== undefined) input.category = category;
     if (typeof sortOrder === "number") input.sortOrder = sortOrder;
+    if (bodEodBucket !== undefined) input.bodEodBucket = bodEodBucket;
 
     const status = await createRtplStatusService(request.currentUser!, input);
 

@@ -1,5 +1,11 @@
 import { Router } from "express";
 import {
+  createAdminBodEodRowController,
+  deleteAdminBodEodRowController,
+  listAdminBodEodRowsController,
+  updateAdminBodEodRowController,
+} from "../controllers/adminBodEodRowController.js";
+import {
   adminPasswordResetController,
   changeAdminUserRoleController,
   createAdminUserController,
@@ -213,6 +219,13 @@ adminRouter.delete(
   requireRole(["SUPER_ADMIN"]),
   deleteAdminRtplStatusController,
 );
+
+// Custom BOD/EOD rows for statuses that fit none of the built-in rows. Read by
+// the dashboards through the status dropdown; managed by SUPER_ADMIN only.
+adminRouter.get("/bod-eod-rows", requireRole(["SUPER_ADMIN"]), listAdminBodEodRowsController);
+adminRouter.post("/bod-eod-rows", requireRole(["SUPER_ADMIN"]), createAdminBodEodRowController);
+adminRouter.patch("/bod-eod-rows/:id", requireRole(["SUPER_ADMIN"]), updateAdminBodEodRowController);
+adminRouter.delete("/bod-eod-rows/:id", requireRole(["SUPER_ADMIN"]), deleteAdminBodEodRowController);
 
 adminRouter.get(
   "/users",

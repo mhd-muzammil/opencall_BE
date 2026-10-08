@@ -33,6 +33,10 @@
 //   any other status                            -> ATTENDED_OTHER
 import { ASP_CODE_REGION_MAP } from "../constants/regions.js";
 import { isScheduledStatus } from "../constants/scheduling.js";
+import {
+  getMappedStatusBucket,
+  productivityBucketForRow,
+} from "../constants/statusBuckets.js";
 import { isCancelledClosure } from "./flexClosure.js";
 
 export type ProductivityBucket =
@@ -100,6 +104,14 @@ export function classifyProductivityStatus(
 
   if (!normalized) {
     return null;
+  }
+
+  // The admin's choice on the RTPL Statuses page decides, when the status has
+  // one: the same row the BOD/EOD table counts it under. The keyword rules below
+  // only cover text that is not in the admin list (deleted statuses in old rows).
+  const mapped = getMappedStatusBucket(status);
+  if (mapped) {
+    return productivityBucketForRow(mapped);
   }
 
   // The scheduling stage: the call is booked to the engineer but no work has

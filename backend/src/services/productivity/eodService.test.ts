@@ -35,6 +35,11 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+// The admin's status mapping is not under test here: keyword rules apply.
+vi.mock("../rtplStatuses/statusBucketCache.js", () => ({
+  ensureStatusBucketsLoaded: async () => {},
+}));
+
 vi.mock("../../config/database.js", () => ({
   // The service only passes the client through to the (mocked) repository.
   withTransaction: (fn: (client: unknown) => Promise<unknown>) => fn({}),

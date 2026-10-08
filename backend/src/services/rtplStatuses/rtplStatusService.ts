@@ -1,3 +1,10 @@
+import {
+  isCustomRowKey,
+  isStatusBucket,
+  lockedStatusBucket,
+  STATUS_BUCKET_LABELS,
+  type StatusBucket,
+} from "@opencall/shared";
 import type { AuthenticatedUser } from "../../types/auth.js";
 import { badRequest, conflict, notFound } from "../../utils/httpError.js";
 import { insertActivity } from "../../repositories/activityLogRepository.js";
@@ -6,6 +13,7 @@ import {
   findRtplStatusById,
   findRtplStatusByName,
   insertRtplStatus,
+  listRtplStatusBuckets,
   listRtplStatuses,
   listRtplStatusesForDropdown,
   renameRtplStatusValueInReportRows,
@@ -15,6 +23,8 @@ import {
   type ListRtplStatusesFilters,
   type RtplStatus,
 } from "../../repositories/rtplStatusRepository.js";
+import { invalidateStatusBuckets } from "./statusBucketCache.js";
+import { findBodEodCustomRowByKey } from "../../repositories/bodEodCustomRowRepository.js";
 
 const MAX_NAME_LENGTH = 200;
 const MAX_CATEGORY_LENGTH = 100;
@@ -50,8 +60,52 @@ function normalizeName(name: string): string {
   return value;
 }
 
+/**
+ * A built-in row, or a custom row an admin created. A hidden custom row cannot
+ * be newly chosen, but a status already on it may keep it (`current`).
+ */
+async function normalizeBucket(bucket: unknown, current?: string | null): Promise<string> {
+  if (isStatusBucket(bucket)) return bucket;
+  if (isCustomRowKey(bucket)) {
+    const row = await findBodEodCustomRowByKey(bucket);
+    if (row && (row.isActive || bucket === current)) return bucket;
+  }
+  throw badRequest("Choose which BOD/EOD row this status counts under");
+}
+
+/**
+ * "Scheduled", "Customer Pending" and the closure statuses are matched by their
+ * exact name elsewhere (the plan gate, the KCI rule, closure reconciliation), so
+ * they cannot be renamed, removed or moved to another row.
+ */
+function lockedMessage(name: string, bucket: StatusBucket): string {
+  return `"${name}" is a system status (always counts under ${STATUS_BUCKET_LABELS[bucket]}) and cannot be renamed, moved, disabled or deleted`;
+}
+
 export async function getRtplStatusesDropdownService(): Promise<DropdownRtplStatus[]> {
   return listRtplStatusesForDropdown();
+}
+
+/** Postgres undefined_column: migration 068 has not been applied yet. */
+const PG_UNDEFINED_COLUMN = "42703";
+
+/**
+ * Every status's BOD/EOD row, for the dashboards. Sent alongside the dropdown,
+ * which every signed-in screen already polls. Before migration 068 there is no
+ * mapping: answer empty (the dashboards fall back to keyword rules) rather than
+ * fail the dropdown that every status picker depends on.
+ */
+export async function getRtplStatusBucketsService(): Promise<
+  Array<{ name: string; bucket: string | null }>
+> {
+  try {
+    return await listRtplStatusBuckets();
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === PG_UNDEFINED_COLUMN) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 export async function listRtplStatusesService(
@@ -64,6 +118,7 @@ export interface CreateRtplStatusInput {
   name: string;
   category?: string | null;
   sortOrder?: number | null;
+  bodEodBucket?: unknown;
 }
 
 export async function createRtplStatusService(
@@ -72,6 +127,9 @@ export async function createRtplStatusService(
 ): Promise<RtplStatus> {
   const name = normalizeName(input.name);
   const category = normalizeCategory(input.category);
+  // A system status always counts under its fixed row; every other new status
+  // must say which row it belongs to — no more guessing from the name.
+  const bodEodBucket = lockedStatusBucket(name) ?? (await normalizeBucket(input.bodEodBucket));
 
   const existing = await findRtplStatusByName(name);
   if (existing) {
@@ -83,6 +141,7 @@ export async function createRtplStatusService(
     status = await insertRtplStatus({
       name,
       category,
+      bodEodBucket,
       // null → append after existing statuses (see repository).
       sortOrder: input.sortOrder ?? null,
       createdBy: currentUser.id,
@@ -106,10 +165,15 @@ export async function createRtplStatusService(
     targetId: status.id,
     ipAddress: null,
     userAgent: null,
-    metadata: { name: status.name, category: status.category },
+    metadata: {
+      name: status.name,
+      category: status.category,
+      bodEodBucket: status.bodEodBucket,
+    },
     status: "SUCCESS",
   });
 
+  invalidateStatusBuckets();
   return status;
 }
 
@@ -117,6 +181,7 @@ export interface UpdateRtplStatusServiceInput {
   name?: string;
   category?: string;
   sortOrder?: number;
+  bodEodBucket?: unknown;
 }
 
 export interface UpdateRtplStatusServiceResult {
@@ -142,8 +207,13 @@ export async function updateRtplStatusService(
     updatedBy: currentUser.id,
   };
 
+  const locked = lockedStatusBucket(existing.name);
+
   if (input.name !== undefined) {
     const name = normalizeName(input.name);
+    if (locked && name !== existing.name) {
+      throw badRequest(lockedMessage(existing.name, locked));
+    }
     const clash = await findRtplStatusByName(name);
     if (clash && clash.id !== id) {
       throw conflict("An RTPL status with this name already exists");
@@ -152,6 +222,17 @@ export async function updateRtplStatusService(
   }
   if (input.category !== undefined) updateData.category = normalizeCategory(input.category);
   if (input.sortOrder !== undefined) updateData.sortOrder = input.sortOrder;
+  if (input.bodEodBucket !== undefined) {
+    const bucket = await normalizeBucket(input.bodEodBucket, existing.bodEodBucket);
+    if (locked && bucket !== locked) {
+      throw badRequest(lockedMessage(existing.name, locked));
+    }
+    updateData.bodEodBucket = bucket;
+  }
+  // Renaming a status INTO a system name pins it to that name's row.
+  const lockedByNewName =
+    updateData.name !== undefined ? lockedStatusBucket(updateData.name) : null;
+  if (lockedByNewName) updateData.bodEodBucket = lockedByNewName;
 
   let updated: RtplStatus | null;
   try {
@@ -192,11 +273,19 @@ export async function updateRtplStatusService(
           renamedFrom: existing.name,
           renamedTo: updateData.name,
           renamedRowValues,
+          bodEodBucket: updated.bodEodBucket,
         }
-      : { changes: Object.keys(input) },
+      : updated.bodEodBucket !== existing.bodEodBucket
+        ? {
+            changes: Object.keys(input),
+            bodEodBucketFrom: existing.bodEodBucket,
+            bodEodBucketTo: updated.bodEodBucket,
+          }
+        : { changes: Object.keys(input) },
     status: "SUCCESS",
   });
 
+  invalidateStatusBuckets();
   return { status: updated, renamedRowValues };
 }
 
@@ -212,6 +301,11 @@ export async function setRtplStatusActiveService(
 
   if (existing.isActive === isActive) {
     return existing;
+  }
+
+  const locked = lockedStatusBucket(existing.name);
+  if (locked && !isActive) {
+    throw badRequest(lockedMessage(existing.name, locked));
   }
 
   const updated = await setRtplStatusActive(id, isActive, currentUser.id);
@@ -245,7 +339,13 @@ export async function deleteRtplStatusService(
     throw notFound("RTPL status not found");
   }
 
+  const locked = lockedStatusBucket(existing.name);
+  if (locked) {
+    throw badRequest(lockedMessage(existing.name, locked));
+  }
+
   await deleteRtplStatus(id);
+  invalidateStatusBuckets();
 
   await insertActivity({
     actorUserId: currentUser.id,

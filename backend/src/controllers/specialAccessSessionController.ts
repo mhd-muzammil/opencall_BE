@@ -1,4 +1,5 @@
 import type { Request, RequestHandler } from "express";
+import { getCustomRowsForDashboardsService } from "../services/rtplStatuses/bodEodCustomRowService.js";
 import { z } from "zod";
 import { DAILY_CALL_PLAN_COLUMNS } from "@opencall/shared";
 import type { SpecialAccessPrincipal } from "../types/auth.js";
@@ -29,6 +30,7 @@ import {
   getRtplStatusesDropdownForSpecialAccess,
 } from "../services/specialAccess/specialAccessDropdownService.js";
 import type { ReportRowEditInput } from "../services/reportRows/reportRowEditService.js";
+import { getRtplStatusBucketsService } from "../services/rtplStatuses/rtplStatusService.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
 import { recordLayoutSchema } from "../validators/recordLayoutValidator.js";
 import { reportRowEditRequestSchema } from "../validators/reportRowEditRequestValidator.js";
@@ -93,9 +95,12 @@ export const getSpecialAccessEngineersDropdownController: RequestHandler = async
 export const getSpecialAccessRtplStatusesDropdownController: RequestHandler =
   asyncHandler(async (request, response) => {
     requireSpecialAccess(request);
-    response.json({
-      data: { statuses: await getRtplStatusesDropdownForSpecialAccess() },
-    });
+    const [statuses, buckets, rows] = await Promise.all([
+      getRtplStatusesDropdownForSpecialAccess(),
+      getRtplStatusBucketsService(),
+      getCustomRowsForDashboardsService(),
+    ]);
+    response.json({ data: { statuses, buckets, rows } });
   });
 
 /**

@@ -4,6 +4,7 @@ export interface RtplStatusRow {
   id: string;
   name: string;
   category: string;
+  bod_eod_bucket: string | null;
   sort_order: number;
   is_active: boolean;
   created_by: string | null;
@@ -16,6 +17,8 @@ export interface RtplStatus {
   id: string;
   name: string;
   category: string;
+  /** The BOD/EOD row this status counts under (null = keyword fallback). */
+  bodEodBucket: string | null;
   sortOrder: number;
   isActive: boolean;
   createdBy: string | null;
@@ -28,6 +31,7 @@ const RTPL_STATUS_COLUMNS = `
   id,
   name,
   category,
+  bod_eod_bucket,
   sort_order,
   is_active,
   created_by,
@@ -41,6 +45,7 @@ function mapRtplStatus(row: RtplStatusRow): RtplStatus {
     id: row.id,
     name: row.name,
     category: row.category,
+    bodEodBucket: row.bod_eod_bucket,
     sortOrder: Number(row.sort_order),
     isActive: Boolean(row.is_active),
     createdBy: row.created_by,
@@ -117,6 +122,19 @@ export async function listRtplStatusesForDropdown(): Promise<DropdownRtplStatus[
   }));
 }
 
+/**
+ * Every status's BOD/EOD row, INACTIVE ones included: a disabled status still
+ * sits in report rows and must keep counting under the row the admin chose.
+ */
+export async function listRtplStatusBuckets(): Promise<
+  Array<{ name: string; bucket: string | null }>
+> {
+  const result = await query<{ name: string; bod_eod_bucket: string | null }>(
+    `SELECT name, bod_eod_bucket FROM rtpl_statuses ORDER BY is_active DESC, sort_order ASC`,
+  );
+  return result.rows.map((row) => ({ name: row.name, bucket: row.bod_eod_bucket }));
+}
+
 export async function findRtplStatusById(id: string): Promise<RtplStatus | null> {
   const result = await query<RtplStatusRow>(
     `
@@ -148,6 +166,7 @@ export async function findRtplStatusByName(name: string): Promise<RtplStatus | n
 export interface InsertRtplStatusInput {
   name: string;
   category: string;
+  bodEodBucket: string;
   // When null, the new status is appended after all existing ones so it does not
   // jump to the top of the dropdown.
   sortOrder: number | null;
@@ -160,7 +179,7 @@ export async function insertRtplStatus(
   const result = await query<RtplStatusRow>(
     `
       INSERT INTO rtpl_statuses (
-        name, category, sort_order, is_active, created_by, updated_by
+        name, category, sort_order, is_active, created_by, updated_by, bod_eod_bucket
       )
       VALUES (
         $1,
@@ -168,11 +187,12 @@ export async function insertRtplStatus(
         COALESCE($3, (SELECT COALESCE(MAX(sort_order), 0) + 10 FROM rtpl_statuses)),
         TRUE,
         $4,
-        $4
+        $4,
+        $5
       )
       RETURNING ${RTPL_STATUS_COLUMNS}
     `,
-    [input.name, input.category, input.sortOrder, input.createdBy],
+    [input.name, input.category, input.sortOrder, input.createdBy, input.bodEodBucket],
   );
   return mapRtplStatus(result.rows[0]!);
 }
@@ -180,6 +200,7 @@ export async function insertRtplStatus(
 export interface UpdateRtplStatusInput {
   name?: string;
   category?: string;
+  bodEodBucket?: string;
   sortOrder?: number;
   updatedBy: string;
 }
@@ -195,6 +216,7 @@ export async function updateRtplStatus(
         name = COALESCE($2, name),
         category = COALESCE($3, category),
         sort_order = COALESCE($4, sort_order),
+        bod_eod_bucket = COALESCE($6, bod_eod_bucket),
         updated_at = NOW(),
         updated_by = $5
       WHERE id = $1
@@ -206,6 +228,7 @@ export async function updateRtplStatus(
       input.category ?? null,
       input.sortOrder ?? null,
       input.updatedBy,
+      input.bodEodBucket ?? null,
     ],
   );
   const row = result.rows[0];
