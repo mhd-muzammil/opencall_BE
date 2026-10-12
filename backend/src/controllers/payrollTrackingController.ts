@@ -9,9 +9,11 @@ import {
   getEngineerDay,
   getEngineerPath,
   getLiveEngineers,
+  getRosterAll,
   getRosterFor,
   isPayrollConfigured,
 } from "../services/payroll/payrollClient.js";
+import { withStaff } from "../services/payroll/rosterStaff.js";
 import {
   KM_RANGE_CONCURRENCY,
   MAX_KM_RANGE_DAYS,
@@ -81,6 +83,11 @@ async function registerRefs() {
  * per name — including the ones it cannot resolve, which are exactly the people
  * whose cases are being skipped. Doing this matching here instead cost us the
  * duty state of anyone only an alias could resolve.
+ *
+ * `?include=staff` -- the live tracking board only -- adds Payroll's other
+ * staff after the register: the office asked to see everybody on duty there,
+ * not only the engineers (12 Oct 2026). Without it the answer is unchanged,
+ * which is what Engineer Productivity reads.
  */
 export const getRosterController: RequestHandler = asyncHandler(async (request, response) => {
   if (!isPayrollConfigured()) {
@@ -88,14 +95,28 @@ export const getRosterController: RequestHandler = asyncHandler(async (request, 
     return;
   }
 
+  const includeStaff = request.query.include === "staff";
   const { engineers, refs } = await registerRefs();
-  if (engineers.length === 0) {
+  if (engineers.length === 0 && !includeStaff) {
     response.json({ data: { configured: true, engineers: [] } });
     return;
   }
 
   const date = typeof request.query.date === "string" ? request.query.date : undefined;
-  const rows = await getRosterFor(refs, date);
+  // Both asked at once, not one after the other: the board polls every 30s and
+  // should not wait for two answers in a row.
+  const [register, everyone] = await Promise.all([
+    engineers.length > 0 ? getRosterFor(refs, date) : Promise.resolve([]),
+    includeStaff
+      ? getRosterAll(date).catch((error: unknown) => {
+          // The staff are an addition: if Payroll cannot list them, the board
+          // still shows the engineers it showed before, rather than nothing.
+          console.warn("[payroll] roster: other staff unavailable, engineers only:", error);
+          return null;
+        })
+      : Promise.resolve(null),
+  ]);
+  const rows = everyone ? withStaff(register, everyone) : register;
 
   // The register's region is a better label than a blank when Payroll has no
   // branch for them, which is every unmatched row.

@@ -348,6 +348,23 @@ export interface RosterEngineer {
   timestamp: string | null;
   active_case_id: number | null;
   active_case_number: string | null;
+  // The employee's role and department in Payroll. Optional: a Payroll not yet
+  // redeployed sends neither.
+  role?: string | null;
+  department?: string | null;
+  // Not in our engineer register: Payroll's other staff, added to the live
+  // tracking board on request (see rosterStaff.ts).
+  staff?: boolean;
+}
+
+/**
+ * Every active Payroll employee and their duty state for a day -- Payroll's
+ * whole staff, not our register. Only the live tracking board asks for this,
+ * to show the office staff beside the engineers; see withStaff().
+ */
+export async function getRosterAll(date?: string): Promise<RosterEngineer[]> {
+  const qs = date ? `?date=${encodeURIComponent(date)}` : "";
+  return authed<RosterEngineer[]>(`/api/tracking/roster/${qs}`);
 }
 
 /**
