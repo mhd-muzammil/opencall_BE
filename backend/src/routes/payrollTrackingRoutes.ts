@@ -6,6 +6,7 @@ import {
   getLiveEngineersController,
   getRosterController,
   getRosterKmController,
+  getRosterKmDaysController,
 } from "../controllers/payrollTrackingController.js";
 import { requireAuthenticatedUser } from "../middlewares/authMiddleware.js";
 
@@ -21,6 +22,9 @@ payrollTrackingRouter.get("/roster", getRosterController);
 // Kilometres per engineer summed over a period (Engineer Productivity, ranges):
 // /roster/km?from=YYYY-MM-DD&to=YYYY-MM-DD
 payrollTrackingRouter.get("/roster/km", getRosterKmController);
+// The same, kept per day for the KM Report:
+// /roster/km/days?from=YYYY-MM-DD&to=YYYY-MM-DD
+payrollTrackingRouter.get("/roster/km/days", getRosterKmDaysController);
 // One engineer's trail + total km for a day: /path/engineer/:engineerId?date=YYYY-MM-DD
 payrollTrackingRouter.get("/path/engineer/:engineerId", getEngineerPathController);
 // One case's trail + total km: /path/case/:caseId

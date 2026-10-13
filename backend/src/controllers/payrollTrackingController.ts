@@ -4,6 +4,7 @@ import {
   listEngineersForDropdown,
 } from "../repositories/engineerRepository.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { badRequest } from "../utils/httpError.js";
 import {
   getCasePath,
   getEngineerDay,
@@ -14,6 +15,7 @@ import {
   isPayrollConfigured,
 } from "../services/payroll/payrollClient.js";
 import { withStaff } from "../services/payroll/rosterStaff.js";
+import { kmByDay } from "../services/payroll/rosterKmDays.js";
 import {
   KM_RANGE_CONCURRENCY,
   MAX_KM_RANGE_DAYS,
@@ -164,6 +166,44 @@ export const getRosterKmController: RequestHandler = asyncHandler(async (request
 
   const perDay = await mapLimited(days, KM_RANGE_CONCURRENCY, (day) => getRosterFor(refs, day));
   response.json({ data: { configured: true, engineers: sumRosterKm(perDay) } });
+});
+
+/**
+ * Kilometres per engineer PER DAY over a period, for the KM Report:
+ * /roster/km/days?from=YYYY-MM-DD&to=YYYY-MM-DD
+ *
+ * The same day-by-day questions /roster/km asks, answered without adding the
+ * days together. Its own endpoint rather than a change to /roster/km, which
+ * Engineer Productivity reads exactly as it is.
+ */
+export const getRosterKmDaysController: RequestHandler = asyncHandler(async (request, response) => {
+  if (!isPayrollConfigured()) {
+    response.json({ data: { configured: false, days: [], engineers: [] } });
+    return;
+  }
+  const from = typeof request.query.from === "string" ? request.query.from : "";
+  const to = typeof request.query.to === "string" ? request.query.to : "";
+  const days = daysInKmRange(from, to, todayIstIso());
+  if (!days) {
+    throw badRequest(
+      `from and to must be YYYY-MM-DD, in order, at most ${MAX_KM_RANGE_DAYS} days apart`,
+    );
+  }
+
+  const { engineers, refs } = await registerRefs();
+  if (refs.length === 0 || days.length === 0) {
+    response.json({ data: { configured: true, days, engineers: [] } });
+    return;
+  }
+
+  const perDay = await mapLimited(days, KM_RANGE_CONCURRENCY, (day) => getRosterFor(refs, day));
+  // The register's region labels a row Payroll has no branch for, as the board does.
+  const regionByName = new Map(
+    engineers.map((engineer) => [engineer.engineerName, engineer.regionName ?? null]),
+  );
+  response.json({
+    data: { configured: true, days, engineers: kmByDay(days, perDay, regionByName) },
+  });
 });
 
 /** Everything one engineer did on one day — the "what did they actually do" view. */
