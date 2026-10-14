@@ -459,3 +459,95 @@ export async function getEngineerPath(engineerId: number, date?: string): Promis
 export async function getCasePath(caseId: number): Promise<TrackPath> {
   return authed<TrackPath>(`/api/tracking/path/?case=${caseId}`);
 }
+
+// ---- Route km (Payroll -> OpenCall) -------------------------------------
+
+/**
+ * Road km for the KM Report's ROUTE KM table: the distance by road through the
+ * points an engineer marked on a day, in time order -- their Login, each
+ * Check-in, their Logout. Check-outs are not used. Payroll measures it with Ola
+ * Directions.
+ *
+ * A day is "ready" with its km (0 is a real answer), "no_points" when it has
+ * fewer than two positions to route between, "failed" when Ola could not route
+ * it, and "pending" until Payroll has measured it.
+ */
+export type RouteKmStatus = "ready" | "no_points" | "failed" | "pending";
+
+export interface RouteKmCell {
+  // Null unless the day is "ready".
+  km: number | null;
+  // How many positions were used (Login, Check-ins, Logout).
+  points: number;
+  status: RouteKmStatus;
+  // A Login or Logout in it was placed at the engineer's office for want of a
+  // fix. Optional: passed through as Payroll sends it.
+  office?: boolean;
+  // Settled for good: a failed day that is will not be measured again.
+  final?: boolean;
+}
+
+export interface RouteKmRange {
+  // False when Payroll has no Ola key; nothing is measured then.
+  configured: boolean;
+  // The period's days, oldest first, stopping at today.
+  days: string[];
+  engineers: Array<{ engineer_id: number; days: Record<string, RouteKmCell> }>;
+  // Engineer-days not measured yet. Each call measures only a bounded number,
+  // so the page asks again until this reaches 0.
+  pending: number;
+  // How many engineer-days this call measured.
+  measured_now: number;
+  // Today's measured days still to be read again; polled until 0.
+  rechecking?: number;
+}
+
+export interface RouteKmPoint {
+  kind: "login" | "checkin" | "logout";
+  at: string;
+  latitude: number;
+  longitude: number;
+  // The case a check-in was for, when there is one.
+  case_number: string | null;
+  // A Login or Logout the phone gave no position for, placed at the engineer's
+  // office. Optional: passed through as Payroll sends it.
+  office?: boolean;
+}
+
+export interface RouteKmDay {
+  configured: boolean;
+  engineer_id: number;
+  date: string;
+  status: RouteKmStatus;
+  km: number | null;
+  // In time order, which is the order the route goes through them.
+  points: RouteKmPoint[];
+  // Ola's road route as [lat, lon]; empty unless the day is "ready".
+  path: Array<[number, number]>;
+  // Why it failed, when it did; otherwise "".
+  error: string;
+  // Settled for good: a failed day that is will not be measured again.
+  final?: boolean;
+}
+
+/**
+ * Route km per engineer per day over a period, for engineers named by their
+ * Payroll employee id. Payroll measures a bounded number of days per call and
+ * answers with what it has, so the caller polls until `pending` is 0.
+ */
+export async function getRouteKm(
+  engineerIds: number[],
+  from: string,
+  to: string,
+): Promise<RouteKmRange> {
+  return authed<RouteKmRange>("/api/tracking/route_km/", {
+    method: "POST",
+    body: JSON.stringify({ engineers: engineerIds, from, to }),
+  });
+}
+
+/** One engineer-day of it, with its points and Ola's route, for the map beside the table. */
+export async function getRouteKmDay(engineerId: number, date: string): Promise<RouteKmDay> {
+  const q = new URLSearchParams({ engineer: String(engineerId), date });
+  return authed<RouteKmDay>(`/api/tracking/route_km_day/?${q.toString()}`);
+}

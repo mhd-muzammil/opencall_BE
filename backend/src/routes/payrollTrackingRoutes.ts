@@ -7,6 +7,8 @@ import {
   getRosterController,
   getRosterKmController,
   getRosterKmDaysController,
+  getRouteKmController,
+  getRouteKmDayController,
 } from "../controllers/payrollTrackingController.js";
 import { requireAuthenticatedUser } from "../middlewares/authMiddleware.js";
 
@@ -32,3 +34,8 @@ payrollTrackingRouter.get("/path/case/:caseId", getCasePathController);
 // One engineer's whole day — route, km, duty time, stops, timeline:
 // /day/engineer/:engineerId?date=YYYY-MM-DD
 payrollTrackingRouter.get("/day/engineer/:engineerId", getEngineerDayController);
+// Road km through each day's Login, Check-ins and Logout, per engineer, for the KM Report (polled until pending is 0):
+// POST /route-km {from, to, engineer_ids}
+payrollTrackingRouter.post("/route-km", getRouteKmController);
+// One engineer-day of it, with its points and route, for the map: /route-km/day/engineer/:engineerId?date=YYYY-MM-DD
+payrollTrackingRouter.get("/route-km/day/engineer/:engineerId", getRouteKmDayController);

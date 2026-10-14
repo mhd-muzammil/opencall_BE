@@ -12,6 +12,8 @@ import {
   getLiveEngineers,
   getRosterAll,
   getRosterFor,
+  getRouteKm,
+  getRouteKmDay,
   isPayrollConfigured,
 } from "../services/payroll/payrollClient.js";
 import { withStaff } from "../services/payroll/rosterStaff.js";
@@ -24,6 +26,7 @@ import {
   sumRosterKm,
   todayIstIso,
 } from "../services/payroll/rosterKmRange.js";
+import { parseRouteKmDayRequest, parseRouteKmRequest } from "../services/payroll/routeKmRequest.js";
 
 /**
  * Read-only proxy for the Payroll live-tracking data. Keeps the Payroll service
@@ -220,5 +223,60 @@ export const getCasePathController: RequestHandler = asyncHandler(
     const caseId = Number(request.params.caseId);
     const path = await getCasePath(caseId);
     response.json({ data: path });
+  },
+);
+
+/**
+ * Road km per engineer per day over a period, for the KM Report's ROUTE KM
+ * table: POST /route-km {from, to, engineer_ids}
+ *
+ * The distance by road through the points each engineer marked on a day -- the
+ * Login, each Check-in, the Logout -- as Payroll measures it with Ola. Payroll
+ * measures a bounded number of days per call and says how many are still
+ * pending, so the page asks again until none are.
+ */
+export const getRouteKmController: RequestHandler = asyncHandler(async (request, response) => {
+  if (!isPayrollConfigured()) {
+    response.json({
+      data: { configured: false, days: [], engineers: [], pending: 0, measured_now: 0 },
+    });
+    return;
+  }
+  const parsed = parseRouteKmRequest(request.body, todayIstIso());
+  if (!parsed.ok) {
+    throw badRequest(parsed.message);
+  }
+  response.json({ data: await getRouteKm(parsed.engineerIds, parsed.from, parsed.to) });
+});
+
+/**
+ * One engineer-day of the ROUTE KM table, with its points and road route, for
+ * the map beside it: /route-km/day/engineer/:engineerId?date=YYYY-MM-DD
+ *
+ * The request is checked before the configuration, unlike its neighbours, so
+ * that even the not-configured answer names the engineer and day asked for.
+ */
+export const getRouteKmDayController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const parsed = parseRouteKmDayRequest(request.params.engineerId, request.query.date);
+    if (!parsed.ok) {
+      throw badRequest(parsed.message);
+    }
+    if (!isPayrollConfigured()) {
+      response.json({
+        data: {
+          configured: false,
+          engineer_id: parsed.engineerId,
+          date: parsed.date,
+          status: "pending",
+          km: null,
+          points: [],
+          path: [],
+          error: "",
+        },
+      });
+      return;
+    }
+    response.json({ data: await getRouteKmDay(parsed.engineerId, parsed.date) });
   },
 );
