@@ -7,6 +7,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { badRequest } from "../utils/httpError.js";
 import {
   getCasePath,
+  getCasesByDay,
   getEngineerDay,
   getEngineerPath,
   getFieldezKm,
@@ -340,3 +341,24 @@ export const getFieldezKmDayController: RequestHandler = asyncHandler(
     response.json({ data: await getFieldezKmDay(parsed.engineerId, parsed.date) });
   },
 );
+
+/**
+ * Cases per engineer per day over a period, for the line under each day's km in
+ * the KM Report's three tables: POST /cases-by-day {from, to, engineer_ids}
+ *
+ * The calls the Live Engineer Tracking day panel lists for each engineer-day,
+ * and how many of them were closed that day. Asked and checked exactly as
+ * /fieldez-km is; Payroll answers for the whole period at once, so the page
+ * asks once rather than polling.
+ */
+export const getCasesByDayController: RequestHandler = asyncHandler(async (request, response) => {
+  if (!isPayrollConfigured()) {
+    response.json({ data: { configured: false, days: [], engineers: [] } });
+    return;
+  }
+  const parsed = parseRouteKmRequest(request.body, todayIstIso());
+  if (!parsed.ok) {
+    throw badRequest(parsed.message);
+  }
+  response.json({ data: await getCasesByDay(parsed.from, parsed.to, parsed.engineerIds) });
+});

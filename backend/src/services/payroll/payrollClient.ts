@@ -614,3 +614,49 @@ export async function getFieldezKmDay(engineerId: number, date: string): Promise
   const q = new URLSearchParams({ engineer: String(engineerId), date });
   return authed<FieldezKmDay>(`/api/fieldez_km/day/?${q.toString()}`);
 }
+
+// ---- Cases by day (Payroll -> OpenCall) ---------------------------------
+
+/**
+ * The case line under each day's km in all three of the KM Report's tables:
+ * for an engineer-day, how many calls the Live Engineer Tracking day panel
+ * lists under "CASES" -- planned for that day, touched on it or visited on it
+ * -- and how many of them were closed that day, the panel's "Closed" rows. A
+ * call "Closed earlier", on another day, is not closed here. Payroll counts
+ * them by the day panel's own rules.
+ */
+export interface CasesByDayCell {
+  cases: number;
+  closed: number;
+}
+
+export interface CasesByDayRow {
+  engineer_id: number;
+  // Every day of the period, zeros included.
+  days: Record<string, CasesByDayCell>;
+}
+
+export interface CasesByDayRange {
+  // False only when OpenCall has no Payroll to ask: counting needs no Ola key.
+  configured: boolean;
+  // The period's days, oldest first, stopping at today.
+  days: string[];
+  // Each engineer asked about that this Payroll login may see, in the order asked.
+  engineers: CasesByDayRow[];
+}
+
+/**
+ * Cases per engineer per day over a period, asked the way getFieldezKm asks
+ * for FIELDEZ km. Payroll counts the whole period in one answer, so unlike the
+ * km there is nothing to poll for.
+ */
+export async function getCasesByDay(
+  from: string,
+  to: string,
+  engineerIds: number[],
+): Promise<CasesByDayRange> {
+  return authed<CasesByDayRange>("/api/tracking/cases_by_day/", {
+    method: "POST",
+    body: JSON.stringify({ engineers: engineerIds, from, to }),
+  });
+}
