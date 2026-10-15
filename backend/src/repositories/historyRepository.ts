@@ -201,7 +201,34 @@ export async function listHistorySessions(
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  // The shared listing used to return EVERY completed session ever made. The
+  // FieldEZ worker writes one every ~15 minutes, so by 2026-10 that was ~6,700
+  // rows, sent to every open tab at login and again on the 15s new-upload poll —
+  // a multi-second blank screen before a login could even start generating its
+  // report, and constant load on the API. Callers only ever use, per day, the
+  // newest completed session (Final report, productivity/RTPL day lookups, the
+  // Specific Date picker); only the recent days need every session (the
+  // new-upload auto-switch and the History drawer's same-day list). So: keep
+  // everything from the last 48 hours, and for older days only the newest
+  // session per (report date, region). Drafts are always kept.
+  const trim = filters.includeCompletedFromOthers
+    ? `
+    WHERE listed.status <> 'COMPLETED'
+       OR listed.created_at >= NOW() - INTERVAL '48 hours'
+       OR listed.day_rank = 1`
+    : "";
   const sql = `
+    SELECT listed.* FROM (
+    SELECT
+      ranked.*,
+      ROW_NUMBER() OVER (
+        PARTITION BY
+          ranked.status,
+          COALESCE(ranked.report_date, ranked.id::TEXT),
+          ranked.region_id
+        ORDER BY ranked.created_at DESC
+      ) AS day_rank
+    FROM (
     SELECT
       sessions.*,
       COALESCE(
@@ -226,10 +253,16 @@ export async function listHistorySessions(
       'Report Session\s+([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})'
     ) AS title_date(parts) ON TRUE
     ${where}
-    ORDER BY sessions.created_at DESC;
+    ) AS ranked
+    ) AS listed
+    ${trim}
+    ORDER BY listed.created_at DESC;
   `;
-  const result = await query<ReportHistorySessionRow>(sql, params);
-  return result.rows;
+  const result = await query<ReportHistorySessionRow & { day_rank?: unknown }>(
+    sql,
+    params,
+  );
+  return result.rows.map(({ day_rank: _dayRank, ...row }) => row);
 }
 
 export async function getHistorySessionsByUser(
