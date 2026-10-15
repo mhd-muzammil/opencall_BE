@@ -551,3 +551,66 @@ export async function getRouteKmDay(engineerId: number, date: string): Promise<R
   const q = new URLSearchParams({ engineer: String(engineerId), date });
   return authed<RouteKmDay>(`/api/tracking/route_km_day/?${q.toString()}`);
 }
+
+// ---- FieldEZ km (Payroll -> OpenCall) -----------------------------------
+
+/**
+ * Road km for the KM Report's FIELDEZ table, under ROUTE KM: the same route
+ * through a day's Login, each Check-in and Logout, in time order, with one
+ * difference -- a check-in stands where FieldEZ recorded its work order's
+ * "Problem Resolution", not where the app checked in. A check-in FieldEZ has no
+ * such place for is left out, never put back at the app's position, and is
+ * counted as missing. Payroll measures it with Ola, as it does ROUTE KM.
+ *
+ * The statuses are ROUTE KM's plus "waiting": the FieldEZ tool has not read the
+ * day's work orders yet, so the day is not measured until it has.
+ */
+export type FieldezKmStatus = RouteKmStatus | "waiting";
+
+export interface FieldezKmCell extends Omit<RouteKmCell, "status"> {
+  status: FieldezKmStatus;
+  // How many of the day's check-ins were left out for want of a FieldEZ place.
+  missing: number;
+}
+
+export interface FieldezKmRange extends Omit<RouteKmRange, "engineers"> {
+  engineers: Array<{ engineer_id: number; days: Record<string, FieldezKmCell> }>;
+  // Engineer-days still waiting for the FieldEZ tool to read their work
+  // orders; polled, like pending, until 0.
+  waiting: number;
+}
+
+export interface FieldezKmDay extends Omit<RouteKmDay, "status"> {
+  status: FieldezKmStatus;
+  // The check-ins left out of the route, and why.
+  missing: Array<{
+    case_number: string | null;
+    // The check-in's work order; null when its case has none.
+    wo: string | null;
+    reason: "no_wo" | "fieldez_failed" | "not_in_fieldez" | "no_problem_resolution" | "not_read";
+  }>;
+  // How many of the day's check-ins the FieldEZ tool has not read yet.
+  waiting: number;
+}
+
+/**
+ * FIELDEZ km per engineer per day over a period, asked the way getRouteKm asks
+ * for ROUTE KM. Payroll measures a bounded number of days per call and answers
+ * with what it has, so the caller polls until `pending` and `waiting` are 0.
+ */
+export async function getFieldezKm(
+  from: string,
+  to: string,
+  engineerIds: number[],
+): Promise<FieldezKmRange> {
+  return authed<FieldezKmRange>("/api/fieldez_km/range/", {
+    method: "POST",
+    body: JSON.stringify({ engineers: engineerIds, from, to }),
+  });
+}
+
+/** One engineer-day of it, with its points, Ola's route and the check-ins left out, for the map. */
+export async function getFieldezKmDay(engineerId: number, date: string): Promise<FieldezKmDay> {
+  const q = new URLSearchParams({ engineer: String(engineerId), date });
+  return authed<FieldezKmDay>(`/api/fieldez_km/day/?${q.toString()}`);
+}

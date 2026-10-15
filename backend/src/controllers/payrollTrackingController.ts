@@ -9,6 +9,8 @@ import {
   getCasePath,
   getEngineerDay,
   getEngineerPath,
+  getFieldezKm,
+  getFieldezKmDay,
   getLiveEngineers,
   getRosterAll,
   getRosterFor,
@@ -278,5 +280,63 @@ export const getRouteKmDayController: RequestHandler = asyncHandler(
       return;
     }
     response.json({ data: await getRouteKmDay(parsed.engineerId, parsed.date) });
+  },
+);
+
+/**
+ * Road km per engineer per day over a period, for the KM Report's FIELDEZ
+ * table under ROUTE KM: POST /fieldez-km {from, to, engineer_ids}
+ *
+ * ROUTE KM's route with each check-in placed where FieldEZ recorded its work
+ * order's Problem Resolution. Asked and checked exactly as /route-km is; Payroll
+ * also says how many days are waiting for the FieldEZ tool, so the page asks
+ * again until none are pending or waiting.
+ */
+export const getFieldezKmController: RequestHandler = asyncHandler(async (request, response) => {
+  if (!isPayrollConfigured()) {
+    response.json({
+      data: { configured: false, days: [], engineers: [], pending: 0, measured_now: 0, waiting: 0 },
+    });
+    return;
+  }
+  const parsed = parseRouteKmRequest(request.body, todayIstIso());
+  if (!parsed.ok) {
+    throw badRequest(parsed.message);
+  }
+  response.json({ data: await getFieldezKm(parsed.from, parsed.to, parsed.engineerIds) });
+});
+
+/**
+ * One engineer-day of the FIELDEZ table, with its points, road route and the
+ * check-ins left out, for the map beside it:
+ * /fieldez-km/day/engineer/:engineerId?date=YYYY-MM-DD
+ *
+ * Checked before the configuration, as the ROUTE KM day is, so that even the
+ * not-configured answer names the engineer and day asked for.
+ */
+export const getFieldezKmDayController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const parsed = parseRouteKmDayRequest(request.params.engineerId, request.query.date);
+    if (!parsed.ok) {
+      throw badRequest(parsed.message);
+    }
+    if (!isPayrollConfigured()) {
+      response.json({
+        data: {
+          configured: false,
+          engineer_id: parsed.engineerId,
+          date: parsed.date,
+          status: "pending",
+          km: null,
+          points: [],
+          path: [],
+          error: "",
+          missing: [],
+          waiting: 0,
+        },
+      });
+      return;
+    }
+    response.json({ data: await getFieldezKmDay(parsed.engineerId, parsed.date) });
   },
 );

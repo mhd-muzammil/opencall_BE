@@ -3,6 +3,8 @@ import {
   getCasePathController,
   getEngineerDayController,
   getEngineerPathController,
+  getFieldezKmController,
+  getFieldezKmDayController,
   getLiveEngineersController,
   getRosterController,
   getRosterKmController,
@@ -39,3 +41,9 @@ payrollTrackingRouter.get("/day/engineer/:engineerId", getEngineerDayController)
 payrollTrackingRouter.post("/route-km", getRouteKmController);
 // One engineer-day of it, with its points and route, for the map: /route-km/day/engineer/:engineerId?date=YYYY-MM-DD
 payrollTrackingRouter.get("/route-km/day/engineer/:engineerId", getRouteKmDayController);
+// The same route with each Check-in at FieldEZ's Problem Resolution place, for the KM Report's FIELDEZ table
+// (polled until pending and waiting are 0): POST /fieldez-km {from, to, engineer_ids}
+payrollTrackingRouter.post("/fieldez-km", getFieldezKmController);
+// One engineer-day of it, with its points, route and left-out check-ins, for the map:
+// /fieldez-km/day/engineer/:engineerId?date=YYYY-MM-DD
+payrollTrackingRouter.get("/fieldez-km/day/engineer/:engineerId", getFieldezKmDayController);
