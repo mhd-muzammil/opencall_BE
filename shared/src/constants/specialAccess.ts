@@ -29,6 +29,7 @@ export const SPECIAL_ACCESS_SECTIONS: readonly SpecialAccessSectionOption[] = [
   { key: "record-format", label: "Record Format", group: "Data & Operations" },
   { key: "parts-catalog", label: "Parts Catalog", group: "Data & Operations" },
   { key: "quotations", label: "Quotations", group: "Data & Operations" },
+  { key: "delivery-challans", label: "Delivery Challan", group: "Data & Operations" },
   { key: "productivity", label: "Engineer Productivity", group: "Dashboards" },
 ];
 

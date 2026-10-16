@@ -119,6 +119,12 @@ const FEATURE_TABLES = [
   "region_offices",
   "office_pincode_distances",
   "office_address_distances",
+  // migrate:delivery-challans — the Delivery Challan endpoints answer 503 ("not set up
+  // yet") without these. A feature table like the rest: reported, never blocking.
+  "challan_branches",
+  "challan_sequences",
+  "delivery_challans",
+  "delivery_challan_items",
 ] as const;
 
 const REQUIRED_COLUMNS: readonly RequiredColumn[] = [

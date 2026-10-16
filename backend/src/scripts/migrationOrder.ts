@@ -77,6 +77,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applySourceBatchIndexesMigration", // 067 the batch/session lookup indexes report generation has needed since 001
   "applyRtplStatusBucketMigration", // 068 the BOD/EOD row each RTPL status counts under
   "applyBodEodCustomRowsMigration", // 069 BOD/EOD rows admins add for new statuses
+  "applyDeliveryChallansMigration", // 070 delivery challans: branch letterheads, per-branch per-FY numbers
 ];
 
 /**

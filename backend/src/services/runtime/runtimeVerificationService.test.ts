@@ -53,6 +53,10 @@ const FEATURE_TABLES = [
   "region_offices",
   "office_pincode_distances",
   "office_address_distances",
+  "challan_branches",
+  "challan_sequences",
+  "delivery_challans",
+  "delivery_challan_items",
 ];
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
@@ -185,6 +189,31 @@ describe("verifyRuntimeSchema", () => {
     expect(result.missingFeatureTables).toEqual(["access_roles", "special_access"]);
     expect(result.degraded).toBe(true);
     // Crucially: still ready → still 200 → healthcheck stays green.
+    expect(result.ok).toBe(true);
+    expect(result.missingTables).toEqual([]);
+  });
+
+  /**
+   * The Delivery Challan code ships before `npm run migrate:delivery-challans` is run by
+   * hand. Until then its four tables are missing, and the API must stay ready: the
+   * section answers its own 503, the rest of the app is untouched.
+   */
+  it("stays ready while the delivery-challan migration is unapplied", async () => {
+    const challanTables = [
+      "challan_branches",
+      "challan_sequences",
+      "delivery_challans",
+      "delivery_challan_items",
+    ];
+    const present = [...CORE_TABLES, ...FEATURE_TABLES].filter(
+      (table) => !challanTables.includes(table),
+    );
+    mocks.query.mockResolvedValue({ rows: schemaRows(present) });
+
+    const result = await verifyRuntimeSchema();
+
+    expect(result.missingFeatureTables).toEqual(challanTables);
+    expect(result.degraded).toBe(true);
     expect(result.ok).toBe(true);
     expect(result.missingTables).toEqual([]);
   });
