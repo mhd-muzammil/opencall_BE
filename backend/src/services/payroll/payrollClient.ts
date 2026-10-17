@@ -257,6 +257,94 @@ export async function pushEngineerScorecards(input: {
   });
 }
 
+// ---- Engineer scorecard days (OpenCall -> Payroll) ----------------------
+
+/**
+ * One engineer's numbers for one day, which Payroll keeps as that day's row in
+ * the history the engineer looks back on. The engineer is named exactly as the
+ * live scorecard names them (PayrollScorecardRow); the targets are carried on
+ * the row, so a later change of target does not rewrite a past day.
+ */
+export interface PayrollScorecardDay {
+  engineer_name: string;
+  engineer_email?: string;
+  engineer_phone?: string;
+  /** YYYY-MM-DD. */
+  day: string;
+  assigned: number;
+  attended: number;
+  closed: number;
+  daily_target: number;
+  monthly_target: number;
+}
+
+export interface PayrollScorecardDaysResult {
+  /** Rows Payroll created. */
+  stored: number;
+  /** Rows Payroll already had for that engineer and day, replaced. */
+  updated: number;
+  /** Engineer names Payroll has no employee for; those days were not kept. */
+  unmatched: string[];
+  /** Days Payroll refused, by their position in the array that was pushed. */
+  rejected: Array<{ index: number; reason: string }>;
+  /**
+   * Rows Payroll set to zero because their engineer was not in a day pushed as
+   * complete. Absent from an older Payroll.
+   */
+  zeroed?: number;
+}
+
+/**
+ * Days sent per request. Payroll takes up to 2000 in one; 500 keeps each
+ * request small however many days a caller pushes at once.
+ */
+export const SCORECARD_DAYS_CHUNK_SIZE = 500;
+
+/**
+ * Push past days' Assigned / Attended / Closed per engineer into the history
+ * Payroll keeps per engineer per day, replaced in place. It never touches the
+ * live card, and Payroll never lets it replace today's row from the live push.
+ *
+ * Sent SCORECARD_DAYS_CHUNK_SIZE at a time, one request after another, and the
+ * answers added together: a name unmatched in several requests is listed once,
+ * and a rejected day's index is its position in `days`, not in its request.
+ *
+ * `completeDay`: the date these rows are ALL of -- every engineer that day's
+ * productivity lists. Payroll then sets to zero that day's row for anybody not
+ * in it: an engineer whose calls went to somebody else later in the day kept
+ * the morning's count otherwise, and History read more than Productivity.
+ * Payroll judges each request on its own, so this is only said when the whole
+ * day goes in ONE request; a day split across requests is never called
+ * complete, and nothing is zeroed.
+ */
+export async function pushScorecardDays(
+  days: PayrollScorecardDay[],
+  options: { completeDay?: string } = {},
+): Promise<PayrollScorecardDaysResult> {
+  const total: PayrollScorecardDaysResult = { stored: 0, updated: 0, unmatched: [], rejected: [], zeroed: 0 };
+  const wholeDayInOneRequest = days.length <= SCORECARD_DAYS_CHUNK_SIZE;
+  for (let start = 0; start < days.length; start += SCORECARD_DAYS_CHUNK_SIZE) {
+    const body: { days: PayrollScorecardDay[]; complete_days?: string[] } = {
+      days: days.slice(start, start + SCORECARD_DAYS_CHUNK_SIZE),
+    };
+    if (options.completeDay && wholeDayInOneRequest) body.complete_days = [options.completeDay];
+    const result = await authed<PayrollScorecardDaysResult>("/api/cases/scorecard_days/", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    total.stored += result.stored;
+    total.updated += result.updated;
+    total.zeroed = (total.zeroed ?? 0) + (result.zeroed ?? 0);
+    for (const name of result.unmatched ?? []) {
+      if (!total.unmatched.includes(name)) total.unmatched.push(name);
+    }
+    for (const rejected of result.rejected ?? []) {
+      total.rejected.push({ index: start + rejected.index, reason: rejected.reason });
+    }
+  }
+  return total;
+}
+
 // ---- Live tracking (Payroll -> OpenCall) --------------------------------
 
 export interface LiveEngineer {

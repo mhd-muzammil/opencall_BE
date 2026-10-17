@@ -29,6 +29,9 @@ import { HttpError } from "../../utils/httpError.js";
 import {
   isPayrollConfigured,
   pushEngineerScorecards,
+  pushScorecardDays,
+  type PayrollScorecardDay,
+  type PayrollScorecardDaysResult,
   type PayrollScorecardResult,
   type PayrollScorecardRow,
 } from "./payrollClient.js";
@@ -125,18 +128,32 @@ async function monthToDateCloses(workingDate: string): Promise<Map<string, numbe
   return byEngineer;
 }
 
-export async function syncEngineerScorecardsForDate(
-  workingDate: string,
-): Promise<ScorecardSyncResult> {
-  if (!isPayrollConfigured()) {
-    return {
-      configured: false,
-      workingDate,
-      engineers: 0,
-      message: "Payroll integration is not configured (set PAYROLL_API_URL/USER/PASSWORD).",
-    };
-  }
+/** One engineer's day, as the live scorecard reads it. */
+export interface ScorecardDayEngineer {
+  /** The plan's name for them, trimmed: the key the regions are merged on. */
+  name: string;
+  assigned: number;
+  attended: number;
+  closed: number;
+  /** Payroll's match keys from the engineer register; null when it has none to give. */
+  email: string | null;
+  phone: string | null;
+}
 
+export type ScorecardDayBuild =
+  | { ok: true; engineers: ScorecardDayEngineer[] }
+  | { ok: false; message: string };
+
+/**
+ * One day's Assigned / Attended / Closed per engineer, and who each engineer is
+ * to Payroll: the one builder both the live scorecard and the history days are
+ * made with, so a day the engineer looks back on reads exactly what their live
+ * card read on it.
+ *
+ * Not ok when the DATE cannot be read -- no completed report for it (the 422)
+ * or not a date at all. Anything else is thrown.
+ */
+export async function buildScorecardDay(workingDate: string): Promise<ScorecardDayBuild> {
   let productivity;
   try {
     productivity = await getReportProductivity(workingDate);
@@ -145,9 +162,7 @@ export async function syncEngineerScorecardsForDate(
     // be reported as "no report", which reads as normal and hides an outage.
     if (error instanceof HttpError) {
       return {
-        configured: true,
-        workingDate,
-        engineers: 0,
+        ok: false,
         message: `Cannot read the productivity view for ${workingDate}: ${error.message}`,
       };
     }
@@ -170,7 +185,51 @@ export async function syncEngineerScorecardsForDate(
     }
   }
 
-  if (totals.size === 0) {
+  const engineers: ScorecardDayEngineer[] = [];
+  for (const [name, counts] of totals) {
+    // Email and phone are Payroll's reliable match keys; name alone is a last
+    // resort there. Same resolution the case sync uses, so an engineer whose
+    // cases arrive will have their numbers arrive too.
+    const contact = await findEngineerContactByName(name);
+    engineers.push({
+      name,
+      assigned: counts.assigned,
+      attended: counts.attended,
+      closed: counts.closed,
+      email: contact?.email ?? null,
+      phone: contact?.phone ?? null,
+    });
+  }
+  return { ok: true, engineers };
+}
+
+/** Payroll's match keys onto a row, as the live card has always added them: only those there are. */
+function addContact(
+  row: { engineer_email?: string; engineer_phone?: string },
+  engineer: ScorecardDayEngineer,
+): void {
+  if (engineer.email) row.engineer_email = engineer.email;
+  if (engineer.phone) row.engineer_phone = engineer.phone;
+}
+
+export async function syncEngineerScorecardsForDate(
+  workingDate: string,
+): Promise<ScorecardSyncResult> {
+  if (!isPayrollConfigured()) {
+    return {
+      configured: false,
+      workingDate,
+      engineers: 0,
+      message: "Payroll integration is not configured (set PAYROLL_API_URL/USER/PASSWORD).",
+    };
+  }
+
+  const day = await buildScorecardDay(workingDate);
+  if (!day.ok) {
+    return { configured: true, workingDate, engineers: 0, message: day.message };
+  }
+
+  if (day.engineers.length === 0) {
     return {
       configured: true,
       workingDate,
@@ -182,20 +241,15 @@ export async function syncEngineerScorecardsForDate(
   const monthClosed = await monthToDateCloses(workingDate);
 
   const rows: PayrollScorecardRow[] = [];
-  for (const [name, counts] of totals) {
-    // Email and phone are Payroll's reliable match keys; name alone is a last
-    // resort there. Same resolution the case sync uses, so an engineer whose
-    // cases arrive will have their numbers arrive too.
-    const contact = await findEngineerContactByName(name);
+  for (const engineer of day.engineers) {
     const row: PayrollScorecardRow = {
-      engineer_name: name,
-      assigned: counts.assigned,
-      attended: counts.attended,
-      closed: counts.closed,
-      month_closed: monthClosed.get(name) ?? 0,
+      engineer_name: engineer.name,
+      assigned: engineer.assigned,
+      attended: engineer.attended,
+      closed: engineer.closed,
+      month_closed: monthClosed.get(engineer.name) ?? 0,
     };
-    if (contact?.email) row.engineer_email = contact.email;
-    if (contact?.phone) row.engineer_phone = contact.phone;
+    addContact(row, engineer);
     rows.push(row);
   }
 
@@ -207,4 +261,75 @@ export async function syncEngineerScorecardsForDate(
   });
 
   return { configured: true, workingDate, engineers: rows.length, payroll };
+}
+
+export interface ScorecardDaysSyncResult {
+  configured: boolean;
+  workingDate: string;
+  /** Engineers on the day's plan: the rows built, sent or not. */
+  engineers: number;
+  /** What Payroll did with them; absent when nothing was sent. */
+  payroll?: PayrollScorecardDaysResult;
+  message?: string;
+}
+
+/**
+ * One past day into the engineer's history in Payroll: the live card's builder,
+ * so the numbers are the ones Engineer Productivity shows for that date, with
+ * the targets the live card sends. Pushed as history, which never touches the
+ * live card and which Payroll never lets replace today's live row.
+ *
+ * A date that cannot be read -- no completed report -- is skipped, never
+ * zeroed: whatever Payroll holds for it stays. `dryRun` builds the rows and
+ * sends nothing.
+ */
+export async function syncScorecardDaysForDate(
+  workingDate: string,
+  options: { dryRun?: boolean } = {},
+): Promise<ScorecardDaysSyncResult> {
+  const configured = isPayrollConfigured();
+  if (!configured && !options.dryRun) {
+    return {
+      configured,
+      workingDate,
+      engineers: 0,
+      message: "Payroll integration is not configured (set PAYROLL_API_URL/USER/PASSWORD).",
+    };
+  }
+
+  const day = await buildScorecardDay(workingDate);
+  if (!day.ok) {
+    return { configured, workingDate, engineers: 0, message: day.message };
+  }
+  if (day.engineers.length === 0) {
+    return {
+      configured,
+      workingDate,
+      engineers: 0,
+      message: `No engineers on the ${workingDate} plan.`,
+    };
+  }
+
+  const days: PayrollScorecardDay[] = [];
+  for (const engineer of day.engineers) {
+    const row: PayrollScorecardDay = {
+      engineer_name: engineer.name,
+      day: workingDate,
+      assigned: engineer.assigned,
+      attended: engineer.attended,
+      closed: engineer.closed,
+      daily_target: DAILY_CLOSE_TARGET,
+      monthly_target: MONTHLY_CLOSE_TARGET,
+    };
+    addContact(row, engineer);
+    days.push(row);
+  }
+
+  if (options.dryRun) {
+    return { configured, workingDate, engineers: days.length, message: "Dry run: nothing pushed." };
+  }
+
+  // The whole of the day's list, so Payroll may zero anybody no longer on it.
+  const payroll = await pushScorecardDays(days, { completeDay: workingDate });
+  return { configured, workingDate, engineers: days.length, payroll };
 }
