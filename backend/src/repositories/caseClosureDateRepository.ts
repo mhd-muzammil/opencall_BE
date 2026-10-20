@@ -442,35 +442,68 @@ async function tableExists(name: string): Promise<boolean> {
 }
 
 /**
- * SQL for the `loc` CTE mapping a normalised WO id / Case id key to its Work Location,
- * traced through the report rows and (when imported) the raw Flex export. Shared by the
- * region summary and the per-region record list so they can never diverge.
+ * The CTEs every closure-by-region query starts from: `scoped` (the closures the query is
+ * about), `lookup_keys` and `loc` (a normalised WO id / Case id key -> Work Location, traced
+ * through the report rows and, when imported, the raw Flex export). Shared by the region
+ * summary and the per-region record list so they can never diverge.
+ *
+ * `scopedWhere` filters case_closure_dates (aliased `closure`) BEFORE any location lookup —
+ * the date range above all. `loc` then covers only the keys a scoped closure can actually
+ * use: a row's own Work Location wins (CLOSURE_ASP_CODE_SQL), so a lookup is needed only when
+ * `NULLIF(work_location, '')` is NULL. Previously `loc` grouped every report row and every
+ * raw record on every request; restricting it does not change any result, because `loc` has
+ * one row per key and is only ever LEFT JOINed on these same keys.
+ *
+ * WO ids and Case ids share one key space here, exactly as before: each key's location is
+ * the MAX over every source row carrying that key, whichever kind of id it was stored as.
+ * The report-row ticket lookup uses UPPER(TRIM(ticket_id)), which the
+ * daily_call_plan_report_rows_ticket_upper_id_idx expression index (migration 059) covers.
  */
-async function buildLocationCteSql(): Promise<string> {
+async function closureRegionCtesSql(scopedWhere: string): Promise<string> {
   const hasRawRecords = await tableExists("flex_raw_records");
   const lookupSources = [
     `SELECT UPPER(TRIM(ticket_id)) AS key, UPPER(TRIM(work_location)) AS loc
        FROM daily_call_plan_report_rows
-      WHERE COALESCE(TRIM(ticket_id), '') <> ''
+      WHERE UPPER(TRIM(ticket_id)) IN (SELECT key FROM lookup_keys)
+        AND COALESCE(TRIM(ticket_id), '') <> ''
         AND COALESCE(TRIM(work_location), '') <> ''`,
     `SELECT UPPER(TRIM(case_id)) AS key, UPPER(TRIM(work_location)) AS loc
        FROM daily_call_plan_report_rows
-      WHERE COALESCE(TRIM(case_id), '') <> ''
+      WHERE UPPER(TRIM(case_id)) IN (SELECT key FROM lookup_keys)
+        AND COALESCE(TRIM(case_id), '') <> ''
         AND COALESCE(TRIM(work_location), '') <> ''`,
   ];
   if (hasRawRecords) {
     lookupSources.push(
       `SELECT ticket_no AS key, work_location AS loc
          FROM flex_raw_records
-        WHERE ticket_no <> '' AND work_location <> ''`,
+        WHERE ticket_no IN (SELECT key FROM lookup_keys)
+          AND ticket_no <> '' AND work_location <> ''`,
       `SELECT case_id AS key, work_location AS loc
          FROM flex_raw_records
-        WHERE case_id <> '' AND work_location <> ''`,
+        WHERE case_id IN (SELECT key FROM lookup_keys)
+          AND case_id <> '' AND work_location <> ''`,
     );
   }
-  return `SELECT key, MAX(loc) AS loc
-            FROM (${lookupSources.join("\n              UNION ALL\n")}) sources
-           GROUP BY key`;
+  return `scoped AS (
+       SELECT closure.*
+         FROM case_closure_dates closure
+        WHERE ${scopedWhere}
+     ),
+     lookup_keys AS (
+       SELECT closure.wo_id AS key
+         FROM scoped closure
+        WHERE NULLIF(closure.work_location, '') IS NULL AND closure.wo_id <> ''
+       UNION
+       SELECT closure.case_id AS key
+         FROM scoped closure
+        WHERE NULLIF(closure.work_location, '') IS NULL AND closure.case_id <> ''
+     ),
+     loc AS (
+       SELECT key, MAX(loc) AS loc
+         FROM (${lookupSources.join("\n              UNION ALL\n")}) sources
+        GROUP BY key
+     )`;
 }
 
 /**
@@ -502,7 +535,10 @@ export async function summarizeCaseClosureDatesByAsp(
 ): Promise<ClosureDateSummary> {
   const dateFrom = opts.dateFrom ?? "";
   const dateTo = opts.dateTo ?? "";
-  const locCte = await buildLocationCteSql();
+  const regionCtes = await closureRegionCtesSql(
+    `($1 = '' OR closure.closed_on >= $1::date)
+          AND ($2 = '' OR closure.closed_on <= $2::date)`,
+  );
 
   // MAX() picks one location per key; a work order does not move between ASPs in
   // practice, so any non-blank value for the key is the right one. An optional
@@ -519,9 +555,7 @@ export async function summarizeCaseClosureDatesByAsp(
     cancelled: string;
     other: string;
   }>(
-    `WITH loc AS (
-       ${locCte}
-     )
+    `WITH ${regionCtes}
      SELECT ${CLOSURE_ASP_CODE_SQL}                 AS asp_code,
             to_char(closure.closed_on, 'YYYY-MM')   AS month,
             COUNT(*)::TEXT                          AS count,
@@ -531,11 +565,9 @@ export async function summarizeCaseClosureDatesByAsp(
                                                     AS cancelled,
             COUNT(*) FILTER (WHERE ${CLOSURE_STATUS_GROUP_SQL} = 'other')::TEXT
                                                     AS other
-       FROM case_closure_dates closure
+       FROM scoped closure
        LEFT JOIN loc AS by_wo   ON by_wo.key   = closure.wo_id   AND closure.wo_id   <> ''
        LEFT JOIN loc AS by_case ON by_case.key = closure.case_id AND closure.case_id <> ''
-      WHERE ($1 = '' OR closure.closed_on >= $1::date)
-        AND ($2 = '' OR closure.closed_on <= $2::date)
       GROUP BY 1, 2`,
     [dateFrom, dateTo],
   );
@@ -794,7 +826,13 @@ export async function listCaseClosureDatesForAsp(filter: {
    */
   allowedAspCodes?: string[] | null;
 }): Promise<ClosureDateRecordList> {
-  const locCte = await buildLocationCteSql();
+  // Date range and status group depend only on the closure row, so they scope it before
+  // the location lookup; the region filters need the recovered ASP code and stay below.
+  const regionCtes = await closureRegionCtesSql(
+    `($2 = '' OR closure.closed_on >= $2::date)
+          AND ($3 = '' OR closure.closed_on <= $3::date)
+          AND ($5 = '' OR ${CLOSURE_STATUS_GROUP_SQL} = $5)`,
+  );
 
   const result = await query<{
     wo_id: string;
@@ -804,24 +842,19 @@ export async function listCaseClosureDatesForAsp(filter: {
     asp_code: string;
     total_count: string;
   }>(
-    `WITH loc AS (
-       ${locCte}
-     )
+    `WITH ${regionCtes}
      SELECT closure.wo_id,
             closure.case_id,
             to_char(closure.closure_date, 'DD-MM-YYYY')  AS closure_date,
             closure.closure_status,
             ${CLOSURE_ASP_CODE_SQL}                      AS asp_code,
             COUNT(*) OVER()::TEXT                         AS total_count
-       FROM case_closure_dates closure
+       FROM scoped closure
        LEFT JOIN loc AS by_wo   ON by_wo.key   = closure.wo_id   AND closure.wo_id   <> ''
        LEFT JOIN loc AS by_case ON by_case.key = closure.case_id AND closure.case_id <> ''
       WHERE ($1 = '' OR ${CLOSURE_ASP_CODE_SQL} = $1)
         AND ($4::text[] IS NULL
              OR ${CLOSURE_ASP_CODE_SQL} = ANY($4::text[]))
-        AND ($2 = '' OR closure.closed_on >= $2::date)
-        AND ($3 = '' OR closure.closed_on <= $3::date)
-        AND ($5 = '' OR ${CLOSURE_STATUS_GROUP_SQL} = $5)
       ORDER BY closure.closed_on DESC
       LIMIT ${CLOSURE_LIST_LIMIT}`,
     [
