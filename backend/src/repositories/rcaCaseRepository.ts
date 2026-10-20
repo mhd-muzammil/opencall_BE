@@ -170,22 +170,16 @@ export async function listOpenRcaCases(
       FROM latest_rows_raw
       ORDER BY ticket_key, report_date DESC, report_created_at DESC
     ),
-    -- Every appearance of every open case, read ONCE and shared by the
-    -- appearance diff and the last-actor lookup below (each used to scan the
-    -- report rows on its own). Fetched by = ANY over the open cases' keys on
-    -- UPPER(TRIM(ticket_id)), the expression the
-    -- daily_call_plan_report_rows_ticket_upper_id_idx index (migration 059)
-    -- covers. Deliberately NOT region- or search-filtered: a case's history is
-    -- every report it appeared in. The inner JOIN to reports loses nothing:
-    -- report_rows.report_id is NOT NULL REFERENCES daily_call_plan_reports.
-    case_history AS (
+    -- Per-ticket chronological appearances with the previous appearance's
+    -- operator-editable state attached via LAG. We compare these row values
+    -- to detect a real "action" (operator edit OR upload that actually
+    -- changed something) vs a no-op carry-forward.
+    appearance_diffs AS (
       SELECT
         UPPER(TRIM(r.ticket_id)) AS ticket_key,
-        r.id AS row_id,
         rpt.report_date,
         rpt.created_at AS report_created_at,
         r.updated_at,
-        r.updated_by,
         -- Current operator-editable state. Keep this list aligned with
         -- MANUAL_CARRY_FORWARD_FIELDS + OPTIONAL_MANUAL_CARRY_FORWARD_FIELDS.
         ROW(
@@ -199,27 +193,27 @@ export async function listOpenRcaCases(
           NULLIF(TRIM(COALESCE(r.rca,             '')), ''),
           NULLIF(TRIM(COALESCE(r.remarks,         '')), ''),
           NULLIF(TRIM(COALESCE(r.manual_notes,    '')), '')
-        ) AS cur_state
+        ) AS cur_state,
+        LAG(
+          ROW(
+            NULLIF(TRIM(COALESCE(r.rtpl_status, '')), ''),
+            NULLIF(TRIM(COALESCE(r.segment,     '')), ''),
+            NULLIF(TRIM(COALESCE(r.engineer,    '')), ''),
+            NULLIF(TRIM(COALESCE(r.location,    '')), ''),
+            r.case_created_time,
+            NULLIF(TRIM(COALESCE(r.hp_owner_status, '')), ''),
+            NULLIF(TRIM(COALESCE(r.customer_mail,   '')), ''),
+            NULLIF(TRIM(COALESCE(r.rca,             '')), ''),
+            NULLIF(TRIM(COALESCE(r.remarks,         '')), ''),
+            NULLIF(TRIM(COALESCE(r.manual_notes,    '')), '')
+          )
+        ) OVER (
+          PARTITION BY UPPER(TRIM(r.ticket_id))
+          ORDER BY rpt.report_date ASC, rpt.created_at ASC, r.id ASC
+        ) AS prev_state
       FROM daily_call_plan_report_rows r
       JOIN daily_call_plan_reports rpt ON rpt.id = r.report_id
-      WHERE UPPER(TRIM(r.ticket_id)) = ANY(ARRAY(SELECT ticket_key FROM latest_rows))
-    ),
-    -- Per-ticket chronological appearances with the previous appearance's
-    -- operator-editable state attached via LAG. We compare these row values
-    -- to detect a real "action" (operator edit OR upload that actually
-    -- changed something) vs a no-op carry-forward.
-    appearance_diffs AS (
-      SELECT
-        ticket_key,
-        report_date,
-        report_created_at,
-        updated_at,
-        cur_state,
-        LAG(cur_state) OVER (
-          PARTITION BY ticket_key
-          ORDER BY report_date ASC, report_created_at ASC, row_id ASC
-        ) AS prev_state
-      FROM case_history
+      WHERE UPPER(TRIM(r.ticket_id)) IN (SELECT ticket_key FROM latest_rows)
     ),
     history_agg AS (
       -- An "action" on a report day means: an operator manually edited the
@@ -254,18 +248,17 @@ export async function listOpenRcaCases(
       GROUP BY ticket_key
     ),
     last_actor AS (
-      -- row_id only breaks exact updated_at ties, which used to be resolved
-      -- arbitrarily; it never changes which edit is the latest.
-      SELECT DISTINCT ON (h.ticket_key)
-        h.ticket_key,
-        h.updated_by AS user_id,
+      SELECT DISTINCT ON (UPPER(TRIM(r.ticket_id)))
+        UPPER(TRIM(r.ticket_id)) AS ticket_key,
+        r.updated_by AS user_id,
         u.username,
         u.email
-      FROM case_history h
-      LEFT JOIN users u ON u.id = h.updated_by
-      WHERE h.updated_at IS NOT NULL
-        AND h.updated_by IS NOT NULL
-      ORDER BY h.ticket_key, h.updated_at DESC, h.row_id DESC
+      FROM daily_call_plan_report_rows r
+      LEFT JOIN users u ON u.id = r.updated_by
+      WHERE r.updated_at IS NOT NULL
+        AND r.updated_by IS NOT NULL
+        AND UPPER(TRIM(r.ticket_id)) IN (SELECT ticket_key FROM latest_rows)
+      ORDER BY UPPER(TRIM(r.ticket_id)), r.updated_at DESC
     )
     SELECT
       lr.*,
