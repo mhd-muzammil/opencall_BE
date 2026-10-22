@@ -24,6 +24,7 @@ import { inboundEmailRouter } from "./inboundEmailRoutes.js";
 import { renewalRouter } from "./renewalRoutes.js";
 import { payrollTrackingRouter } from "./payrollTrackingRoutes.js";
 import { fieldezSlaRouter } from "./fieldezSlaRoutes.js";
+import { renderwaysTicketingRouter } from "./renderwaysTicketingRoutes.js";
 
 export const apiRouter = Router();
 
@@ -54,3 +55,5 @@ apiRouter.use("/payroll-tracking", payrollTrackingRouter);
 // What FieldEZ promised about each open call. Written by the FieldEZ worker — the only
 // process holding a FieldEZ session — and read by every screen that shows an SLA.
 apiRouter.use("/fieldez-sla", fieldezSlaRouter);
+// Ticketing System: Renderways (RTPL customer app) customers and tickets, read live. SUPER_ADMIN only.
+apiRouter.use("/ticketing", renderwaysTicketingRouter);
