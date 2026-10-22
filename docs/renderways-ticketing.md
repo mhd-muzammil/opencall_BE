@@ -40,27 +40,30 @@ All additive except two registration lines:
 
 ## Turning it on in production
 
-1. **In Renderways**, create a service account for OpenCall: Admin → Customers & staff →
-   add a staff member with role **Admin** (for example `opencall-bot@renderways.in`) and a
-   long random password. Use it only here.
-2. **On the OpenCall backend** (Dokploy / server env), set:
+OpenCall uses a **service key**, not a Renderways user account — no account is created
+in the Renderways admin.
+
+1. Make one long random key (letters, digits, `-` and `_`; at least 32 characters).
+2. **On the Renderways backend** (Dokploy env) set `SERVICE_API_KEY=<the key>` and
+   redeploy it. This turns on Renderways' read-only `/api/integrations` routes.
+3. **On the OpenCall backend** (Dokploy env) set:
    ```
    RENDERWAYS_API_URL=https://tsapi.systimus.in
-   RENDERWAYS_API_USER=opencall-bot@renderways.in     # email or mobile number
-   RENDERWAYS_API_PASSWORD=••••••
+   RENDERWAYS_API_KEY=<the same key>
    ```
    They are read from `process.env` (like the Payroll keys), so `config/env.ts` needs no
-   change. Restart the backend.
-3. Open the admin console as a super admin → **Ticketing System**.
+   change. Redeploy the backend.
+4. Open the admin console as a super admin → **Ticketing System**.
 
-Until the three variables are set, the section loads and says Renderways is not
-connected; nothing else in OpenCall depends on them.
+Until both variables are set, the section loads and says Renderways is not connected;
+nothing else in OpenCall depends on them.
 
 ## Notes
 
-- The service account signs in once and its token is reused for a day (Renderways
-  tokens last seven), so OpenCall stays far below Renderways' sign-in rate limit.
+- The key is sent as an `X-Service-Key` header to `/api/integrations/customers`,
+  `/customers/:id`, `/tickets` and `/tickets/:id` — GETs only. Renderways only ever
+  returns customers there (never staff), and the key opens no other route.
 - Renderways ids are validated before they go into a Renderways URL; only known filters
   are passed on.
-- Changing the service account's password in Renderways stops the section until the
-  OpenCall env is updated — the page then shows the sign-in error.
+- To change the key, set the new value on both backends and redeploy both; until they
+  match, the page shows "Renderways rejected the service key".

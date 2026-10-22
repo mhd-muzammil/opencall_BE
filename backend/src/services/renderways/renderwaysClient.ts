@@ -8,9 +8,11 @@
  * mirroring payrollClient. Nothing here writes to Renderways.
  *
  * Config (read from process.env, so config/env.ts needs no edit):
- *   RENDERWAYS_API_URL       e.g. https://tsapi.systimus.in  (or http://localhost:5000)
- *   RENDERWAYS_API_USER      a Renderways admin service account — email or mobile number
- *   RENDERWAYS_API_PASSWORD  its password
+ *   RENDERWAYS_API_URL  e.g. https://tsapi.systimus.in  (or http://localhost:5000)
+ *   RENDERWAYS_API_KEY  the service key — the same value as SERVICE_API_KEY on the
+ *                       Renderways backend. No Renderways user account is involved:
+ *                       the key opens Renderways' read-only /api/integrations routes
+ *                       (customers and tickets) and nothing else.
  *
  * When they are unset isRenderwaysConfigured() is false and the section says so.
  */
@@ -23,20 +25,17 @@ import {
 } from "./ticketingParams.js";
 
 const REQUEST_TIMEOUT_MS = 15_000;
-// Renderways issues 7-day tokens; log in again after a day, or at once on a 401.
-const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 function config() {
   return {
     base: (process.env.RENDERWAYS_API_URL ?? "").trim().replace(/\/+$/, "").replace(/\/api$/, ""),
-    user: (process.env.RENDERWAYS_API_USER ?? "").trim(),
-    password: process.env.RENDERWAYS_API_PASSWORD ?? "",
+    key: (process.env.RENDERWAYS_API_KEY ?? "").trim(),
   };
 }
 
 export function isRenderwaysConfigured(): boolean {
-  const { base, user, password } = config();
-  return Boolean(base && user && password);
+  const { base, key } = config();
+  return Boolean(base && key);
 }
 
 // ---- Types (only the fields the Ticketing System shows) -------------------
@@ -146,66 +145,37 @@ export interface RwTicket extends RwTicketSummary {
 
 // ---- HTTP -----------------------------------------------------------------
 
-let cachedToken: string | null = null;
-let tokenExpiresAt = 0;
-let loginInFlight: Promise<string> | null = null;
+/** GET one of Renderways' read-only integration routes (/api/integrations/...) with the service key. */
+async function get<T>(path: string): Promise<T> {
+  if (!isRenderwaysConfigured()) {
+    throw new HttpError(
+      503,
+      "The Renderways integration is not configured (set RENDERWAYS_API_URL and RENDERWAYS_API_KEY)",
+    );
+  }
+  const { base, key } = config();
 
-async function send(url: string, init: RequestInit): Promise<Response> {
+  let response: Response;
   try {
-    return await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    response = await fetch(`${base}/api/integrations${path}`, {
+      headers: { "X-Service-Key": key },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
   } catch {
     throw new HttpError(502, "The Renderways API could not be reached");
   }
-}
 
-async function login(): Promise<string> {
-  const { base, user, password } = config();
-  const response = await send(`${base}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    // `identifier` takes an email or a mobile number.
-    body: JSON.stringify({ identifier: user, password }),
-  });
-  if (!response.ok) {
+  if (response.status === 401) {
     throw new HttpError(
       502,
-      `Renderways refused the service account (${response.status}). Check RENDERWAYS_API_USER and RENDERWAYS_API_PASSWORD.`,
+      "Renderways rejected the service key (401). RENDERWAYS_API_KEY must be the same as SERVICE_API_KEY on the Renderways backend.",
     );
   }
-  const body = (await response.json()) as { token?: string; user?: { role?: string } };
-  if (!body.token) {
-    throw new HttpError(502, "Renderways sign-in returned no token");
-  }
-  if (body.user?.role !== "admin") {
-    throw new HttpError(502, "The Renderways service account must be a Renderways admin");
-  }
-  cachedToken = body.token;
-  tokenExpiresAt = Date.now() + TOKEN_TTL_MS;
-  return cachedToken;
-}
-
-async function token(): Promise<string> {
-  if (cachedToken && Date.now() < tokenExpiresAt) return cachedToken;
-  // Concurrent requests share one sign-in — Renderways rate-limits them.
-  loginInFlight ??= login().finally(() => {
-    loginInFlight = null;
-  });
-  return loginInFlight;
-}
-
-async function get<T>(path: string): Promise<T> {
-  if (!isRenderwaysConfigured()) {
-    throw new HttpError(503, "The Renderways integration is not configured (set RENDERWAYS_API_URL)");
-  }
-  const { base } = config();
-  const call = async (jwt: string) =>
-    send(`${base}/api${path}`, { headers: { Authorization: `Bearer ${jwt}` } });
-
-  let response = await call(await token());
-  if (response.status === 401) {
-    // The token expired or was revoked — sign in again once.
-    cachedToken = null;
-    response = await call(await token());
+  if (response.status === 503) {
+    throw new HttpError(
+      502,
+      "Renderways has service access turned off. Set SERVICE_API_KEY on the Renderways backend and redeploy it.",
+    );
   }
   if (response.status === 404) {
     throw notFound("Not found in Renderways");
@@ -351,8 +321,8 @@ function toTicket(doc: Doc, base: string): RwTicket {
 export async function listCustomers(
   query: CustomerListQuery,
 ): Promise<{ customers: RwCustomer[]; pagination: RwPagination }> {
+  // Renderways only ever lists customers on this route.
   const params = new URLSearchParams({
-    role: "customer",
     page: String(query.page),
     limit: String(query.limit),
     sort: "-createdAt",
@@ -360,7 +330,7 @@ export async function listCustomers(
   if (query.search) params.set("search", query.search);
   if (query.active !== undefined) params.set("isActive", String(query.active));
 
-  const body = await get<{ users: Doc[]; pagination: RwPagination }>(`/users?${params}`);
+  const body = await get<{ users: Doc[]; pagination: RwPagination }>(`/customers?${params}`);
   return {
     customers: body.users.filter((user) => user.role === "customer").map(toCustomer),
     pagination: body.pagination,
@@ -393,7 +363,7 @@ export async function getCustomer(id: string): Promise<{
   ticketPagination: RwPagination;
 }> {
   const body = await get<{ user: Doc; stats?: { totalTickets?: number; openTickets?: number } }>(
-    `/users/${id}`,
+    `/customers/${id}`,
   );
   // This section is about customers; staff accounts are not shown here.
   if (body.user.role !== "customer") {
