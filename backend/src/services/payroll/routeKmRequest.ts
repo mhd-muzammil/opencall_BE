@@ -68,6 +68,18 @@ export function parseRouteKmRequest(body: unknown, todayIso: string): RouteKmReq
   return { ok: true, engineerIds: [...engineerIds], from, to };
 }
 
+/**
+ * The query of the three GET .../stored endpoints: ?from=&to=&engineer_ids=1,2,3.
+ * The same checks as POST /route-km's body; the ids arrive as one comma-separated
+ * value, since a GET carries no body.
+ */
+export function parseStoredKmQuery(query: unknown, todayIso: string): RouteKmRequest {
+  const fields = typeof query === "object" && query !== null ? (query as Record<string, unknown>) : {};
+  const rawIds = fields.engineer_ids;
+  const ids = typeof rawIds === "string" && rawIds.trim() !== "" ? rawIds.split(",").map((id) => id.trim()) : rawIds;
+  return parseRouteKmRequest({ from: fields.from, to: fields.to, engineer_ids: ids }, todayIso);
+}
+
 export type RouteKmDayRequest =
   | { ok: true; engineerId: number; date: string }
   | { ok: false; message: string };

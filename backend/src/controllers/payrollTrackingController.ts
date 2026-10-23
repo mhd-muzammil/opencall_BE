@@ -12,11 +12,13 @@ import {
   getEngineerPath,
   getFieldezKm,
   getFieldezKmDay,
+  getFieldezKmStored,
   getLiveEngineers,
   getRosterAll,
   getRosterFor,
   getRouteKm,
   getRouteKmDay,
+  getRouteKmStored,
   isPayrollConfigured,
 } from "../services/payroll/payrollClient.js";
 import { withStaff } from "../services/payroll/rosterStaff.js";
@@ -29,7 +31,11 @@ import {
   sumRosterKm,
   todayIstIso,
 } from "../services/payroll/rosterKmRange.js";
-import { parseRouteKmDayRequest, parseRouteKmRequest } from "../services/payroll/routeKmRequest.js";
+import {
+  parseRouteKmDayRequest,
+  parseRouteKmRequest,
+  parseStoredKmQuery,
+} from "../services/payroll/routeKmRequest.js";
 
 /**
  * Read-only proxy for the Payroll live-tracking data. Keeps the Payroll service
@@ -357,6 +363,55 @@ export const getCasesByDayController: RequestHandler = asyncHandler(async (reque
     return;
   }
   const parsed = parseRouteKmRequest(request.body, todayIstIso());
+  if (!parsed.ok) {
+    throw badRequest(parsed.message);
+  }
+  response.json({ data: await getCasesByDay(parsed.from, parsed.to, parsed.engineerIds) });
+});
+
+/**
+ * The KM Report's three tables as Payroll has them stored, for readers that must
+ * not measure -- OpenCall's MCP above all, which may only GET:
+ *
+ *   GET /route-km/stored?from&to&engineer_ids=1,2,3     ROUTE KM's stored cells
+ *   GET /fieldez-km/stored?from&to&engineer_ids=...     FIELDEZ's stored cells
+ *   GET /cases-by-day/stored?from&to&engineer_ids=...   the case counts
+ *
+ * Checked as POST /route-km is. Nothing here makes Payroll ask Ola anything or
+ * write a row: the km come from Payroll's stored-km reads, and the counts from
+ * cases_by_day, which only reads. A day nobody has measured yet comes back
+ * "not_measured" with no km, never 0.
+ */
+export const getRouteKmStoredController: RequestHandler = asyncHandler(async (request, response) => {
+  if (!isPayrollConfigured()) {
+    response.json({ data: { configured: false, days: [], engineers: [] } });
+    return;
+  }
+  const parsed = parseStoredKmQuery(request.query, todayIstIso());
+  if (!parsed.ok) {
+    throw badRequest(parsed.message);
+  }
+  response.json({ data: await getRouteKmStored(parsed.engineerIds, parsed.from, parsed.to) });
+});
+
+export const getFieldezKmStoredController: RequestHandler = asyncHandler(async (request, response) => {
+  if (!isPayrollConfigured()) {
+    response.json({ data: { configured: false, days: [], engineers: [] } });
+    return;
+  }
+  const parsed = parseStoredKmQuery(request.query, todayIstIso());
+  if (!parsed.ok) {
+    throw badRequest(parsed.message);
+  }
+  response.json({ data: await getFieldezKmStored(parsed.engineerIds, parsed.from, parsed.to) });
+});
+
+export const getCasesByDayStoredController: RequestHandler = asyncHandler(async (request, response) => {
+  if (!isPayrollConfigured()) {
+    response.json({ data: { configured: false, days: [], engineers: [] } });
+    return;
+  }
+  const parsed = parseStoredKmQuery(request.query, todayIstIso());
   if (!parsed.ok) {
     throw badRequest(parsed.message);
   }

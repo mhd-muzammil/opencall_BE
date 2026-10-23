@@ -716,6 +716,8 @@ export async function getFieldezKmDay(engineerId: number, date: string): Promise
 export interface CasesByDayCell {
   cases: number;
   closed: number;
+  // The day's check-ins: the KM Report's "visits". Optional: passed through as Payroll sends it.
+  checkins?: number;
 }
 
 export interface CasesByDayRow {
@@ -747,4 +749,65 @@ export async function getCasesByDay(
     method: "POST",
     body: JSON.stringify({ engineers: engineerIds, from, to }),
   });
+}
+
+// ---- Stored km (Payroll -> OpenCall), for readers that must not measure ----
+
+/**
+ * How far a stored cell has got. ROUTE KM's statuses plus "not_measured" (no
+ * row: nobody has asked for that day yet); FIELDEZ adds "waiting".
+ */
+export type StoredKmStatus = "not_measured" | RouteKmStatus | "waiting";
+
+/**
+ * One stored cell, counts and figures only: Payroll sends no points, places,
+ * work orders or case numbers on these endpoints, so none can be passed on.
+ */
+export interface StoredKmCell {
+  km: number | null;
+  status: StoredKmStatus;
+  points: number;
+  office: boolean;
+  final: boolean;
+  measured_at: string | null;
+}
+
+export interface StoredFieldezKmCell extends StoredKmCell {
+  checkins: number | null;
+  placed: number | null;
+  waiting: number | null;
+  missing_by_reason: Record<string, number>;
+  // Older than the FieldEZ tool's lookback: a check-in not read by now never will be.
+  beyond_lookback: boolean;
+}
+
+export interface StoredKmRange<Cell> {
+  configured: boolean;
+  days: string[];
+  engineers: Array<{ engineer_id: number; days: Record<string, Cell> }>;
+}
+
+function storedQuery(engineerIds: number[], from: string, to: string): string {
+  return new URLSearchParams({ engineers: engineerIds.join(","), from, to }).toString();
+}
+
+/**
+ * ROUTE KM as Payroll has it stored: no Ola, no writes. A day nobody has asked
+ * for yet is "not_measured", with no km.
+ */
+export async function getRouteKmStored(
+  engineerIds: number[],
+  from: string,
+  to: string,
+): Promise<StoredKmRange<StoredKmCell>> {
+  return authed<StoredKmRange<StoredKmCell>>(`/api/tracking/route_km_stored/?${storedQuery(engineerIds, from, to)}`);
+}
+
+/** FIELDEZ as Payroll has it stored: no Ola, no writes, nothing asked of the FieldEZ tool. */
+export async function getFieldezKmStored(
+  engineerIds: number[],
+  from: string,
+  to: string,
+): Promise<StoredKmRange<StoredFieldezKmCell>> {
+  return authed<StoredKmRange<StoredFieldezKmCell>>(`/api/fieldez_km/stored/?${storedQuery(engineerIds, from, to)}`);
 }
