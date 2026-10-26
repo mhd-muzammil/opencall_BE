@@ -8,6 +8,7 @@ import { badRequest } from "../utils/httpError.js";
 import {
   getCasePath,
   getCasesByDay,
+  getDayReport,
   getEngineerDay,
   getEngineerPath,
   getFieldezKm,
@@ -21,6 +22,7 @@ import {
 } from "../services/payroll/payrollClient.js";
 import { withStaff } from "../services/payroll/rosterStaff.js";
 import { kmByDay } from "../services/payroll/rosterKmDays.js";
+import { MAX_DAY_REPORT_DAYS, mergeDayReports } from "../services/payroll/dayReport.js";
 import {
   KM_RANGE_CONCURRENCY,
   MAX_KM_RANGE_DAYS,
@@ -361,4 +363,33 @@ export const getCasesByDayController: RequestHandler = asyncHandler(async (reque
     throw badRequest(parsed.message);
   }
   response.json({ data: await getCasesByDay(parsed.from, parsed.to, parsed.engineerIds) });
+});
+
+/**
+ * The Day Report, Live Tracking's third tab: what the day panel says about each
+ * engineer-day -- Login, Logout, check-ins and outs, Assigned / Attended /
+ * Closed, waiting, GPS and Net off and on, km -- for a period:
+ * POST /day-report {from, to, engineer_ids}
+ *
+ * Checked as /cases-by-day is, and at most MAX_DAY_REPORT_DAYS days. Payroll is
+ * asked a day at a time, KM_RANGE_CONCURRENCY days at once, as the KM Report
+ * asks for km, so no one request does a month's work.
+ */
+export const getDayReportController: RequestHandler = asyncHandler(async (request, response) => {
+  if (!isPayrollConfigured()) {
+    response.json({ data: { configured: false, days: [], engineers: [] } });
+    return;
+  }
+  const parsed = parseRouteKmRequest(request.body, todayIstIso());
+  if (!parsed.ok) {
+    throw badRequest(parsed.message);
+  }
+  const days = daysInKmRange(parsed.from, parsed.to, todayIstIso()) ?? [];
+  if (days.length > MAX_DAY_REPORT_DAYS) {
+    throw badRequest(`from and to may cover at most ${MAX_DAY_REPORT_DAYS} days`);
+  }
+  const answers = await mapLimited(days, KM_RANGE_CONCURRENCY, (day) =>
+    getDayReport(day, day, parsed.engineerIds),
+  );
+  response.json({ data: mergeDayReports(days, answers, parsed.engineerIds) });
 });

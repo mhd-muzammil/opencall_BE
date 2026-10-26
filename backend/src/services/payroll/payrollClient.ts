@@ -748,3 +748,75 @@ export async function getCasesByDay(
     body: JSON.stringify({ engineers: engineerIds, from, to }),
   });
 }
+
+// ---- Day Report (Payroll -> OpenCall) -----------------------------------
+
+/**
+ * One moment of an engineer-day and where it happened: the customer's address
+ * for anything tied to a call, else one Payroll already had for the place, else
+ * only the coordinates. Payroll never looks an address up for this report.
+ */
+export interface DayReportMoment {
+  at: string;
+  address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+export interface DayReportCall extends DayReportMoment {
+  case_number: string | null;
+  case_ref: string | null;
+}
+
+/**
+ * What the Live Engineer Tracking day panel says about one engineer-day, as
+ * Payroll's day_report reads it with the panel's own rules.
+ */
+export interface DayReportCell {
+  logins: DayReportMoment[];
+  logouts: (DayReportMoment & { auto: boolean })[];
+  /** A duty begun that day and not ended yet. */
+  on_duty: boolean;
+  check_ins: DayReportCall[];
+  check_outs: DayReportCall[];
+  /** OpenCall's own numbers for the day, as Engineer Productivity shows them; null when none were filed. */
+  assigned: number | null;
+  attended: number | null;
+  closed: number | null;
+  waiting_minutes: number;
+  waits: (DayReportMoment & { minutes: number; case_number: string | null })[];
+  /** How long GPS was off while they were on duty. */
+  gps_off_minutes: number;
+  gps_offs: DayReportMoment[];
+  gps_ons: DayReportMoment[];
+  /** How long the network was off while they were on duty; blips under two minutes left out. */
+  net_off_minutes: number;
+  net_offs: DayReportMoment[];
+  net_ons: DayReportMoment[];
+  /** The day's km, as the KM Report shows it. */
+  km: number;
+}
+
+export interface DayReportRow {
+  engineer_id: number;
+  days: Record<string, DayReportCell>;
+}
+
+export interface DayReportRange {
+  // The period's days, oldest first, stopping at today.
+  days: string[];
+  // Each engineer asked about that this Payroll login may see, in the order asked.
+  engineers: DayReportRow[];
+}
+
+/** The Day Report for a period, as Payroll answers it. */
+export async function getDayReport(
+  from: string,
+  to: string,
+  engineerIds: number[],
+): Promise<DayReportRange> {
+  return authed<DayReportRange>("/api/tracking/day_report/", {
+    method: "POST",
+    body: JSON.stringify({ engineers: engineerIds, from, to }),
+  });
+}

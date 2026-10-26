@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   getCasePathController,
   getCasesByDayController,
+  getDayReportController,
   getEngineerDayController,
   getEngineerPathController,
   getFieldezKmController,
@@ -51,3 +52,6 @@ payrollTrackingRouter.get("/fieldez-km/day/engineer/:engineerId", getFieldezKmDa
 // Cases per engineer per day, and how many were closed that day, for the line under each km in the KM Report's
 // three tables (asked once, not polled): POST /cases-by-day {from, to, engineer_ids}
 payrollTrackingRouter.post("/cases-by-day", getCasesByDayController);
+// The Day Report tab: what the day panel says about each engineer-day, for a period of at most 31 days:
+// POST /day-report {from, to, engineer_ids}
+payrollTrackingRouter.post("/day-report", getDayReportController);
