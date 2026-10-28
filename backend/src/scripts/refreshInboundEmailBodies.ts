@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { ImapFlow } from "imapflow";
 import type pg from "pg";
@@ -24,7 +25,8 @@ import { legacySanitizeEmailHtml } from "./legacyEmailSanitizer.js";
  * - A row is rewritten only when the fetched message is the same message (its Message-ID
  *   matches the stored one) AND the old rule, run again on it, gives back exactly what is
  *   stored. That proves the row is what the old code made of this very message, so the old
- *   body can always be rebuilt the same way.
+ *   body can always be rebuilt the same way. Stored bodies are compared by md5, never held:
+ *   the first full run loaded every body at once and ran the API's 1 GB heap out.
  * - Each UPDATE carries the md5 of the body it replaces; a row that changed meanwhile is
  *   left alone.
  * - One run at a time (an advisory lock), one mailbox and one batch at a time, with a pause
@@ -57,13 +59,23 @@ export interface Classified {
   html?: string;
 }
 
-/** The decision for one stored row, given the message it came from. Pure, so it is tested. */
-export function classify(storedHtml: string, parsed: Pick<ParsedMessage, "html" | "text">): Classified {
+/** md5 of a body as Postgres computes md5(body_html): over its UTF-8 bytes. */
+export function bodyMd5(text: string): string {
+  return createHash("md5").update(text, "utf8").digest("hex");
+}
+
+const EMPTY_MD5 = bodyMd5("");
+
+/**
+ * The decision for one stored row, given the md5 of what is stored and the message it came
+ * from. Pure, so it is tested.
+ */
+export function classify(storedMd5: string, parsed: Pick<ParsedMessage, "html" | "text">): Classified {
   const html = toDisplayHtml(parsed);
-  if (storedHtml === html) return { kind: "current" };
+  if (storedMd5 === bodyMd5(html)) return { kind: "current" };
   const old = legacySanitizeEmailHtml(parsed.html);
-  if (storedHtml === old) return { kind: "refresh", html };
-  if (storedHtml === "" && old !== "") return { kind: "never-kept", html };
+  if (storedMd5 === bodyMd5(old)) return { kind: "refresh", html };
+  if (storedMd5 === EMPTY_MD5 && old !== "") return { kind: "never-kept", html };
   return { kind: "different" };
 }
 
@@ -106,7 +118,6 @@ interface Candidate {
   mailboxEmail: string;
   imapUid: number;
   messageId: string;
-  bodyHtml: string;
   bodyMd5: string;
 }
 
@@ -130,16 +141,16 @@ function emptyCounts(): Record<RefreshClass, number> {
 
 async function loadCandidates(db: pg.PoolClient, options: RefreshOptions): Promise<Candidate[]> {
   // By default only the two kinds of row the old code is known to have spoilt: an Outlook
-  // stylesheet left empty, and no display copy at all.
+  // stylesheet left empty, and no display copy at all. Only the md5 of each body comes back,
+  // never the body: thousands of long HP threads held at once ran the heap out.
   const result = await db.query<{
     id: string;
     mailbox_email: string;
     imap_uid: string;
     message_id: string;
-    body_html: string;
     body_md5: string;
   }>(
-    `SELECT id::TEXT, mailbox_email, imap_uid::TEXT, message_id, body_html, md5(body_html) AS body_md5
+    `SELECT id::TEXT, mailbox_email, imap_uid::TEXT, message_id, md5(body_html) AS body_md5
        FROM inbound_emails
       WHERE imap_uid IS NOT NULL
         AND ($1::TEXT IS NULL OR mailbox_email = $1)
@@ -153,7 +164,6 @@ async function loadCandidates(db: pg.PoolClient, options: RefreshOptions): Promi
     mailboxEmail: row.mailbox_email,
     imapUid: Number(row.imap_uid),
     messageId: row.message_id,
-    bodyHtml: row.body_html,
     bodyMd5: row.body_md5,
   }));
 }
@@ -319,7 +329,7 @@ export async function runRefresh(
                   continue;
                 }
 
-                const decision = classify(row.bodyHtml, parsed);
+                const decision = classify(row.bodyMd5, parsed);
                 counts[decision.kind] += 1;
                 const writable =
                   decision.kind === "refresh" ||
