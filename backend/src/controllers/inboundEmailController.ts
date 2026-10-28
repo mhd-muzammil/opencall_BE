@@ -164,8 +164,13 @@ export const getInboundEmailController: RequestHandler = asyncHandler(
     const byContentId = new Map(
       attachments.filter((a) => a.contentId).map((a) => [a.contentId, a.id]),
     );
+    // Some senders write the reference in a different case from the part's Content-ID.
+    const byLowerContentId = new Map(
+      attachments.filter((a) => a.contentId).map((a) => [a.contentId.toLowerCase(), a.id]),
+    );
     const bodyHtml = resolveInlineImages(message.bodyHtml, (contentId) => {
-      const attachmentId = byContentId.get(contentId);
+      const attachmentId =
+        byContentId.get(contentId) ?? byLowerContentId.get(contentId.toLowerCase());
       return attachmentId
         ? `/api/v1/customer-emails/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachmentId)}`
         : null;

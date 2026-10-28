@@ -10,7 +10,7 @@ import {
   markMailboxPolled,
   type RegionMailbox,
 } from "../../repositories/inboundEmailRepository.js";
-import { sanitizeEmailHtml } from "./htmlSanitizer.js";
+import { toDisplayHtml } from "./htmlSanitizer.js";
 import { parseMessageSource } from "./messageParser.js";
 import {
   extractWoNumbers,
@@ -316,7 +316,7 @@ export async function pollMailbox(mailbox: RegionMailbox): Promise<PollResult> {
       const plainSource = parsed.text.trim() ? parsed.text : parsed.html;
       const preview = toPreview(plainSource);
       const fullText = toFullText(plainSource);
-      const bodyHtml = sanitizeEmailHtml(parsed.html);
+      const bodyHtml = toDisplayHtml(parsed);
 
       // --- match ---
       let match = NO_MATCH;

@@ -130,6 +130,16 @@ export interface InboundEmailInput {
 }
 
 /**
+ * Postgres TEXT cannot hold NUL. One arrives from a mislabelled UTF-16 part, or from the
+ * matching copy decoding a literal "=00" (as in "?id=00123") as quoted-printable — and a
+ * single one failed the insert on every sweep, so the mail never reached the inbox at all.
+ * Every writer stores through here, so it is taken out here.
+ */
+function withoutNul<T>(value: T): T {
+  return (typeof value === "string" ? value.replace(/\u0000/g, "") : value) as T;
+}
+
+/**
  * Insert a message; a re-poll of the same message is a no-op.
  *
  * Returns the new row's id, or null when the message was already stored. The id is what
@@ -168,7 +178,7 @@ export async function insertInboundEmail(
       input.isAutoReply,
       input.escalationLevel,
       input.escalationReasons,
-    ],
+    ].map(withoutNul),
   );
   return result.rows[0]?.id ?? null;
 }
@@ -204,7 +214,7 @@ export async function insertInboundEmailAttachments(
         attachment.sizeBytes,
         attachment.isInline,
         attachment.content,
-      ],
+      ].map(withoutNul),
     );
     stored += 1;
   }

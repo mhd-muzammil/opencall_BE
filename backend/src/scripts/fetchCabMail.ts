@@ -7,7 +7,7 @@ import {
   listActiveMailboxes,
 } from "../repositories/inboundEmailRepository.js";
 import { parseMessageSource } from "../services/inboundEmail/messageParser.js";
-import { sanitizeEmailHtml } from "../services/inboundEmail/htmlSanitizer.js";
+import { toDisplayHtml } from "../services/inboundEmail/htmlSanitizer.js";
 import { mailboxPassword } from "../services/inboundEmail/mailboxCredentials.js";
 import { detectEscalation } from "../services/inboundEmail/escalationDetector.js";
 import { isCabMail } from "../services/inboundEmail/cabMailFilter.js";
@@ -145,7 +145,7 @@ async function storeMessage(input: {
     subject,
     bodyPreview: preview,
     bodyText: fullText,
-    bodyHtml: sanitizeEmailHtml(parsed.html),
+    bodyHtml: toDisplayHtml(parsed),
     hasAttachments: parsed.attachments.some((a) => !a.isInline),
     receivedAt: receivedAt.toISOString(),
     matchedTicketId,
