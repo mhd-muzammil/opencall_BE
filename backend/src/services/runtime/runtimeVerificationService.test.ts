@@ -42,6 +42,7 @@ const FEATURE_TABLES = [
   "parts_catalog",
   "quotations",
   "quotation_sequences",
+  "quotation_visit_sequences",
   "region_eod_state",
   "region_productivity_snapshot",
   "flex_raw_records",
@@ -102,6 +103,8 @@ const REQUIRED_COLUMNS: Record<string, string[]> = {
   flex_raw_records: ["source_month"],
   // Feature columns (migration 041).
   case_closure_dates: ["closed_on", "closure_status"],
+  // Feature column (migration 071).
+  quotations: ["id", "kind"],
 };
 
 /** Rows as information_schema would return them for the given tables. */
@@ -157,6 +160,25 @@ describe("verifyRuntimeSchema", () => {
     // so an unapplied migration never fails the container healthcheck.
     expect(result.ok).toBe(true);
     expect(result.missingColumns).toEqual([]);
+  });
+
+  /**
+   * 071 runs at the API's boot. If it ever does not, every Quotations endpoint 500s on the
+   * missing kind column and a Visit quotation has no number series; this is where it shows.
+   */
+  it("reports an unapplied 071 as degraded WITHOUT failing readiness", async () => {
+    const rows = schemaRows(
+      [...CORE_TABLES, ...FEATURE_TABLES].filter((table) => table !== "quotation_visit_sequences"),
+    ).filter((row) => !(row.table_name === "quotations" && row.column_name === "kind"));
+    mocks.query.mockResolvedValue({ rows });
+
+    const result = await verifyRuntimeSchema();
+
+    expect(result.missingFeatureTables).toEqual(["quotation_visit_sequences"]);
+    expect(result.missingFeatureColumns).toEqual([{ tableName: "quotations", columnName: "kind" }]);
+    expect(result.degraded).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(result.missingTables).toEqual([]);
   });
 
   it("does not double-report a column on a table that is itself missing", async () => {

@@ -16,6 +16,7 @@ import {
   updateQuotation,
   markQuotationSent,
   setQuotationPayment,
+  type QuotationKind,
 } from "../repositories/quotationRepository.js";
 import { autofillQuotation } from "../services/quotations/quotationAutofillService.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
@@ -51,6 +52,10 @@ export const autofillQuotationController: RequestHandler = asyncHandler(
 );
 
 const createSchema = z.object({
+  // Which sheet, and so which number series. No default HERE: this schema also parses an
+  // edit, and an edit keeps the kind the quotation was raised as, the way it keeps its
+  // number. The create path defaults it to PART, which is what every older client means.
+  kind: z.enum(["PART", "VISIT"]).optional(),
   quotationDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD"),
   caseId: z.string().trim().max(100).optional().default(""),
   orderNumber: z.string().trim().max(100).optional().default(""),
@@ -91,10 +96,14 @@ const createSchema = z.object({
  * The create and edit bodies are the same body — the edit form is the create form with the
  * values already in it — so they parse against the same schema and normalise the same way.
  * Returns the priced rows, or throws the same refusals the create path throws.
+ *
+ * `kind` comes back apart from `rest`, so only the create path can pass it on: an edit that
+ * spread `rest` into the update could otherwise turn a Visit quotation into a Part one.
  */
 function readQuotationBody(body: unknown): {
-  rest: Omit<z.infer<typeof createSchema>, "lineItems" | "serviceDescription" | "productDescription" | "modelNo" | "serialNo" | "baseAmount">;
+  rest: Omit<z.infer<typeof createSchema>, "kind" | "lineItems" | "serviceDescription" | "productDescription" | "modelNo" | "serialNo" | "baseAmount">;
   items: { serviceDescription: string; productDescription: string; modelNo: string; serialNo: string; baseAmount: number }[];
+  kind: QuotationKind;
 } {
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {
@@ -102,6 +111,7 @@ function readQuotationBody(body: unknown): {
   }
 
   const {
+    kind,
     lineItems,
     serviceDescription,
     productDescription,
@@ -132,16 +142,17 @@ function readQuotationBody(body: unknown): {
     throw badRequest("Enter an amount greater than 0 on at least one line item");
   }
 
-  return { rest, items };
+  return { rest, items, kind: kind ?? "PART" };
 }
 
 export const createQuotationController: RequestHandler = asyncHandler(
   async (request, response) => {
     const actor = requireQuotationAccess(request);
-    const { rest, items } = readQuotationBody(request.body);
+    const { rest, items, kind } = readQuotationBody(request.body);
 
     const quotation = await createQuotation({
       ...rest,
+      kind,
       lineItems: items,
       createdBy: actor,
     });
@@ -177,10 +188,16 @@ export const listQuotationsController: RequestHandler = asyncHandler(
   async (request, response) => {
     requireQuotationAccess(request);
     const search = String(request.query.search ?? "").trim();
+    // The Visit and Part tabs each ask for their own kind. No kind means both, as before.
+    const kind = String(request.query.kind ?? "").trim().toUpperCase();
+    if (kind && kind !== "PART" && kind !== "VISIT") {
+      throw badRequest("kind must be PART or VISIT");
+    }
     const page = Number(request.query.page ?? 1);
     const perPage = Number(request.query.per_page ?? 30);
     const result = await listQuotations({
       search,
+      ...(kind ? { kind: kind as QuotationKind } : {}),
       page: Number.isFinite(page) ? page : 1,
       perPage: Number.isFinite(perPage) ? perPage : 30,
     });

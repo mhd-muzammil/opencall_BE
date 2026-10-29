@@ -46,8 +46,13 @@ export interface AwaitingQuotation {
  * a quotation handed over on WhatsApp or read out over the phone. Those cannot be re-sent —
  * the customer already has one — but the customer can still write back saying they have
  * paid, and there is no reason the watcher should be blind to that. For them the clock
- * starts at the quotation's own date, which is the earliest moment mail about that work
- * order could be an answer to it.
+ * starts when the quotation was raised, and never before its own date: that is the earliest
+ * moment mail about that work order could be an answer to it.
+ *
+ * Raised, not just dated. A Visit quotation and the Part quotation after it share a work
+ * order and are often raised on the same day: the customer's "payment done" for the visit
+ * that morning predates the Part raised that afternoon, and counting from midnight would
+ * settle the Part with the Visit's payment.
  *
  * Only PENDING ones: a quotation already settled — paid, or declined — has nothing left for
  * a reply to change, and re-reading its mail every sweep would mean a later "thanks" could
@@ -66,7 +71,7 @@ export async function listQuotationsAwaitingReply(): Promise<AwaitingQuotation[]
     customer_email: string;
   }>(
     `SELECT id::TEXT, quotation_no, order_number,
-            COALESCE(sent_at, quotation_date::timestamptz)::TEXT AS watch_from,
+            COALESCE(sent_at, GREATEST(quotation_date::timestamptz, created_at))::TEXT AS watch_from,
             (base_amount * (1 + (sgst_percent + cgst_percent) / 100))::TEXT AS expected_total,
             sent_at::TEXT AS sent_at,
             COALESCE(sent_to, '') AS sent_to, reply_seen_at::TEXT AS reply_seen_at,
@@ -74,7 +79,7 @@ export async function listQuotationsAwaitingReply(): Promise<AwaitingQuotation[]
        FROM quotations
       WHERE payment_status = 'PENDING'
         AND TRIM(COALESCE(order_number, '')) <> ''
-      ORDER BY COALESCE(sent_at, quotation_date::timestamptz)`,
+      ORDER BY COALESCE(sent_at, GREATEST(quotation_date::timestamptz, created_at))`,
   );
   return result.rows.map((r) => ({
     id: r.id,
@@ -123,7 +128,7 @@ const HAS_IMAGE_SQL = `EXISTS (
  * The time bound is what keeps this honest: mail predating the quotation cannot be an
  * answer to it, and without the bound an old "payment done" about a previous job on the
  * same work order would settle a quotation raised this morning. For one sent from here the
- * bound is the send; for one that never was, it is the date the quotation was raised.
+ * bound is the send; for one that never was, it is the moment the quotation was raised.
  *
  * Auto-replies are excluded here rather than filtered later. An out-of-office is not the
  * customer speaking, and letting one count as a reply would silence the follow-up for a
@@ -265,6 +270,12 @@ export interface QuotationSendCheck {
   customerEmail: string;
   /** Nothing before this can be the mail that sent it. */
   raisedAt: string;
+  /**
+   * When the quotation was raised here, to the second. The Sent folder is searched by day;
+   * this is what tells this quotation's mail from one the same customer was sent earlier
+   * that day, such as the Visit quotation before this Part one.
+   */
+  createdAt: string;
 }
 
 /**
@@ -294,11 +305,13 @@ export async function listQuotationsNeedingSendCheck(input: {
     order_number: string;
     customer_email: string;
     raised_at: string;
+    created_at: string;
   }>(
     `SELECT id::TEXT, quotation_no,
             COALESCE(order_number, '') AS order_number,
             LOWER(TRIM(COALESCE(customer_email, ''))) AS customer_email,
-            quotation_date::timestamptz::TEXT AS raised_at
+            quotation_date::timestamptz::TEXT AS raised_at,
+            created_at::TEXT AS created_at
        FROM quotations
       WHERE sent_at IS NULL
         AND payment_status = 'PENDING'
@@ -318,6 +331,7 @@ export async function listQuotationsNeedingSendCheck(input: {
       orderNumber: r.order_number.trim(),
       customerEmail: r.customer_email.trim(),
       raisedAt: r.raised_at,
+      createdAt: r.created_at,
     }))
     .filter((q) => q.customerEmail);
 }

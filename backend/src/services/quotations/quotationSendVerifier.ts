@@ -64,9 +64,48 @@ const RECHECK_AFTER_HOURS = Number(process.env.QUOTATION_SEND_RECHECK_HOURS ?? 2
  */
 const CLOCK_SLACK_DAYS = 1;
 
+/** How far a mail's own Date may sit before the quotation was raised: clock drift, no more. */
+const CREATED_SLACK_MS = 5 * 60_000;
+
+/** A quotation number as OpenCall writes it, Part (QEN) or Visit (QEV). */
+const QUOTATION_NO = /RTPL\/\d{2}-\d{2}\/QE[NV]\/\d+/gi;
+
 export interface SendVerifyResult {
   checked: number;
   foundSent: number;
+}
+
+/** A mail in a Sent folder that went to the quotation's customer. */
+export interface SentMailCandidate {
+  uid: number;
+  date: Date | null;
+  to: string;
+  subject: string;
+}
+
+/**
+ * Which of the mails to this customer carried THIS quotation: the earliest one that was sent
+ * after the quotation was raised and does not name a different quotation.
+ *
+ * Both tests matter now that a customer commonly has two quotations a few hours or days apart
+ * — the Visit quotation, then the Part quotation on the same job. Matched by address alone,
+ * the Visit's mail reads as the Part going out: the Part shows Sent before it existed, and the
+ * reply watcher then counts the Visit's "payment done" as an answer to it. A mail whose subject
+ * carries no quotation number (one sent from webmail by hand) still counts.
+ */
+export function pickSentMail(
+  candidates: readonly SentMailCandidate[],
+  quotation: Pick<QuotationSendCheck, "quotationNo" | "createdAt">,
+): { date: Date; to: string } | null {
+  const notBefore = new Date(quotation.createdAt).getTime() - CREATED_SLACK_MS;
+  const own = quotation.quotationNo.toUpperCase();
+  for (const mail of [...candidates].sort((a, b) => a.uid - b.uid)) {
+    if (!mail.date || mail.date.getTime() < notBefore) continue;
+    const named = (mail.subject.match(QUOTATION_NO) ?? []).map((n) => n.toUpperCase());
+    if (named.length > 0 && !named.includes(own)) continue;
+    return { date: mail.date, to: mail.to };
+  }
+  return null;
 }
 
 /** The mail that carried a quotation out, if this Sent folder has one. */
@@ -100,21 +139,27 @@ async function findSentMail(
   const list = (Array.isArray(uids) ? uids : []).map(Number).filter((n) => n > 0);
   if (list.length === 0) return null;
 
-  // The EARLIEST match. A quotation may have been chased more than once, and what is wanted
-  // is when the customer first had it — the same rule the send path follows.
-  const first = Math.min(...list);
+  // Every match is read, not only the first: the first mail to this customer may be another
+  // quotation's (see pickSentMail). Of the ones that are this quotation's, the EARLIEST — a
+  // quotation may have been chased more than once, and what is wanted is when the customer
+  // first had it, the same rule the send path follows.
+  const candidates: SentMailCandidate[] = [];
   try {
-    for await (const message of client.fetch([first], { uid: true, envelope: true }, { uid: true })) {
-      const date = message.envelope?.date;
-      const to = message.envelope?.to?.[0]?.address ?? "";
-      if (date) return { date, to };
+    for await (const message of client.fetch(list, { uid: true, envelope: true }, { uid: true })) {
+      candidates.push({
+        uid: Number(message.uid),
+        date: message.envelope?.date ?? null,
+        to: message.envelope?.to?.[0]?.address ?? "",
+        subject: message.envelope?.subject ?? "",
+      });
     }
-  } catch {
-    // Found it but could not read it. Knowing it exists is enough to say it was sent; the
-    // date is the only thing lost, and the quotation's own date stands in.
-    return { date: new Date(quotation.raisedAt), to: quotation.customerEmail };
+  } catch (error) {
+    // Found mail to the customer but could not read it, so which quotation it carried is
+    // unknown. Asked again after the recheck interval rather than guessed now.
+    onSearchError(`${label} — could not read the matches: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
   }
-  return null;
+  return pickSentMail(candidates, quotation);
 }
 
 export async function runQuotationSendVerification(): Promise<SendVerifyResult> {

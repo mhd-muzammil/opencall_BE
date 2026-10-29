@@ -75,6 +75,7 @@
     "migrate:bod-eod-custom-rows": "tsx src/scripts/applyBodEodCustomRowsMigration.ts",
     "migrate:source-batch-indexes": "tsx src/scripts/applySourceBatchIndexesMigration.ts",
     "migrate:delivery-challans": "tsx src/scripts/applyDeliveryChallansMigration.ts",
+    "migrate:quotation-kind": "tsx src/scripts/applyQuotationKindMigration.ts",
     "migrate:all": "tsx src/scripts/applyAllMigrations.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "fieldez:worker": "tsx src/worker/fieldezSyncWorker.ts",

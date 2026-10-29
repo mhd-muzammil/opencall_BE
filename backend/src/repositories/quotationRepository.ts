@@ -16,8 +16,17 @@ export interface QuotationLineItem {
   baseAmount: number;
 }
 
+/**
+ * Which sheet a quotation is. A Visit quotation is the service charge before an engineer goes
+ * out; a Part quotation is the part estimate after. Each prints its own sheet and runs its own
+ * number series (see NUMBER_SERIES). Everything raised before the two existed is a Part one.
+ */
+export type QuotationKind = "PART" | "VISIT";
+
 export interface Quotation {
   id: string;
+  /** Fixed when the quotation is raised, like its number: an edit never changes it. */
+  kind: QuotationKind;
   quotationNo: string;
   quotationDate: string;
   caseId: string;
@@ -67,6 +76,8 @@ export interface Quotation {
 }
 
 export interface CreateQuotationInput {
+  /** Picks the sheet and the number series, so it is set here and never on an edit. */
+  kind: QuotationKind;
   quotationDate: string;
   caseId: string;
   orderNumber: string;
@@ -89,15 +100,16 @@ export interface CreateQuotationInput {
 
 /**
  * Everything a quotation can become. Deliberately the same shape as creating one — the
- * form is the same form — minus the two things an edit must never touch: the running
- * number and who issued it.
+ * form is the same form — minus the things an edit must never touch: the running number,
+ * the kind that chose its series, and who issued it.
  */
-export type UpdateQuotationInput = Omit<CreateQuotationInput, "createdBy"> & {
+export type UpdateQuotationInput = Omit<CreateQuotationInput, "createdBy" | "kind"> & {
   updatedBy: string;
 };
 
 interface QuotationDbRow {
   id: string;
+  kind: string | null;
   updated_at: string | null;
   updated_by: string | null;
   sent_at: string | null;
@@ -202,6 +214,7 @@ async function attachLineItems(quotations: Quotation[]): Promise<Quotation[]> {
 function mapQuotation(r: QuotationDbRow): Quotation {
   return {
     id: r.id,
+    kind: r.kind === "VISIT" ? "VISIT" : "PART",
     quotationNo: r.quotation_no,
     quotationDate: r.quotation_date,
     caseId: r.case_id,
@@ -254,7 +267,7 @@ const QUOTATION_COLUMNS = `
   send_count, last_sent_at::TEXT AS last_sent_at,
   payment_status, paid_at::TEXT AS paid_at, paid_by, payment_note,
   payment_source, payment_evidence_email_id::TEXT AS payment_evidence_email_id,
-  reply_seen_at::TEXT AS reply_seen_at, payment_signal, payment_signal_reasons
+  reply_seen_at::TEXT AS reply_seen_at, payment_signal, payment_signal_reasons, kind
 `;
 
 /** Indian financial year label for a date, e.g. 2026-05-04 → "26-27". */
@@ -270,27 +283,39 @@ export function financialYearLabel(dateIso: string): string {
 }
 
 /**
- * Atomically allocates the next quotation number for the date's financial year and
- * inserts the quotation, all in one transaction so numbers never collide or skip.
+ * Each kind's number series: a Part quotation is RTPL/<FY>/QEN/<n> and a Visit one
+ * RTPL/<FY>/QEV/<n>, each counted from 1 per financial year in its own table, so raising one
+ * kind never moves the other's numbers. The codes differ, so the two can never print the same
+ * number and the unique index on quotation_no guards both.
+ */
+const NUMBER_SERIES: Record<QuotationKind, { table: string; code: string }> = {
+  PART: { table: "quotation_sequences", code: "QEN" },
+  VISIT: { table: "quotation_visit_sequences", code: "QEV" },
+};
+
+/**
+ * Atomically allocates the next number in the kind's series for the date's financial year
+ * and inserts the quotation, all in one transaction so numbers never collide or skip.
  */
 export async function createQuotation(
   input: CreateQuotationInput,
 ): Promise<Quotation> {
   const finYear = financialYearLabel(input.quotationDate);
+  const series = NUMBER_SERIES[input.kind];
   const client: PoolClient = await pool.connect();
   try {
     await client.query("BEGIN");
 
     const seqResult = await client.query<{ last_seq: number }>(
-      `INSERT INTO quotation_sequences (fin_year, last_seq)
+      `INSERT INTO ${series.table} (fin_year, last_seq)
        VALUES ($1, 1)
        ON CONFLICT (fin_year)
-       DO UPDATE SET last_seq = quotation_sequences.last_seq + 1
+       DO UPDATE SET last_seq = ${series.table}.last_seq + 1
        RETURNING last_seq`,
       [finYear],
     );
     const seq = seqResult.rows[0]!.last_seq;
-    const quotationNo = `RTPL/${finYear}/QEN/${seq}`;
+    const quotationNo = `RTPL/${finYear}/${series.code}/${seq}`;
 
     // The parent row mirrors the items: `base_amount` is the SUBTOTAL, so the list view's
     // Total column keeps working without being touched, and the four description columns
@@ -305,10 +330,10 @@ export async function createQuotation(
          customer_name, customer_address, customer_city, customer_state,
          customer_pincode, customer_phone, customer_email,
          service_description, product_description, model_no, serial_no,
-         base_amount, sgst_percent, cgst_percent, created_by
+         base_amount, sgst_percent, cgst_percent, created_by, kind
        ) VALUES (
          $1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-         $12, $13, $14, $15, $16, $17, $18, $19
+         $12, $13, $14, $15, $16, $17, $18, $19, $20
        )
        RETURNING ${QUOTATION_COLUMNS}`,
       [
@@ -331,6 +356,7 @@ export async function createQuotation(
         input.sgstPercent,
         input.cgstPercent,
         input.createdBy,
+        input.kind,
       ],
     );
 
@@ -557,6 +583,8 @@ export interface ListQuotationsResult {
 
 export async function listQuotations(input: {
   search?: string;
+  /** One kind's quotations only. Absent means both, which is what every older caller asked. */
+  kind?: QuotationKind;
   page: number;
   perPage: number;
 }): Promise<ListQuotationsResult> {
@@ -573,6 +601,11 @@ export async function listQuotations(input: {
     conditions.push(
       `(lower(quotation_no) LIKE $${i} OR lower(customer_name) LIKE $${i} OR lower(case_id) LIKE $${i} OR lower(order_number) LIKE $${i})`,
     );
+  }
+  // In the same WHERE as the count, so a tab's total and its rows describe the same set.
+  if (input.kind) {
+    params.push(input.kind);
+    conditions.push(`kind = $${params.length}`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 

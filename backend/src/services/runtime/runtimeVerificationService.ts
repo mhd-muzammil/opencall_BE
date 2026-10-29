@@ -96,6 +96,8 @@ const FEATURE_TABLES = [
   // migrate:quotations — the Quotations endpoints 500 without these.
   "quotations",
   "quotation_sequences",
+  // 071 (applyQuotationKindMigration) — a Visit quotation cannot be numbered without it.
+  "quotation_visit_sequences",
   // migrate:region-eod — the Final-EOD endpoints 500 without these.
   "region_eod_state",
   "region_productivity_snapshot",
@@ -197,6 +199,9 @@ const FEATURE_COLUMNS: readonly RequiredColumn[] = [
   // migrate:closure-status (041). The closure comparison/overlay reads these.
   { tableName: "case_closure_dates", columnName: "closed_on" },
   { tableName: "case_closure_dates", columnName: "closure_status" },
+  // 071 (applyQuotationKindMigration). Every Quotations endpoint selects it, so the whole
+  // section 500s without it.
+  { tableName: "quotations", columnName: "kind" },
 ];
 
 export async function verifyRuntimeSchema(): Promise<RuntimeVerificationResult> {
