@@ -24,9 +24,9 @@ import {
 } from "./quotationDraftDetector.js";
 
 /** One report row, as much of it as the detector reads. */
-function row(enriched: Record<string, unknown>, closed = false) {
+function row(enriched: Record<string, unknown>, closed = false, sameDayClosed = false) {
   return {
-    carryForward: { closedSyntheticRow: closed },
+    carryForward: { closedSyntheticRow: closed, sameDayClosedRow: sameDayClosed },
     enriched: {
       ticket_id: "WO-036404653",
       case_id: "5166159539",
@@ -108,6 +108,10 @@ describe("which work orders wait for approval", () => {
 
   it("leaves out a call that has closed, though its row still carries Visit Estimate", () => {
     expect(pickQuotationDraftCandidates(report([row({}, true)]))).toEqual([]);
+  });
+
+  it("raises a call closed on a same-day re-upload, which the Records page still lists", () => {
+    expect(pickQuotationDraftCandidates(report([row({}, true, true)])).map((c) => c.kind)).toEqual(["VISIT"]);
   });
 
   it("raises one per work order when the export lists it once per part", () => {

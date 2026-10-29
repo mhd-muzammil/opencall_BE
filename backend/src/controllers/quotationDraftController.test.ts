@@ -160,9 +160,15 @@ async function fakeQuery(sql: string, params: unknown[] = []) {
     return { rows: drafts.filter((d) => d.id === params[0]) };
   }
   if (text.includes("FROM quotation_drafts d WHERE")) {
-    // Only the waiting ones, and none whose WO has a quotation of the kind already.
+    // Only the waiting ones, none whose WO has a quotation of the kind already, and only the
+    // ones the newest report still has at their status. That last part is the report's to
+    // answer, and is checked on a real database; here every waiting one is still current.
     expect(text).toContain("d.status = 'WAITING'");
     expect(text).toContain("NOT EXISTS ( SELECT 1 FROM quotations q WHERE q.kind = d.kind");
+    expect(text).toMatch(/^WITH latest AS \( SELECT r\.id, r\.report_date FROM report_history_sessions s/);
+    expect(text).toContain(
+      "EXISTS (SELECT 1 FROM current_calls cc WHERE cc.kind = d.kind AND cc.ticket_key = d.ticket_key)",
+    );
     const kind = text.includes("d.kind = $1") ? params[0] : null;
     const rows = drafts.filter(
       (d) =>
@@ -170,7 +176,9 @@ async function fakeQuery(sql: string, params: unknown[] = []) {
         (!kind || d.kind === kind) &&
         !quotations.some((q) => q.kind === d.kind && key(q.order_number) === d.ticket_key),
     );
-    if (text.startsWith("SELECT COUNT(*)")) return { rows: [{ count: String(rows.length) }] };
+    if (text.includes("SELECT COUNT(*)::TEXT AS count FROM quotation_drafts d")) {
+      return { rows: [{ count: String(rows.length) }] };
+    }
     return { rows };
   }
   throw new Error(`fake db: unexpected SQL: ${text}`);

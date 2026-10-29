@@ -65,9 +65,11 @@ export function pickQuotationDraftCandidates(
   const picked: QuotationDraftCandidate[] = [];
   const seen = new Set<string>();
   for (const row of report.rows) {
-    // A call that has left the WIP is carried as a closed row with its last Flex Status, so a
-    // call closed at Visit Estimate would otherwise wait for approval forever.
-    if (row.carryForward.closedSyntheticRow) continue;
+    // A call that has left the WIP is carried as a closed row with its last Flex Status. The
+    // Records page still lists one that closed on a same-day re-upload, and the Waiting
+    // Approval box counts what the page shows, so that one is raised; any other closed row
+    // is not waiting for anything.
+    if (row.carryForward.closedSyntheticRow && !row.carryForward.sameDayClosedRow) continue;
     const enriched = row.enriched;
     if (normalizeWoOtcCode(enriched.wo_otc_code) !== TRADE_CODE) continue;
     const kind = KIND_BY_FLEX_STATUS.get(normalizeFlexStatus(enriched.flex_status) ?? "");

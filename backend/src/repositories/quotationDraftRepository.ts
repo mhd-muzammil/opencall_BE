@@ -220,17 +220,115 @@ export interface ListQuotationDraftsResult {
 const LIST_LIMIT = 500;
 
 /**
+ * The work orders the Records page shows at a status that raises a quotation, by the page's
+ * own rules, so the box and the page's Flex Status filter give one number:
+ *
+ *   - the report the page opens on: getLatestCompletedReportSession picks the completed
+ *     session of the latest report date, then the most recently opened one (Open in History
+ *     bumps a session's updated_at), and skips a date more than a day ahead. A report whose
+ *     session was deleted is not on the page, so not here either;
+ *   - 01-Trade at Flex Status "Visit Estimate" (VISIT) or "Visit Quote To Customer" (PART);
+ *   - on a row the page lists: not deleted from the report, open or closed on a same-day
+ *     re-upload (isRecordsPageVisibleRow), and not hidden as a former Request to Cancel;
+ *   - and still showing that status. The page overlays the closure import's status on a
+ *     closed row whatever its date, and on an open row closed on the report's day, and such
+ *     a row no longer reads "Visit Quote To Customer". closureDateEnricher finds a row's
+ *     closure by its WO id first; a closure no row claimed by WO id then goes, by Case id, to
+ *     the first row of that case without one of its own — when it is its case's only one.
+ *
+ * Until the day's first upload the latest report is yesterday's, so the list does not empty
+ * out overnight.
+ */
+const CURRENT_CALLS = `
+  latest AS (
+    SELECT r.id, r.report_date
+      FROM report_history_sessions s
+      JOIN daily_call_plan_reports r ON r.id = s.daily_call_plan_report_id
+     WHERE s.status = 'COMPLETED'
+       AND r.report_date <= ((NOW() AT TIME ZONE 'UTC') + INTERVAL '1 day')::date
+     ORDER BY r.report_date DESC, s.updated_at DESC, s.created_at DESC
+     LIMIT 1
+  ),
+  latest_rows AS (
+    SELECT r.id, r.serial_no, r.ticket_id, r.flex_status, r.wo_otc_code, r.change_type,
+           r.same_day_closed, r.previous_flex_status,
+           UPPER(btrim(r.ticket_id)) AS wo_key,
+           UPPER(btrim(COALESCE(r.case_id, ''))) AS case_key
+      FROM daily_call_plan_report_rows r
+      JOIN latest l ON r.report_id = l.id
+     WHERE NOT r.is_excluded
+  ),
+  wo_claimed AS (
+    SELECT DISTINCT c.id
+      FROM case_closure_dates c
+      JOIN latest_rows lr ON c.wo_id = lr.wo_key
+     WHERE c.wo_id <> ''
+  ),
+  case_claims AS (
+    SELECT DISTINCT ON (c.id) c.id AS closure_id, lr.id AS row_id
+      FROM case_closure_dates c
+      JOIN latest_rows lr ON lr.case_key = c.case_id
+     WHERE c.case_id <> ''
+       AND NOT EXISTS (
+             SELECT 1 FROM case_closure_dates k WHERE k.case_id = c.case_id AND k.id <> c.id
+           )
+       AND NOT EXISTS (SELECT 1 FROM wo_claimed w WHERE w.id = c.id)
+       AND NOT EXISTS (
+             SELECT 1 FROM case_closure_dates o WHERE o.wo_id <> '' AND o.wo_id = lr.wo_key
+           )
+     ORDER BY c.id, lr.serial_no, lr.id
+  ),
+  current_calls AS (
+    SELECT DISTINCT s.kind, regexp_replace(UPPER(lr.ticket_id), '[^A-Z0-9]', '', 'g') AS ticket_key
+      FROM latest_rows lr
+      CROSS JOIN latest l
+      CROSS JOIN LATERAL (
+        SELECT CASE lower(regexp_replace(btrim(COALESCE(lr.flex_status, '')), '\\s+', ' ', 'g'))
+                 WHEN 'visit estimate' THEN 'VISIT'
+                 WHEN 'visit quote to customer' THEN 'PART'
+               END AS kind
+      ) s
+     WHERE s.kind IS NOT NULL
+       AND (lr.change_type IS DISTINCT FROM 'CLOSED' OR lr.same_day_closed)
+       AND regexp_replace(UPPER(btrim(COALESCE(lr.wo_otc_code, ''))), '\\s*[-–—−]\\s*', '-', 'g') = '01-TRADE'
+       AND lower(btrim(COALESCE(lr.previous_flex_status, ''))) <> 'request to cancel'
+       AND NOT EXISTS (
+             SELECT 1 FROM case_closure_dates c
+              WHERE c.wo_id <> '' AND c.wo_id = lr.wo_key
+                AND c.closure_status <> ''
+                AND (lr.change_type = 'CLOSED' OR c.closed_on = l.report_date)
+           )
+       AND NOT EXISTS (
+             SELECT 1 FROM case_claims cl
+               JOIN case_closure_dates c ON c.id = cl.closure_id
+              WHERE cl.row_id = lr.id
+                AND c.closure_status <> ''
+                AND (lr.change_type = 'CLOSED' OR c.closed_on = l.report_date)
+           )
+  )
+`;
+
+/**
  * The quotations waiting for approval, newest first.
  *
+ * Only the ones whose work order the Records page shows at the status that raised them (the
+ * user, 29 Oct 2026), so the box agrees with the report: a call that has moved on drops off,
+ * and comes back if it returns to that status. Nothing is changed by leaving it out — the
+ * row stays WAITING, and approving and removing are unaffected.
+ *
  * One whose work order has since got a quotation of its kind — raised by hand while this one
- * waited — is left out rather than offered: there is nothing left to approve, and approving it
- * would raise a second quotation for the same work.
+ * waited — is left out too: there is nothing left to approve, and approving it would raise a
+ * second quotation for the same work.
  */
 export async function listQuotationDrafts(input: {
   kind?: QuotationKind;
   search?: string;
 }): Promise<ListQuotationDraftsResult> {
-  const conditions = [`d.status = 'WAITING'`, `NOT ${quotationRaisedFor("d.kind", "d.ticket_key")}`];
+  const conditions = [
+    `d.status = 'WAITING'`,
+    `NOT ${quotationRaisedFor("d.kind", "d.ticket_key")}`,
+    `EXISTS (SELECT 1 FROM current_calls cc WHERE cc.kind = d.kind AND cc.ticket_key = d.ticket_key)`,
+  ];
   const params: unknown[] = [];
   if (input.kind) {
     params.push(input.kind);
@@ -247,11 +345,13 @@ export async function listQuotationDrafts(input: {
   const where = `WHERE ${conditions.join(" AND ")}`;
 
   const countResult = await query<{ count: string }>(
-    `SELECT COUNT(*)::TEXT AS count FROM quotation_drafts d ${where}`,
+    `WITH ${CURRENT_CALLS}
+     SELECT COUNT(*)::TEXT AS count FROM quotation_drafts d ${where}`,
     params,
   );
   const rowsResult = await query<QuotationDraftDbRow>(
-    `SELECT ${DRAFT_COLUMNS} FROM quotation_drafts d ${where}
+    `WITH ${CURRENT_CALLS}
+     SELECT ${DRAFT_COLUMNS} FROM quotation_drafts d ${where}
      ORDER BY d.created_at DESC, d.ticket_id
      LIMIT ${LIST_LIMIT}`,
     params,
