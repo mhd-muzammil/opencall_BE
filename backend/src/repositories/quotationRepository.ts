@@ -585,6 +585,10 @@ export async function listQuotations(input: {
   search?: string;
   /** One kind's quotations only. Absent means both, which is what every older caller asked. */
   kind?: QuotationKind;
+  /** Raised at or after this moment (ISO). The page's current quotations. */
+  createdFrom?: string;
+  /** Raised before this moment (ISO). The page's History. */
+  createdBefore?: string;
   page: number;
   perPage: number;
 }): Promise<ListQuotationsResult> {
@@ -606,6 +610,14 @@ export async function listQuotations(input: {
   if (input.kind) {
     params.push(input.kind);
     conditions.push(`kind = $${params.length}`);
+  }
+  if (input.createdFrom) {
+    params.push(input.createdFrom);
+    conditions.push(`created_at >= $${params.length}::timestamptz`);
+  }
+  if (input.createdBefore) {
+    params.push(input.createdBefore);
+    conditions.push(`created_at < $${params.length}::timestamptz`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 

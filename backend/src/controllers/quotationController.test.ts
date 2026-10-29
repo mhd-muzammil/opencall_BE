@@ -349,6 +349,38 @@ describe("listing quotations", () => {
     expect(answer.data.items.map((q: { kind: string }) => q.kind)).toEqual(["VISIT", "PART"]);
   });
 
+  it("splits by when a quotation was raised, for the page's History", async () => {
+    routeQuery([VISIT_ROW]);
+
+    const current = await call(listQuotationsController, {
+      ...SUPER_ADMIN,
+      query: { kind: "PART", created_from: "2026-10-28T18:30:00.000Z" },
+    });
+    expect(current.status).toBe(200);
+    expect(squash(mocks.query.mock.calls[0]![0])).toContain("AND created_at >= $2::timestamptz");
+    expect(mocks.query.mock.calls[0]![1]).toEqual(["PART", "2026-10-28T18:30:00.000Z"]);
+    expect(squash(mocks.query.mock.calls[1]![0])).toContain("AND created_at >= $2::timestamptz");
+
+    mocks.query.mockClear();
+    const history = await call(listQuotationsController, {
+      ...SUPER_ADMIN,
+      query: { kind: "PART", created_before: "2026-10-29T00:00:00+05:30" },
+    });
+    expect(history.status).toBe(200);
+    expect(squash(mocks.query.mock.calls[0]![0])).toContain("AND created_at < $2::timestamptz");
+    // Read as the same moment, written in one form.
+    expect(mocks.query.mock.calls[0]![1]).toEqual(["PART", "2026-10-28T18:30:00.000Z"]);
+  });
+
+  it("refuses a moment it cannot read, rather than list everything", async () => {
+    routeQuery([]);
+
+    const answer = await call(listQuotationsController, { ...SUPER_ADMIN, query: { created_before: "yesterday" } });
+
+    expect(answer.status).toBe(400);
+    expect(mocks.query).not.toHaveBeenCalled();
+  });
+
   it("refuses a kind it does not know", async () => {
     routeQuery([]);
 

@@ -184,6 +184,17 @@ export const createQuotationController: RequestHandler = asyncHandler(
   },
 );
 
+/** An optional ISO moment from the query string, refused rather than guessed when unreadable. */
+function readMoment(value: unknown, name: string): string | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const time = Date.parse(text);
+  if (text.length > 40 || Number.isNaN(time)) {
+    throw badRequest(`${name} must be an ISO date and time`);
+  }
+  return new Date(time).toISOString();
+}
+
 export const listQuotationsController: RequestHandler = asyncHandler(
   async (request, response) => {
     requireQuotationAccess(request);
@@ -193,11 +204,17 @@ export const listQuotationsController: RequestHandler = asyncHandler(
     if (kind && kind !== "PART" && kind !== "VISIT") {
       throw badRequest("kind must be PART or VISIT");
     }
+    // When it was raised, so the page can keep the quotations from before its fresh start
+    // apart (its History) and out of its count boxes.
+    const createdFrom = readMoment(request.query.created_from, "created_from");
+    const createdBefore = readMoment(request.query.created_before, "created_before");
     const page = Number(request.query.page ?? 1);
     const perPage = Number(request.query.per_page ?? 30);
     const result = await listQuotations({
       search,
       ...(kind ? { kind: kind as QuotationKind } : {}),
+      ...(createdFrom ? { createdFrom } : {}),
+      ...(createdBefore ? { createdBefore } : {}),
       page: Number.isFinite(page) ? page : 1,
       perPage: Number.isFinite(perPage) ? perPage : 30,
     });
