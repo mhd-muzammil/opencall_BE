@@ -159,6 +159,22 @@ async function fakeQuery(sql: string, params: unknown[] = []) {
   if (text.includes("FROM quotation_drafts WHERE id = $1")) {
     return { rows: drafts.filter((d) => d.id === params[0]) };
   }
+  if (text.includes("FROM current_calls cc") && text.includes("AS quoted")) {
+    // The report's side of the count. In this stand-in every waiting row's work order is on
+    // the report at its status; which report and which rows is checked on a real database.
+    expect(text).toMatch(/^WITH latest AS/);
+    const kind = text.includes("WHERE cc.kind = $1") ? params[0] : null;
+    return {
+      rows: drafts
+        .filter((d) => !kind || d.kind === kind)
+        .map((d) => {
+          const quoted = quotations
+            .filter((q) => q.kind === d.kind && key(q.order_number) === d.ticket_key)
+            .map((q) => q.quotation_no);
+          return { ticket_id: d.ticket_id, quoted: quoted.length ? quoted : null, draft: d.status };
+        }),
+    };
+  }
   if (text.includes("FROM quotation_drafts d WHERE")) {
     // Only the waiting ones, none whose WO has a quotation of the kind already, and only the
     // ones the newest report still has at their status. That last part is the report's to
@@ -261,6 +277,28 @@ describe("listing the quotations waiting for approval", () => {
     expect(answer.data.total).toBe(1);
     expect(answer.data.items.map((d: { ticketId: string }) => d.ticketId)).toEqual(["WO-036404653"]);
     expect(answer.data.items[0]).toMatchObject({ kind: "VISIT", status: "WAITING", quotationId: null });
+  });
+
+  it("says how the report's count at the status splits, so the box can be checked against it", async () => {
+    drafts.push(
+      draftRow({ id: "0b6f3b0e-1d2c-4c6e-9a51-000000000004", ticket_key: "WO035461827", ticket_id: "WO-035461827" }),
+      draftRow({ id: "0b6f3b0e-1d2c-4c6e-9a51-000000000005", ticket_key: "WO035887044", ticket_id: "WO-035887044", status: "REMOVED" }),
+    );
+    // Raised by hand before Waiting Approval existed.
+    quotations.push({ kind: "VISIT", order_number: "WO-035461827", quotation_no: "RTPL/26-27/QEV/48" });
+
+    const answer = await call(listQuotationDraftsController, { ...SUPER_ADMIN, query: { kind: "VISIT" } });
+
+    expect(answer.data.total).toBe(1);
+    expect(answer.data.report).toEqual({
+      onReport: 3,
+      notWaiting: [
+        { ticketId: "WO-035461827", reason: "QUOTED", quotationNos: ["RTPL/26-27/QEV/48"] },
+        { ticketId: "WO-035887044", reason: "REMOVED", quotationNos: [] },
+      ],
+    });
+    // 3 on the report = 1 waiting + 2 accounted for.
+    expect(answer.data.report.onReport).toBe(answer.data.total + answer.data.report.notWaiting.length);
   });
 
   it("refuses a kind that is neither", async () => {

@@ -211,9 +211,31 @@ export async function insertQuotationDraft(input: QuotationDraftInput): Promise<
   return (result.rowCount ?? 0) > 0;
 }
 
+/**
+ * How the Records page's count at the status splits, so the box's number can be checked
+ * against the page: every work order the page shows there is either waiting in the box or
+ * listed here with the reason it is not.
+ */
+export interface CurrentCallsSummary {
+  /** Work orders the Records page shows at the status (both statuses when no kind is asked). */
+  onReport: number;
+  notWaiting: Array<{
+    ticketId: string;
+    /**
+     * QUOTED: it already has a quotation of the kind — raised by hand, or by approving it.
+     * REMOVED: taken off the box with Remove.
+     * NOT_RAISED: no waiting quotation yet; the next report generation raises it.
+     */
+    reason: "QUOTED" | "REMOVED" | "NOT_RAISED";
+    quotationNos: string[];
+  }>;
+}
+
 export interface ListQuotationDraftsResult {
   items: QuotationDraft[];
   total: number;
+  /** For the whole report, whatever the search: the search narrows the list only. */
+  report: CurrentCallsSummary;
 }
 
 /** Nobody approves more than this from one screen; the total still counts all of them. */
@@ -279,7 +301,8 @@ const CURRENT_CALLS = `
      ORDER BY c.id, lr.serial_no, lr.id
   ),
   current_calls AS (
-    SELECT DISTINCT s.kind, regexp_replace(UPPER(lr.ticket_id), '[^A-Z0-9]', '', 'g') AS ticket_key
+    SELECT s.kind, regexp_replace(UPPER(lr.ticket_id), '[^A-Z0-9]', '', 'g') AS ticket_key,
+           MIN(btrim(lr.ticket_id)) AS ticket_id
       FROM latest_rows lr
       CROSS JOIN latest l
       CROSS JOIN LATERAL (
@@ -305,8 +328,42 @@ const CURRENT_CALLS = `
                 AND c.closure_status <> ''
                 AND (lr.change_type = 'CLOSED' OR c.closed_on = l.report_date)
            )
+     GROUP BY 1, 2
   )
 `;
+
+/** Every work order the Records page shows at the status, and why it is or is not waiting. */
+async function summarizeCurrentCalls(kind: QuotationKind | undefined): Promise<CurrentCallsSummary> {
+  const result = await query<{ ticket_id: string; quoted: string[] | null; draft: string | null }>(
+    `WITH ${CURRENT_CALLS}
+     SELECT cc.ticket_id,
+            (SELECT array_agg(q.quotation_no ORDER BY q.created_at)
+               FROM quotations q
+              WHERE q.kind = cc.kind
+                AND regexp_replace(UPPER(q.order_number), '[^A-Z0-9]', '', 'g') = cc.ticket_key
+            ) AS quoted,
+            (SELECT d.status FROM quotation_drafts d
+              WHERE d.kind = cc.kind AND d.ticket_key = cc.ticket_key) AS draft
+       FROM current_calls cc
+      ${kind ? "WHERE cc.kind = $1" : ""}
+      ORDER BY cc.ticket_id`,
+    kind ? [kind] : [],
+  );
+  const notWaiting: CurrentCallsSummary["notWaiting"] = [];
+  for (const row of result.rows) {
+    const quotationNos = row.quoted ?? [];
+    // In the order the box decides: a quotation of the kind keeps it out whatever its waiting
+    // row says, exactly as the list's own NOT EXISTS does.
+    if (quotationNos.length > 0) {
+      notWaiting.push({ ticketId: row.ticket_id, reason: "QUOTED", quotationNos });
+    } else if (row.draft === "REMOVED") {
+      notWaiting.push({ ticketId: row.ticket_id, reason: "REMOVED", quotationNos: [] });
+    } else if (row.draft !== "WAITING") {
+      notWaiting.push({ ticketId: row.ticket_id, reason: "NOT_RAISED", quotationNos: [] });
+    }
+  }
+  return { onReport: result.rows.length, notWaiting };
+}
 
 /**
  * The quotations waiting for approval, newest first.
@@ -359,6 +416,7 @@ export async function listQuotationDrafts(input: {
   return {
     items: rowsResult.rows.map(mapDraft),
     total: Number(countResult.rows[0]?.count ?? 0),
+    report: await summarizeCurrentCalls(input.kind),
   };
 }
 
