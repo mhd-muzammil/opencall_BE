@@ -76,6 +76,7 @@
     "migrate:source-batch-indexes": "tsx src/scripts/applySourceBatchIndexesMigration.ts",
     "migrate:delivery-challans": "tsx src/scripts/applyDeliveryChallansMigration.ts",
     "migrate:quotation-kind": "tsx src/scripts/applyQuotationKindMigration.ts",
+    "migrate:quotation-drafts": "tsx src/scripts/applyQuotationDraftsMigration.ts",
     "migrate:all": "tsx src/scripts/applyAllMigrations.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "fieldez:worker": "tsx src/worker/fieldezSyncWorker.ts",

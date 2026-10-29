@@ -8,6 +8,7 @@ import {
 } from "../services/rbac/regionAccessService.js";
 import { aspCodesForRegion } from "../services/rbac/regionRowAccess.js";
 import { syncPartsCallCountsFromReport } from "../services/partsCallCountSync.js";
+import { queueQuotationDraftsFromReport } from "../services/quotations/quotationDraftDetector.js";
 import { enrichReportWithClosureDates } from "../services/closureDates/closureDateEnricher.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
 import type { GeneratedDailyCallPlanReport } from "../types/reportGeneration.js";
@@ -83,6 +84,12 @@ export const generateDailyCallPlanReportController: RequestHandler =
     // Fire-and-forget over the report we already have: it never re-generates, never
     // blocks the response, and a failure here cannot affect report generation.
     syncPartsCallCountsFromReport(report);
+
+    // Raise the quotations this report calls for — 01-Trade at Visit Estimate or Visit Quote
+    // To Customer — into the Quotations section's Waiting Approval box. Fire-and-forget like
+    // the line above, and picked from the rows now, before the closure overlay below rewrites
+    // any Flex Status.
+    queueQuotationDraftsFromReport(report);
 
     // Region admins can create reports now, so their generations are audited too.
     recordActivity({

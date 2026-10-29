@@ -300,95 +300,108 @@ const NUMBER_SERIES: Record<QuotationKind, { table: string; code: string }> = {
 export async function createQuotation(
   input: CreateQuotationInput,
 ): Promise<Quotation> {
-  const finYear = financialYearLabel(input.quotationDate);
-  const series = NUMBER_SERIES[input.kind];
   const client: PoolClient = await pool.connect();
   try {
     await client.query("BEGIN");
-
-    const seqResult = await client.query<{ last_seq: number }>(
-      `INSERT INTO ${series.table} (fin_year, last_seq)
-       VALUES ($1, 1)
-       ON CONFLICT (fin_year)
-       DO UPDATE SET last_seq = ${series.table}.last_seq + 1
-       RETURNING last_seq`,
-      [finYear],
-    );
-    const seq = seqResult.rows[0]!.last_seq;
-    const quotationNo = `RTPL/${finYear}/${series.code}/${seq}`;
-
-    // The parent row mirrors the items: `base_amount` is the SUBTOTAL, so the list view's
-    // Total column keeps working without being touched, and the four description columns
-    // carry the first item so a reader that predates line items still sees a real row.
-    const items = input.lineItems;
-    const first = items[0];
-    const subtotal = items.reduce((sum, item) => sum + item.baseAmount, 0);
-
-    const result = await client.query<QuotationDbRow>(
-      `INSERT INTO quotations (
-         quotation_no, quotation_date, case_id, order_number,
-         customer_name, customer_address, customer_city, customer_state,
-         customer_pincode, customer_phone, customer_email,
-         service_description, product_description, model_no, serial_no,
-         base_amount, sgst_percent, cgst_percent, created_by, kind
-       ) VALUES (
-         $1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-         $12, $13, $14, $15, $16, $17, $18, $19, $20
-       )
-       RETURNING ${QUOTATION_COLUMNS}`,
-      [
-        quotationNo,
-        input.quotationDate,
-        input.caseId,
-        input.orderNumber,
-        input.customerName,
-        input.customerAddress,
-        input.customerCity,
-        input.customerState,
-        input.customerPincode,
-        input.customerPhone,
-        input.customerEmail,
-        first?.serviceDescription ?? "",
-        first?.productDescription ?? "",
-        first?.modelNo ?? "",
-        first?.serialNo ?? "",
-        subtotal,
-        input.sgstPercent,
-        input.cgstPercent,
-        input.createdBy,
-        input.kind,
-      ],
-    );
-
-    const quotationId = result.rows[0]!.id;
-    for (const [index, item] of items.entries()) {
-      await client.query(
-        `INSERT INTO quotation_line_items (
-           quotation_id, position, service_description, product_description,
-           model_no, serial_no, base_amount
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [
-          quotationId,
-          index,
-          item.serviceDescription,
-          item.productDescription,
-          item.modelNo,
-          item.serialNo,
-          item.baseAmount,
-        ],
-      );
-    }
-
+    const quotation = await insertQuotation(client, input);
     await client.query("COMMIT");
-    // Straight from the input: the rows were just written in this transaction, so a
-    // re-read would only be a round trip to learn what we already know.
-    return { ...mapQuotation(result.rows[0]!), lineItems: items };
+    return quotation;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
   }
+}
+
+/**
+ * The inside of createQuotation, on a transaction the caller has open: takes the next number
+ * and writes the quotation and its rows. Approving a waiting quotation runs this in the same
+ * transaction that marks it approved, so a number is never taken for an approval that did not
+ * happen — the counter is a table row, and a rollback puts it back.
+ */
+export async function insertQuotation(
+  client: PoolClient,
+  input: CreateQuotationInput,
+): Promise<Quotation> {
+  const finYear = financialYearLabel(input.quotationDate);
+  const series = NUMBER_SERIES[input.kind];
+  const seqResult = await client.query<{ last_seq: number }>(
+    `INSERT INTO ${series.table} (fin_year, last_seq)
+     VALUES ($1, 1)
+     ON CONFLICT (fin_year)
+     DO UPDATE SET last_seq = ${series.table}.last_seq + 1
+     RETURNING last_seq`,
+    [finYear],
+  );
+  const seq = seqResult.rows[0]!.last_seq;
+  const quotationNo = `RTPL/${finYear}/${series.code}/${seq}`;
+
+  // The parent row mirrors the items: `base_amount` is the SUBTOTAL, so the list view's
+  // Total column keeps working without being touched, and the four description columns
+  // carry the first item so a reader that predates line items still sees a real row.
+  const items = input.lineItems;
+  const first = items[0];
+  const subtotal = items.reduce((sum, item) => sum + item.baseAmount, 0);
+
+  const result = await client.query<QuotationDbRow>(
+    `INSERT INTO quotations (
+       quotation_no, quotation_date, case_id, order_number,
+       customer_name, customer_address, customer_city, customer_state,
+       customer_pincode, customer_phone, customer_email,
+       service_description, product_description, model_no, serial_no,
+       base_amount, sgst_percent, cgst_percent, created_by, kind
+     ) VALUES (
+       $1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+       $12, $13, $14, $15, $16, $17, $18, $19, $20
+     )
+     RETURNING ${QUOTATION_COLUMNS}`,
+    [
+      quotationNo,
+      input.quotationDate,
+      input.caseId,
+      input.orderNumber,
+      input.customerName,
+      input.customerAddress,
+      input.customerCity,
+      input.customerState,
+      input.customerPincode,
+      input.customerPhone,
+      input.customerEmail,
+      first?.serviceDescription ?? "",
+      first?.productDescription ?? "",
+      first?.modelNo ?? "",
+      first?.serialNo ?? "",
+      subtotal,
+      input.sgstPercent,
+      input.cgstPercent,
+      input.createdBy,
+      input.kind,
+    ],
+  );
+
+  const quotationId = result.rows[0]!.id;
+  for (const [index, item] of items.entries()) {
+    await client.query(
+      `INSERT INTO quotation_line_items (
+         quotation_id, position, service_description, product_description,
+         model_no, serial_no, base_amount
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        quotationId,
+        index,
+        item.serviceDescription,
+        item.productDescription,
+        item.modelNo,
+        item.serialNo,
+        item.baseAmount,
+      ],
+    );
+  }
+
+  // Straight from the input: the rows were just written in this transaction, so a
+  // re-read would only be a round trip to learn what we already know.
+  return { ...mapQuotation(result.rows[0]!), lineItems: items };
 }
 
 /**

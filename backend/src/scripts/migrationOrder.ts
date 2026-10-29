@@ -79,6 +79,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyBodEodCustomRowsMigration", // 069 BOD/EOD rows admins add for new statuses
   "applyDeliveryChallansMigration", // 070 delivery challans: branch letterheads, per-branch per-FY numbers
   "applyQuotationKindMigration", // 071 Visit vs Part quotations, and the Visit QEV number series
+  "applyQuotationDraftsMigration", // 072 quotations raised from the report, waiting for approval
 ];
 
 /**

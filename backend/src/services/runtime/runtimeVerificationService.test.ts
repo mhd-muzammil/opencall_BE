@@ -43,6 +43,7 @@ const FEATURE_TABLES = [
   "quotations",
   "quotation_sequences",
   "quotation_visit_sequences",
+  "quotation_drafts",
   "region_eod_state",
   "region_productivity_snapshot",
   "flex_raw_records",
@@ -179,6 +180,23 @@ describe("verifyRuntimeSchema", () => {
     expect(result.degraded).toBe(true);
     expect(result.ok).toBe(true);
     expect(result.missingTables).toEqual([]);
+  });
+
+  /**
+   * 072 sits at the end of the boot runner, behind every migration that can stop it, so it is
+   * the likeliest to be missing after a redeploy. The Waiting Approval box is what goes.
+   */
+  it("reports an unapplied 072 as degraded WITHOUT failing readiness", async () => {
+    mocks.query.mockResolvedValue({
+      rows: schemaRows([...CORE_TABLES, ...FEATURE_TABLES].filter((table) => table !== "quotation_drafts")),
+    });
+
+    const result = await verifyRuntimeSchema();
+
+    expect(result.missingFeatureTables).toEqual(["quotation_drafts"]);
+    expect(result.missingFeatureColumns).toEqual([]);
+    expect(result.degraded).toBe(true);
+    expect(result.ok).toBe(true);
   });
 
   it("does not double-report a column on a table that is itself missing", async () => {

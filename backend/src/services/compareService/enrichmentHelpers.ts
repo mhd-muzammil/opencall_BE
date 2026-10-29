@@ -17,7 +17,7 @@ function isReadonlyMap<TValue>(
 }
 
 /** Uppercased, collapsed WO OTC code (e.g. "05F - Comp Field Install" -> "05F-COMP FIELD INSTALL"). */
-function normalizeWoOtcCode(value: string | null | undefined): string {
+export function normalizeWoOtcCode(value: string | null | undefined): string {
   return String(value ?? "")
     .trim()
     .toUpperCase()

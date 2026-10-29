@@ -7,6 +7,9 @@ import {
   setQuotationPaymentController,
   getQuotationController,
   listQuotationsController,
+  listQuotationDraftsController,
+  approveQuotationDraftController,
+  removeQuotationDraftController,
 } from "../controllers/quotationController.js";
 import { requirePrincipal } from "../middlewares/authMiddleware.js";
 
@@ -18,6 +21,12 @@ import { requirePrincipal } from "../middlewares/authMiddleware.js";
 export const quotationRouter = Router();
 
 quotationRouter.get("/autofill", requirePrincipal, autofillQuotationController);
+// Quotations the report raised, waiting for approval. Declared before /:id, which would
+// otherwise read "drafts" as a quotation id.
+quotationRouter.get("/drafts", requirePrincipal, listQuotationDraftsController);
+// Approving is filling in the amount: same body as create, and it takes the next number.
+quotationRouter.post("/drafts/:id/approve", requirePrincipal, approveQuotationDraftController);
+quotationRouter.post("/drafts/:id/remove", requirePrincipal, removeQuotationDraftController);
 quotationRouter.get("/", requirePrincipal, listQuotationsController);
 quotationRouter.get("/:id", requirePrincipal, getQuotationController);
 quotationRouter.post("/", requirePrincipal, createQuotationController);

@@ -98,6 +98,9 @@ const FEATURE_TABLES = [
   "quotation_sequences",
   // 071 (applyQuotationKindMigration) — a Visit quotation cannot be numbered without it.
   "quotation_visit_sequences",
+  // 072 (applyQuotationDraftsMigration) — the Waiting Approval box and the report's auto
+  // quotations need it; without it the box shows a dash and nothing else breaks.
+  "quotation_drafts",
   // migrate:region-eod — the Final-EOD endpoints 500 without these.
   "region_eod_state",
   "region_productivity_snapshot",

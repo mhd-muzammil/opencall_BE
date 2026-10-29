@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Request, RequestHandler } from "express";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { badRequest, forbidden, notFound, unprocessableEntity } from "../utils/httpError.js";
+import { badRequest, conflict, forbidden, notFound, unprocessableEntity } from "../utils/httpError.js";
 import { findAllowedRegionsForUser } from "../services/rbac/regionAccessService.js";
 import { sendComposedEmail } from "../services/inboundEmail/composeService.js";
 import {
@@ -18,6 +18,11 @@ import {
   setQuotationPayment,
   type QuotationKind,
 } from "../repositories/quotationRepository.js";
+import {
+  approveQuotationDraft,
+  listQuotationDrafts,
+  removeQuotationDraft,
+} from "../repositories/quotationDraftRepository.js";
 import { autofillQuotation } from "../services/quotations/quotationAutofillService.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
 
@@ -445,5 +450,142 @@ export const setQuotationPaymentController: RequestHandler = asyncHandler(
     });
 
     response.json({ data: updated });
+  },
+);
+
+// --- Waiting for approval -----------------------------------------------------------------
+//
+// Quotations the OpenCall report raised on its own (quotationDraftDetector): a 01-Trade work
+// order at Visit Estimate waits as a Visit quotation, one at Visit Quote To Customer as a Part
+// one. They have no number and no amount until somebody approves them here.
+
+/** A waiting quotation's id is a UUID; anything else would reach Postgres as a cast error. */
+const DRAFT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function readDraftId(request: Request): string {
+  const id = String(request.params.id ?? "").trim();
+  if (!DRAFT_ID.test(id)) throw notFound("Waiting quotation not found", { id });
+  return id;
+}
+
+/** Why a second Approve or Remove did nothing, in the words of the list it came from. */
+function decidedMessage(draft: { ticketId: string; status: string }): string {
+  return draft.status === "APPROVED"
+    ? `The quotation for ${draft.ticketId} has already been approved.`
+    : `The quotation for ${draft.ticketId} has already been removed.`;
+}
+
+export const listQuotationDraftsController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    requireQuotationAccess(request);
+    const search = String(request.query.search ?? "").trim();
+    const kind = String(request.query.kind ?? "").trim().toUpperCase();
+    if (kind && kind !== "PART" && kind !== "VISIT") {
+      throw badRequest("kind must be PART or VISIT");
+    }
+    const result = await listQuotationDrafts({
+      search,
+      ...(kind ? { kind: kind as QuotationKind } : {}),
+    });
+    response.json({ data: result });
+  },
+);
+
+/**
+ * Approve a waiting quotation: the body is the quotation form, the same as creating one, and
+ * the quotation it raises takes the next number of the waiting one's kind. The kind in the
+ * body is ignored — a Visit Estimate is approved as a Visit quotation whatever the form says.
+ */
+export const approveQuotationDraftController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const actor = requireQuotationAccess(request);
+    const id = readDraftId(request);
+    const { rest, items } = readQuotationBody(request.body);
+
+    const result = await approveQuotationDraft(id, {
+      ...rest,
+      lineItems: items,
+      createdBy: actor,
+    });
+    if (result.outcome === "NOT_FOUND") {
+      throw notFound("Waiting quotation not found", { id });
+    }
+    if (result.outcome === "DECIDED") {
+      throw conflict(decidedMessage(result.draft));
+    }
+    if (result.outcome === "ALREADY_RAISED") {
+      throw conflict(
+        `${result.draft.ticketId} already has ${result.quotationNo}. Remove this one instead.`,
+      );
+    }
+
+    const { quotation } = result;
+    recordActivity({
+      eventType: "UPLOAD_CREATED",
+      actorEmailFallback: actor,
+      ...(request.currentUser
+        ? {
+            actor: {
+              id: request.currentUser.id,
+              email: request.currentUser.email,
+              role: request.currentUser.role,
+            },
+            regionId: request.currentUser.regionId ?? null,
+          }
+        : {}),
+      targetType: "quotation",
+      targetId: quotation.id,
+      metadata: {
+        kind: "QUOTATION_CREATED",
+        quotationNo: quotation.quotationNo,
+        caseId: quotation.caseId,
+        approvedFrom: id,
+      },
+      request,
+    });
+
+    response.status(201).json({ data: quotation });
+  },
+);
+
+/** Take a waiting quotation off the list. It stays recorded, so no report raises it again. */
+export const removeQuotationDraftController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const actor = requireQuotationAccess(request);
+    const id = readDraftId(request);
+
+    const result = await removeQuotationDraft(id, actor);
+    if (result.outcome === "NOT_FOUND") {
+      throw notFound("Waiting quotation not found", { id });
+    }
+    if (result.outcome === "DECIDED") {
+      throw conflict(decidedMessage(result.draft));
+    }
+
+    recordActivity({
+      eventType: "UPLOAD_CREATED",
+      actorEmailFallback: actor,
+      ...(request.currentUser
+        ? {
+            actor: {
+              id: request.currentUser.id,
+              email: request.currentUser.email,
+              role: request.currentUser.role,
+            },
+            regionId: request.currentUser.regionId ?? null,
+          }
+        : {}),
+      targetType: "quotation",
+      targetId: result.draft.id,
+      metadata: {
+        kind: "QUOTATION_DRAFT_REMOVED",
+        quotationKind: result.draft.kind,
+        ticketId: result.draft.ticketId,
+        caseId: result.draft.caseId,
+      },
+      request,
+    });
+
+    response.json({ data: result.draft });
   },
 );
