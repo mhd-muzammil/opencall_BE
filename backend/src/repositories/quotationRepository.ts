@@ -695,6 +695,27 @@ export async function findQuotationById(id: string): Promise<Quotation | null> {
 }
 
 /**
+ * The work orders (and case ids) of these quotations, newest quotation first, for the mail
+ * ingest: a reply names the quotation it answers in its thread headers, and the quotation
+ * knows the job the reply is about. Ids are UUIDs whose shape the caller has checked.
+ */
+export async function findQuotationWorkOrders(
+  ids: readonly string[],
+): Promise<Array<{ ticketId: string; caseId: string }>> {
+  if (ids.length === 0) return [];
+  const result = await query<{ order_number: string; case_id: string | null }>(
+    `SELECT order_number, case_id FROM quotations
+      WHERE id = ANY($1::uuid[]) AND btrim(order_number) <> ''
+      ORDER BY created_at DESC`,
+    [ids],
+  );
+  return result.rows.map((row) => ({
+    ticketId: row.order_number.trim(),
+    caseId: (row.case_id ?? "").trim(),
+  }));
+}
+
+/**
  * One quotation's work location (an ASP code such as "ASPS01511"), by the very column the
  * list counts branches with — so the branch a Visit mail is copied to is the branch the
  * page's location cards put the quotation under. Empty when there is no WO or Flex never

@@ -7,6 +7,7 @@ import {
 import { listActiveMailboxes } from "../../repositories/inboundEmailRepository.js";
 import { mailboxPassword } from "../inboundEmail/mailboxCredentials.js";
 import { listSentFolders } from "../inboundEmail/sentFolderScanner.js";
+import { quotationOfMessageId } from "./quotationMessageId.js";
 
 /**
  * Ask the mailbox whether a quotation was ever actually sent.
@@ -70,24 +71,6 @@ const CREATED_SLACK_MS = 5 * 60_000;
 /** A quotation number as OpenCall writes it, Part (QEN) or Visit (QEV). */
 const QUOTATION_NO = /RTPL\/\d{2}-\d{2}\/QE[NV]\/\d+/gi;
 
-/**
- * The Message-ID a send from here gives its mail: `<quotation.<id>.<time>@renderways.in>`.
- * Built by quotationMessageId, read back by pickSentMail.
- */
-const OWNER_IN_MESSAGE_ID = /^<?quotation\.([0-9a-f-]{36})\./i;
-
-/**
- * A Message-ID naming the quotation it carries.
- *
- * The Visit mail's subject is the trade desk's ("WO-036344461-5166159539- Trade") and names
- * no quotation number, so the subject can no longer tell a Visit's mail from the Part's on
- * the same job. The Message-ID can: the customer never sees it, the mail server keeps it,
- * and the copy filed in Sent is the same bytes as the mail that went out.
- */
-export function quotationMessageId(quotationId: string, now = Date.now()): string {
-  return `<quotation.${quotationId.toLowerCase()}.${now}@renderways.in>`;
-}
-
 export interface SendVerifyResult {
   checked: number;
   foundSent: number;
@@ -126,9 +109,7 @@ export function pickSentMail(
   const ownId = (quotation.id ?? "").toLowerCase();
   for (const mail of [...candidates].sort((a, b) => a.uid - b.uid)) {
     if (!mail.date || mail.date.getTime() < notBefore) continue;
-    // Trimmed: the id is long enough that the header is folded onto a second line, and a
-    // reader may hand it back with the fold's leading space.
-    const owner = OWNER_IN_MESSAGE_ID.exec((mail.messageId ?? "").trim())?.[1]?.toLowerCase();
+    const owner = quotationOfMessageId(mail.messageId);
     if (owner && owner !== ownId) continue;
     const named = (mail.subject.match(QUOTATION_NO) ?? []).map((n) => n.toUpperCase());
     if (named.length > 0 && !named.includes(own)) continue;

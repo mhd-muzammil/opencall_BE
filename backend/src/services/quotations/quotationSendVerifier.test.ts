@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 // what these tests are about.
 vi.mock("../../config/database.js", () => ({ query: vi.fn(), pool: { connect: vi.fn() } }));
 
-import { pickSentMail, quotationMessageId, type SentMailCandidate } from "./quotationSendVerifier.js";
+import { pickSentMail, type SentMailCandidate } from "./quotationSendVerifier.js";
+import { quotationMessageId } from "./quotationMessageId.js";
 
 /**
  * Which mail in the Sent folder carried a quotation out. The customer now commonly has two

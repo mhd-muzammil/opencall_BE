@@ -13,7 +13,7 @@ import {
   deskMailText,
 } from "../services/quotations/tradeDeskMail.js";
 import { deskMailRecipients } from "../services/quotations/tradeDeskRecipients.js";
-import { quotationMessageId } from "../services/quotations/quotationSendVerifier.js";
+import { quotationMessageId } from "../services/quotations/quotationMessageId.js";
 import {
   createQuotation,
   findQuotationById,
