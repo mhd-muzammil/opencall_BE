@@ -94,6 +94,8 @@ interface QuotationDraftDbRow {
   decided_at: string | null;
   decided_by: string | null;
   quotation_id: string | null;
+  /** The list only: where the newest report places its work order now. */
+  current_location?: string | null;
 }
 
 const DRAFT_COLUMNS = `
@@ -125,7 +127,9 @@ function mapDraft(r: QuotationDraftDbRow): QuotationDraft {
     ticketId: r.ticket_id,
     caseId: r.case_id,
     flexStatus: r.flex_status,
-    workLocation: r.work_location,
+    // Where the report places the work order now, when the list asked; else where it was
+    // when the quotation was raised. A work order moved to another branch is counted there.
+    workLocation: r.current_location || r.work_location,
     customerName: r.customer_name,
     customerAddress: r.customer_address,
     customerCity: r.customer_city,
@@ -219,8 +223,12 @@ export async function insertQuotationDraft(input: QuotationDraftInput): Promise<
 export interface CurrentCallsSummary {
   /** Work orders the Records page shows at the status (both statuses when no kind is asked). */
   onReport: number;
+  /** The same, by the work location the report gives each (an ASP code, e.g. "ASPS01461"). */
+  onReportByLocation: Record<string, number>;
   notWaiting: Array<{
     ticketId: string;
+    /** Its work location on the report, so the page can split this list by branch too. */
+    workLocation: string;
     /**
      * QUOTED: it already has a quotation of the kind — raised by hand, or by approving it.
      * REMOVED: taken off the box with Remove.
@@ -273,7 +281,7 @@ const CURRENT_CALLS = `
   ),
   latest_rows AS (
     SELECT r.id, r.serial_no, r.ticket_id, r.flex_status, r.wo_otc_code, r.change_type,
-           r.same_day_closed, r.previous_flex_status,
+           r.same_day_closed, r.previous_flex_status, r.work_location,
            UPPER(btrim(r.ticket_id)) AS wo_key,
            UPPER(btrim(COALESCE(r.case_id, ''))) AS case_key
       FROM daily_call_plan_report_rows r
@@ -302,7 +310,8 @@ const CURRENT_CALLS = `
   ),
   current_calls AS (
     SELECT s.kind, regexp_replace(UPPER(lr.ticket_id), '[^A-Z0-9]', '', 'g') AS ticket_key,
-           MIN(btrim(lr.ticket_id)) AS ticket_id
+           MIN(btrim(lr.ticket_id)) AS ticket_id,
+           MIN(UPPER(btrim(COALESCE(lr.work_location, '')))) AS work_location
       FROM latest_rows lr
       CROSS JOIN latest l
       CROSS JOIN LATERAL (
@@ -334,9 +343,14 @@ const CURRENT_CALLS = `
 
 /** Every work order the Records page shows at the status, and why it is or is not waiting. */
 async function summarizeCurrentCalls(kind: QuotationKind | undefined): Promise<CurrentCallsSummary> {
-  const result = await query<{ ticket_id: string; quoted: string[] | null; draft: string | null }>(
+  const result = await query<{
+    ticket_id: string;
+    work_location: string;
+    quoted: string[] | null;
+    draft: string | null;
+  }>(
     `WITH ${CURRENT_CALLS}
-     SELECT cc.ticket_id,
+     SELECT cc.ticket_id, cc.work_location,
             (SELECT array_agg(q.quotation_no ORDER BY q.created_at)
                FROM quotations q
               WHERE q.kind = cc.kind
@@ -350,19 +364,22 @@ async function summarizeCurrentCalls(kind: QuotationKind | undefined): Promise<C
     kind ? [kind] : [],
   );
   const notWaiting: CurrentCallsSummary["notWaiting"] = [];
+  const onReportByLocation: Record<string, number> = {};
   for (const row of result.rows) {
+    const workLocation = row.work_location ?? "";
+    onReportByLocation[workLocation] = (onReportByLocation[workLocation] ?? 0) + 1;
     const quotationNos = row.quoted ?? [];
     // In the order the box decides: a quotation of the kind keeps it out whatever its waiting
     // row says, exactly as the list's own NOT EXISTS does.
     if (quotationNos.length > 0) {
-      notWaiting.push({ ticketId: row.ticket_id, reason: "QUOTED", quotationNos });
+      notWaiting.push({ ticketId: row.ticket_id, workLocation, reason: "QUOTED", quotationNos });
     } else if (row.draft === "REMOVED") {
-      notWaiting.push({ ticketId: row.ticket_id, reason: "REMOVED", quotationNos: [] });
+      notWaiting.push({ ticketId: row.ticket_id, workLocation, reason: "REMOVED", quotationNos: [] });
     } else if (row.draft !== "WAITING") {
-      notWaiting.push({ ticketId: row.ticket_id, reason: "NOT_RAISED", quotationNos: [] });
+      notWaiting.push({ ticketId: row.ticket_id, workLocation, reason: "NOT_RAISED", quotationNos: [] });
     }
   }
-  return { onReport: result.rows.length, notWaiting };
+  return { onReport: result.rows.length, onReportByLocation, notWaiting };
 }
 
 /**
@@ -408,7 +425,10 @@ export async function listQuotationDrafts(input: {
   );
   const rowsResult = await query<QuotationDraftDbRow>(
     `WITH ${CURRENT_CALLS}
-     SELECT ${DRAFT_COLUMNS} FROM quotation_drafts d ${where}
+     SELECT ${DRAFT_COLUMNS},
+            (SELECT cc.work_location FROM current_calls cc
+              WHERE cc.kind = d.kind AND cc.ticket_key = d.ticket_key) AS current_location
+       FROM quotation_drafts d ${where}
      ORDER BY d.created_at DESC, d.ticket_id
      LIMIT ${LIST_LIMIT}`,
     params,

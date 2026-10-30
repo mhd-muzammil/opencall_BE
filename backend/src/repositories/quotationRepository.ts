@@ -73,6 +73,12 @@ export interface Quotation {
   paymentSignalReasons: string;
   /** Every priced row, in entry order. Never empty — a pre-053 quotation has exactly one. */
   lineItems: QuotationLineItem[];
+  /**
+   * The ASP work location its work order is worked from (e.g. "ASPS01461"), read from Flex at
+   * list time so the page can count quotations by branch. Only the list fills it; empty
+   * elsewhere, and for a quotation with no WO or one Flex never listed.
+   */
+  workLocation: string;
 }
 
 export interface CreateQuotationInput {
@@ -146,6 +152,8 @@ interface QuotationDbRow {
   cgst_percent: string;
   created_by: string;
   created_at: string;
+  /** Selected by the list only (WORK_LOCATION_COLUMN). */
+  work_location?: string | null;
 }
 
 interface LineItemDbRow {
@@ -253,6 +261,7 @@ function mapQuotation(r: QuotationDbRow): Quotation {
     paymentSignalReasons: r.payment_signal_reasons ?? "",
     // Filled by attachLineItems; never left empty by the time a caller sees it.
     lineItems: [],
+    workLocation: r.work_location ?? "",
   };
 }
 
@@ -586,6 +595,24 @@ export async function setQuotationPayment(input: {
   return withItems ?? null;
 }
 
+/**
+ * A quotation's work location, for the page's counts by branch: the newest Flex WIP row for its
+ * WO, found through the indexed normalized_ticket_id the way the waiting quotations' details
+ * are. Empty when the quotation has no WO, or Flex never listed it.
+ */
+const WORK_LOCATION_COLUMN = `
+  CASE
+    WHEN regexp_replace(UPPER(quotations.order_number), '[^A-Z0-9]', '', 'g') = '' THEN ''
+    ELSE COALESCE((
+      SELECT btrim(w.work_location)
+        FROM flex_wip_records w
+       WHERE w.normalized_ticket_id = regexp_replace(UPPER(quotations.order_number), '[^A-Z0-9]', '', 'g')
+       ORDER BY w.created_at DESC
+       LIMIT 1
+    ), '')
+  END AS work_location
+`;
+
 export interface ListQuotationsResult {
   items: Quotation[];
   total: number;
@@ -641,7 +668,7 @@ export async function listQuotations(input: {
   const total = Number(countResult.rows[0]?.count ?? 0);
 
   const rowsResult = await query<QuotationDbRow>(
-    `SELECT ${QUOTATION_COLUMNS} FROM quotations ${where}
+    `SELECT ${QUOTATION_COLUMNS}, ${WORK_LOCATION_COLUMN} FROM quotations ${where}
      ORDER BY created_at DESC
      LIMIT ${perPage} OFFSET ${offset}`,
     params,

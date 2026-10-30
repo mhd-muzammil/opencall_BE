@@ -338,6 +338,19 @@ describe("listing quotations", () => {
     expect(rows![1]).toEqual(["%rajiv%", "VISIT"]);
   });
 
+  it("gives each listed quotation its work order's location, from Flex, by the indexed key", async () => {
+    routeQuery([{ ...VISIT_ROW, work_location: "ASPS01511" }, { ...VISIT_ROW, id: "q-2", work_location: null }]);
+
+    const answer = await call(listQuotationsController, { ...SUPER_ADMIN, query: { kind: "VISIT" } });
+
+    expect(answer.data.items.map((q: { workLocation: string }) => q.workLocation)).toEqual(["ASPS01511", ""]);
+    const rows = squash(mocks.query.mock.calls[1]![0]);
+    expect(rows).toContain("FROM flex_wip_records w WHERE w.normalized_ticket_id = regexp_replace(UPPER(quotations.order_number)");
+    expect(rows).toContain("END AS work_location FROM quotations");
+    // Only the rows ask for it; the count is the count.
+    expect(squash(mocks.query.mock.calls[0]![0])).not.toContain("flex_wip_records");
+  });
+
   it("lists both kinds when no kind is named, as every older client asks", async () => {
     routeQuery([VISIT_ROW, { ...VISIT_ROW, id: "q-1", kind: null, quotation_no: "RTPL/26-27/QEN/80" }]);
 

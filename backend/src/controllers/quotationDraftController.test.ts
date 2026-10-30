@@ -171,7 +171,12 @@ async function fakeQuery(sql: string, params: unknown[] = []) {
           const quoted = quotations
             .filter((q) => q.kind === d.kind && key(q.order_number) === d.ticket_key)
             .map((q) => q.quotation_no);
-          return { ticket_id: d.ticket_id, quoted: quoted.length ? quoted : null, draft: d.status };
+          return {
+            ticket_id: d.ticket_id,
+            work_location: d.work_location,
+            quoted: quoted.length ? quoted : null,
+            draft: d.status,
+          };
         }),
     };
   }
@@ -281,7 +286,12 @@ describe("listing the quotations waiting for approval", () => {
 
   it("says how the report's count at the status splits, so the box can be checked against it", async () => {
     drafts.push(
-      draftRow({ id: "0b6f3b0e-1d2c-4c6e-9a51-000000000004", ticket_key: "WO035461827", ticket_id: "WO-035461827" }),
+      draftRow({
+        id: "0b6f3b0e-1d2c-4c6e-9a51-000000000004",
+        ticket_key: "WO035461827",
+        ticket_id: "WO-035461827",
+        work_location: "ASPS01461",
+      }),
       draftRow({ id: "0b6f3b0e-1d2c-4c6e-9a51-000000000005", ticket_key: "WO035887044", ticket_id: "WO-035887044", status: "REMOVED" }),
     );
     // Raised by hand before Waiting Approval existed.
@@ -292,9 +302,11 @@ describe("listing the quotations waiting for approval", () => {
     expect(answer.data.total).toBe(1);
     expect(answer.data.report).toEqual({
       onReport: 3,
+      // By branch too, so the page can split the count by location card.
+      onReportByLocation: { VELLORE: 2, ASPS01461: 1 },
       notWaiting: [
-        { ticketId: "WO-035461827", reason: "QUOTED", quotationNos: ["RTPL/26-27/QEV/48"] },
-        { ticketId: "WO-035887044", reason: "REMOVED", quotationNos: [] },
+        { ticketId: "WO-035461827", workLocation: "ASPS01461", reason: "QUOTED", quotationNos: ["RTPL/26-27/QEV/48"] },
+        { ticketId: "WO-035887044", workLocation: "VELLORE", reason: "REMOVED", quotationNos: [] },
       ],
     });
     // 3 on the report = 1 waiting + 2 accounted for.
