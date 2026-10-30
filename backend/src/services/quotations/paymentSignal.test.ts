@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { detectPaymentSignal } from "./paymentSignal.js";
+import { visitQuotationMailText } from "./visitQuotationMail.js";
 
 const read = (body: string, hasImage = false) =>
   detectPaymentSignal({ subject: "", body, hasImage });
@@ -98,5 +99,33 @@ describe("detectPaymentSignal", () => {
       hasImage: false,
     });
     expect(signal.level).toBe("STRONG");
+  });
+});
+
+/**
+ * A reply quotes the mail it answers, and the Visit quotation mail prints our own account
+ * number — fourteen digits, the very shape of a transaction reference.
+ */
+describe("detectPaymentSignal, on a reply quoting the Visit quotation mail", () => {
+  const quoted = (reply: string) => {
+    const original = visitQuotationMailText({ orderNumber: "WO-036344461", caseId: "5166159539" });
+    const quotedLines = original.split("\n").map((line) => `> ${line}`);
+    return [reply, "", "On Fri, 30 Oct 2026, trade@renderways.in wrote:", ...quotedLines].join("\n");
+  };
+
+  it("reads nothing into an ordinary acknowledgement", () => {
+    expect(read(quoted("ok noted, thanks")).level).toBe("NONE");
+  });
+
+  it("does not take our account number as proof of a bare claim", () => {
+    expect(read(quoted("payment done")).level).toBe("WEAK");
+  });
+
+  it("still takes the customer's own reference", () => {
+    expect(read(quoted("payment done, UTR 402318765512")).level).toBe("STRONG");
+  });
+
+  it("still takes a screenshot", () => {
+    expect(read(quoted("payment done"), true).level).toBe("STRONG");
   });
 });

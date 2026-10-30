@@ -10,6 +10,16 @@ import {
   quotationSubject,
 } from "../services/quotations/quotationMailer.js";
 import {
+  VISIT_MAIL_FROM_MAILBOX,
+  visitQuotationAttachmentName,
+  visitQuotationInlineImages,
+  visitQuotationMailHtml,
+  visitQuotationMailText,
+  visitQuotationSubject,
+} from "../services/quotations/visitQuotationMail.js";
+import { visitMailRecipients } from "../services/quotations/visitQuotationRecipients.js";
+import { quotationMessageId } from "../services/quotations/quotationSendVerifier.js";
+import {
   createQuotation,
   findQuotationById,
   listQuotations,
@@ -304,8 +314,74 @@ export const updateQuotationController: RequestHandler = asyncHandler(
 const sendSchema = z.object({
   regionCode: z.string().trim().min(1, "Choose which mailbox to send from"),
   to: z.string().trim().max(300).optional().default(""),
+  // Visit only: who is copied, as the sender left it in the dialog. Absent — a page from
+  // before the field existed — means the desk's own list (visitMailRecipients).
+  cc: z.string().trim().max(2000).optional(),
   note: z.string().trim().max(2000).optional().default(""),
 });
+
+/**
+ * The estimate the sender's browser attached: the Visit sheet as a PDF.
+ *
+ * Required. The Visit mail says "Kindly make the payment as per attached estimate", and the
+ * amount is in the estimate and nowhere else — sent without it, the customer is asked to pay
+ * a figure nobody gave them. A page loaded before this existed attaches nothing, and is told
+ * to reload rather than that mail going out. Recognised by its content, not by the name or
+ * type the browser claims for it.
+ */
+function readEstimatePdf(request: Request): Buffer {
+  const files = Array.isArray(request.files) ? request.files : [];
+  const pdf = files.find((file) => file.buffer.subarray(0, 5).toString("latin1") === "%PDF-");
+  if (!pdf) {
+    throw unprocessableEntity(
+      "The quotation PDF did not come with this send. Reload the page (Ctrl+Shift+R) and send again.",
+    );
+  }
+  return pdf.buffer;
+}
+
+/**
+ * What sending this quotation will put on the wire: the subject, who is copied, what is
+ * attached. The Send dialog shows it before anything goes, and the send itself asks the same
+ * functions, so the dialog cannot promise one mail and the server send another.
+ */
+export const quotationSendDefaultsController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    requireQuotationAccess(request);
+    const id = String(request.params.id ?? "").trim();
+    if (!id) throw badRequest("Missing quotation id");
+
+    const quotation = await findQuotationById(id);
+    if (!quotation) throw notFound("Quotation not found", { id });
+
+    if (quotation.kind !== "VISIT") {
+      response.json({
+        data: {
+          kind: quotation.kind,
+          // The sender still chooses the mailbox for a Part quotation.
+          from: null,
+          subject: quotationSubject(quotation),
+          cc: [],
+          branch: null,
+          attachmentName: null,
+        },
+      });
+      return;
+    }
+
+    const { from, branch, cc } = await visitMailRecipients(quotation.id);
+    response.json({
+      data: {
+        kind: quotation.kind,
+        from,
+        subject: visitQuotationSubject(quotation),
+        cc,
+        branch,
+        attachmentName: visitQuotationAttachmentName(quotation),
+      },
+    });
+  },
+);
 
 export const sendQuotationController: RequestHandler = asyncHandler(
   async (request, response) => {
@@ -339,26 +415,56 @@ export const sendQuotationController: RequestHandler = asyncHandler(
       regions === null ? null : regions.map((r) => r.name.trim().toUpperCase());
 
     const note = parsed.data.note.trim();
-    const text = note
-      ? `${note}\n\n${quotationMailText(quotation)}`
-      : quotationMailText(quotation);
-    const html = note
+    const noteHtml = note
       ? `<p style="font-family:Arial,Helvetica,sans-serif;font-size:14px;">${note
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;")
-          .replace(/\n/g, "<br>")}</p>${quotationMailHtml(quotation)}`
-      : quotationMailHtml(quotation);
+          .replace(/\n/g, "<br>")}</p>`
+      : "";
+    const withNote = (text: string) => (note ? `${note}\n\n${text}` : text);
+
+    // A Visit quotation goes out as the trade desk's own mail, from the trade desk whatever
+    // mailbox the request names, with the sheet attached; a Part quotation keeps the mail and
+    // the mailbox choice it has always had until its format is given. The sheet is asked for
+    // first, so a send without it stops before anything else is looked up.
+    const estimate = quotation.kind === "VISIT" ? readEstimatePdf(request) : null;
+    const mail = estimate
+      ? {
+          regionCode: VISIT_MAIL_FROM_MAILBOX,
+          subject: visitQuotationSubject(quotation),
+          text: withNote(visitQuotationMailText(quotation)),
+          html: `${noteHtml}${visitQuotationMailHtml(quotation)}`,
+          cc: parsed.data.cc ?? (await visitMailRecipients(quotation.id)).cc.join(", "),
+          attachments: [
+            {
+              filename: visitQuotationAttachmentName(quotation),
+              mimeType: "application/pdf",
+              content: estimate,
+            },
+          ],
+          inlineImages: visitQuotationInlineImages(),
+          messageId: quotationMessageId(quotation.id),
+        }
+      : {
+          regionCode: parsed.data.regionCode,
+          subject: quotationSubject(quotation),
+          text: withNote(quotationMailText(quotation)),
+          html: `${noteHtml}${quotationMailHtml(quotation)}`,
+          cc: "",
+          attachments: [],
+        };
 
     await sendComposedEmail({
-      regionCode: parsed.data.regionCode,
+      regionCode: mail.regionCode,
       to,
-      cc: "",
-      subject: quotationSubject(quotation),
-      body: text,
-      bodyHtml: html,
+      cc: mail.cc,
+      subject: mail.subject,
+      body: mail.text,
+      bodyHtml: mail.html,
       inReplyToId: null,
-      attachments: [],
+      attachments: mail.attachments,
+      ...("inlineImages" in mail ? { inlineImages: mail.inlineImages, messageId: mail.messageId } : {}),
       allowedRegionCodes,
       sentByUserId: request.currentUser?.id ?? "",
     });
@@ -385,6 +491,7 @@ export const sendQuotationController: RequestHandler = asyncHandler(
         kind: "QUOTATION_SENT",
         quotationNo: sent.quotationNo,
         to,
+        ...(mail.cc ? { cc: mail.cc } : {}),
         sendCount: sent.sendCount,
       },
       request,

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 // what these tests are about.
 vi.mock("../../config/database.js", () => ({ query: vi.fn(), pool: { connect: vi.fn() } }));
 
-import { pickSentMail, type SentMailCandidate } from "./quotationSendVerifier.js";
+import { pickSentMail, quotationMessageId, type SentMailCandidate } from "./quotationSendVerifier.js";
 
 /**
  * Which mail in the Sent folder carried a quotation out. The customer now commonly has two
@@ -58,5 +58,54 @@ describe("pickSentMail", () => {
 
   it("finds nothing in a mail with no date", () => {
     expect(pickSentMail([{ uid: 18, date: null, to: "", subject: "Quotation RTPL/26-27/QEN/81" }], PART)).toBeNull();
+  });
+});
+
+describe("pickSentMail, for mail sent from here", () => {
+  const PART_ID = "4f9c2d0e-8a1b-4c3d-9e2f-0a1b2c3d4e5f";
+  const VISIT_ID = "0b6f1e2d-3c4b-4a59-8e7f-6a5b4c3d2e1f";
+  const PART_CHECK = { ...PART, id: PART_ID };
+  // The Visit mail's subject is the trade desk's and names no quotation number.
+  const visitSend = (uid: number, iso: string) => ({
+    ...mail(uid, iso, "WO-036344461-5166159539- Trade"),
+    messageId: `<quotation.${VISIT_ID}.1761800000000@renderways.in>`,
+  });
+
+  it("does not take a Visit re-sent after the Part was raised as the Part's send", () => {
+    expect(pickSentMail([visitSend(20, "2026-10-29T16:30:00+05:30")], PART_CHECK)).toBeNull();
+  });
+
+  it("takes the mail whose Message-ID names this quotation", () => {
+    const own = {
+      ...mail(21, "2026-10-29T16:40:00+05:30", "WO-036344461-5166159539- Trade"),
+      messageId: `<quotation.${PART_ID}.1761800000001@renderways.in>`,
+    };
+    expect(pickSentMail([visitSend(20, "2026-10-29T16:30:00+05:30"), own], PART_CHECK)?.date).toEqual(own.date);
+  });
+
+  it("still counts a hand-written mail with an ordinary Message-ID", () => {
+    const webmail = { ...mail(22, "2026-10-29T17:00:00+05:30", "Your estimate"), messageId: "<abc123@webmail.renderways.in>" };
+    expect(pickSentMail([visitSend(20, "2026-10-29T16:30:00+05:30"), webmail], PART_CHECK)?.date).toEqual(webmail.date);
+  });
+
+  it("reads a Message-ID handed back with its fold's leading space", () => {
+    const folded = { ...visitSend(24, "2026-10-29T16:30:00+05:30"), messageId: ` <quotation.${VISIT_ID}.1@renderways.in>` };
+    expect(pickSentMail([folded], PART_CHECK)).toBeNull();
+  });
+
+  it("reads the Message-ID whatever its case", () => {
+    const shouting = { ...visitSend(23, "2026-10-29T16:30:00+05:30"), messageId: `<QUOTATION.${VISIT_ID.toUpperCase()}.1@RENDERWAYS.IN>` };
+    expect(pickSentMail([shouting], PART_CHECK)).toBeNull();
+    expect(pickSentMail([shouting], { ...PART, id: VISIT_ID })?.date).toEqual(shouting.date);
+  });
+});
+
+describe("quotationMessageId", () => {
+  it("names the quotation in a form pickSentMail reads back", () => {
+    const id = quotationMessageId("4F9C2D0E-8A1B-4C3D-9E2F-0A1B2C3D4E5F", 1761800000000);
+    expect(id).toBe("<quotation.4f9c2d0e-8a1b-4c3d-9e2f-0a1b2c3d4e5f.1761800000000@renderways.in>");
+    const sent = { ...mail(30, "2026-10-29T16:30:00+05:30", "WO-1-2- Trade"), messageId: id };
+    expect(pickSentMail([sent], { ...PART, id: "4f9c2d0e-8a1b-4c3d-9e2f-0a1b2c3d4e5f" })).not.toBeNull();
+    expect(pickSentMail([sent], { ...PART, id: "0b6f1e2d-3c4b-4a59-8e7f-6a5b4c3d2e1f" })).toBeNull();
   });
 });

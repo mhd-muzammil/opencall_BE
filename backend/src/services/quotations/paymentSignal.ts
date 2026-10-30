@@ -17,6 +17,8 @@
  * between "paid ₹5,900" and "paid ₹590 of ₹5,900". The figure stays a human's problem.
  */
 
+import { VISIT_MAIL_ACCOUNT_NUMBER } from "./visitQuotationMail.js";
+
 export type PaymentSignalLevel = "STRONG" | "WEAK" | "NONE";
 
 export interface PaymentSignal {
@@ -50,6 +52,16 @@ const REFERENCE_PATTERNS: readonly RegExp[] = [
   /\b(utr|txn|transaction|ref(erence)?|order)\s*(no\.?|number|id)?\s*[:#-]?\s*([A-Z0-9]{8,})\b/i,
   /\b\d{12,}\b/,
 ];
+
+/**
+ * Our own account number, as the Visit quotation mail prints it.
+ *
+ * A reply quotes the mail it answers, so every reply to a Visit quotation carries these
+ * fourteen digits — exactly the shape of a transaction reference. Left in, an "ok noted"
+ * would read as quoting a reference, and a bare "payment done" would pass as proven. The
+ * customer pays INTO this number; it is never their proof of having paid.
+ */
+const OWN_ACCOUNT_NUMBERS: readonly string[] = [VISIT_MAIL_ACCOUNT_NUMBER];
 
 /** Said outright that they have NOT paid, or are asking how to. Never a payment. */
 const NEGATIONS: readonly RegExp[] = [
@@ -91,7 +103,11 @@ export function detectPaymentSignal(input: {
   const claimsPaid = PAID_PHRASES.some((pattern) => pattern.test(text));
   if (claimsPaid) reasons.push("says the payment is done");
 
-  const hasReference = REFERENCE_PATTERNS.some((pattern) => pattern.test(text));
+  const withoutOwnAccount = OWN_ACCOUNT_NUMBERS.reduce(
+    (remaining, account) => remaining.replace(new RegExp(`\\b${account}\\b`, "g"), " "),
+    text,
+  );
+  const hasReference = REFERENCE_PATTERNS.some((pattern) => pattern.test(withoutOwnAccount));
   if (hasReference) reasons.push("quotes a transaction reference");
 
   const mentionsRail = RAIL_WORDS.test(text);

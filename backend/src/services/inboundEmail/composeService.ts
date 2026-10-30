@@ -49,9 +49,32 @@ export interface ComposeRequest {
   bodyHtml?: string;
   inReplyToId: string | null;
   attachments: readonly ComposeAttachment[];
+  /**
+   * Pictures the HTML shows in place (`<img src="cid:…">`), such as a signature's logos.
+   *
+   * Kept apart from `attachments` on purpose: those are the documents the mail carries, each
+   * stored with the send record and counted against the size limit. These are the same few
+   * kilobytes on every mail of a kind, part of how it looks rather than what it carries.
+   */
+  inlineImages?: readonly ComposeInlineImage[];
+  /**
+   * The Message-ID to give the mail, when the caller needs to recognise it again later —
+   * a quotation's send names the quotation in it, which is how the Sent-folder check tells
+   * one quotation's mail from another's when the subject no longer says. Generated as usual
+   * when absent.
+   */
+  messageId?: string;
   /** Null when the caller is unrestricted (Super Admin); otherwise their region names. */
   allowedRegionCodes: readonly string[] | null;
   sentByUserId: string;
+}
+
+export interface ComposeInlineImage {
+  /** Referenced from the HTML as `cid:<cid>`. */
+  cid: string;
+  filename: string;
+  contentType: string;
+  content: Buffer;
 }
 
 export interface ComposeResult {
@@ -159,11 +182,21 @@ export async function sendComposedEmail(
     ...(inReplyToMessageId
       ? { inReplyTo: inReplyToMessageId, references: inReplyToMessageId }
       : {}),
-    attachments: request.attachments.map((file) => ({
-      filename: file.filename,
-      content: file.content,
-      contentType: file.mimeType,
-    })),
+    ...(request.messageId ? { messageId: request.messageId } : {}),
+    attachments: [
+      ...request.attachments.map((file) => ({
+        filename: file.filename,
+        content: file.content,
+        contentType: file.mimeType,
+      })),
+      ...(request.inlineImages ?? []).map((image) => ({
+        filename: image.filename,
+        content: image.content,
+        contentType: image.contentType,
+        cid: image.cid,
+        contentDisposition: "inline" as const,
+      })),
+    ],
   };
 
   try {
@@ -178,7 +211,9 @@ export async function sendComposedEmail(
     await markOutboundSent({
       id,
       status: "SENT",
-      messageId: String(info.messageId ?? ""),
+      // The id the caller set is the one on the mail itself. Sending a pre-built raw message,
+      // nodemailer reports an id of its own that the mail does not carry.
+      messageId: request.messageId || String(info.messageId ?? ""),
       error: "",
     });
 

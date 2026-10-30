@@ -70,6 +70,24 @@ const CREATED_SLACK_MS = 5 * 60_000;
 /** A quotation number as OpenCall writes it, Part (QEN) or Visit (QEV). */
 const QUOTATION_NO = /RTPL\/\d{2}-\d{2}\/QE[NV]\/\d+/gi;
 
+/**
+ * The Message-ID a send from here gives its mail: `<quotation.<id>.<time>@renderways.in>`.
+ * Built by quotationMessageId, read back by pickSentMail.
+ */
+const OWNER_IN_MESSAGE_ID = /^<?quotation\.([0-9a-f-]{36})\./i;
+
+/**
+ * A Message-ID naming the quotation it carries.
+ *
+ * The Visit mail's subject is the trade desk's ("WO-036344461-5166159539- Trade") and names
+ * no quotation number, so the subject can no longer tell a Visit's mail from the Part's on
+ * the same job. The Message-ID can: the customer never sees it, the mail server keeps it,
+ * and the copy filed in Sent is the same bytes as the mail that went out.
+ */
+export function quotationMessageId(quotationId: string, now = Date.now()): string {
+  return `<quotation.${quotationId.toLowerCase()}.${now}@renderways.in>`;
+}
+
 export interface SendVerifyResult {
   checked: number;
   foundSent: number;
@@ -81,6 +99,8 @@ export interface SentMailCandidate {
   date: Date | null;
   to: string;
   subject: string;
+  /** The mail's Message-ID, which names the quotation when the mail was sent from here. */
+  messageId?: string;
 }
 
 /**
@@ -92,15 +112,24 @@ export interface SentMailCandidate {
  * the Visit's mail reads as the Part going out: the Part shows Sent before it existed, and the
  * reply watcher then counts the Visit's "payment done" as an answer to it. A mail whose subject
  * carries no quotation number (one sent from webmail by hand) still counts.
+ *
+ * A mail sent from here names its quotation in its Message-ID, and that is asked first: the
+ * Visit mail's subject names no quotation, so without it a Visit sent or re-sent after the
+ * Part was raised would read as the Part going out.
  */
 export function pickSentMail(
   candidates: readonly SentMailCandidate[],
-  quotation: Pick<QuotationSendCheck, "quotationNo" | "createdAt">,
+  quotation: Pick<QuotationSendCheck, "quotationNo" | "createdAt"> & { id?: string },
 ): { date: Date; to: string } | null {
   const notBefore = new Date(quotation.createdAt).getTime() - CREATED_SLACK_MS;
   const own = quotation.quotationNo.toUpperCase();
+  const ownId = (quotation.id ?? "").toLowerCase();
   for (const mail of [...candidates].sort((a, b) => a.uid - b.uid)) {
     if (!mail.date || mail.date.getTime() < notBefore) continue;
+    // Trimmed: the id is long enough that the header is folded onto a second line, and a
+    // reader may hand it back with the fold's leading space.
+    const owner = OWNER_IN_MESSAGE_ID.exec((mail.messageId ?? "").trim())?.[1]?.toLowerCase();
+    if (owner && owner !== ownId) continue;
     const named = (mail.subject.match(QUOTATION_NO) ?? []).map((n) => n.toUpperCase());
     if (named.length > 0 && !named.includes(own)) continue;
     return { date: mail.date, to: mail.to };
@@ -151,6 +180,7 @@ async function findSentMail(
         date: message.envelope?.date ?? null,
         to: message.envelope?.to?.[0]?.address ?? "",
         subject: message.envelope?.subject ?? "",
+        messageId: message.envelope?.messageId ?? "",
       });
     }
   } catch (error) {

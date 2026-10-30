@@ -10,8 +10,10 @@ import {
   listQuotationDraftsController,
   approveQuotationDraftController,
   removeQuotationDraftController,
+  quotationSendDefaultsController,
 } from "../controllers/quotationController.js";
 import { requirePrincipal } from "../middlewares/authMiddleware.js";
+import { composeAttachmentMiddleware } from "../middlewares/composeAttachmentMiddleware.js";
 
 // Customer quotations. Mounted at /api/v1/quotations.
 // requirePrincipal accepts a regular user OR a special-access credential; the controller
@@ -32,7 +34,15 @@ quotationRouter.get("/:id", requirePrincipal, getQuotationController);
 quotationRouter.post("/", requirePrincipal, createQuotationController);
 // Correcting a sheet that already exists: same body as create, same running number.
 quotationRouter.put("/:id", requirePrincipal, updateQuotationController);
-// Mail the sheet to the customer through the region mailbox Customer Emails uses.
-quotationRouter.post("/:id/send", requirePrincipal, sendQuotationController);
+// What a send will put on the wire — subject, CC, attachment — for the Send dialog to show.
+quotationRouter.get("/:id/send-defaults", requirePrincipal, quotationSendDefaultsController);
+// Mail the sheet to the customer through the region mailbox Customer Emails uses. Multipart
+// when a Visit quotation carries its sheet as a PDF; a JSON body passes the upload untouched.
+quotationRouter.post(
+  "/:id/send",
+  requirePrincipal,
+  composeAttachmentMiddleware,
+  sendQuotationController,
+);
 // What the customer did about it — a person's call, not something read out of a reply.
 quotationRouter.patch("/:id/payment", requirePrincipal, setQuotationPaymentController);

@@ -693,3 +693,17 @@ export async function findQuotationById(id: string): Promise<Quotation | null> {
   const [quotation] = await attachLineItems([mapQuotation(row)]);
   return quotation ?? null;
 }
+
+/**
+ * One quotation's work location (an ASP code such as "ASPS01511"), by the very column the
+ * list counts branches with — so the branch a Visit mail is copied to is the branch the
+ * page's location cards put the quotation under. Empty when there is no WO or Flex never
+ * listed it.
+ */
+export async function findQuotationWorkLocation(id: string): Promise<string> {
+  const result = await query<{ work_location: string | null }>(
+    `SELECT ${WORK_LOCATION_COLUMN} FROM quotations WHERE id = $1 LIMIT 1`,
+    [id],
+  );
+  return String(result.rows[0]?.work_location ?? "");
+}
