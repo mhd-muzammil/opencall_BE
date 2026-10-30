@@ -1,5 +1,5 @@
 /**
- * The pictures in the Visit quotation mail's signature, as base64 PNG.
+ * The pictures in the trade desk's quotation mail signature, as base64 PNG.
  *
  * Kept in code rather than as files so they ship with the build and nothing has to be
  * copied into the image; generated once from the PNGs and not edited by hand.

@@ -72,7 +72,16 @@ function quotation(kind: "VISIT" | "PART", overrides: Record<string, unknown> = 
     orderNumber: "WO-036344461",
     customerName: "Rajiv Kumar",
     customerEmail: "rajiv@example.com",
-    lineItems: [{ serviceDescription: "Visit charge", productDescription: "", modelNo: "", serialNo: "", baseAmount: 550 }],
+    serialNo: kind === "PART" ? "5CD41226PO" : "",
+    lineItems: [
+      {
+        serviceDescription: kind === "PART" ? "" : "Visit charge",
+        productDescription: kind === "PART" ? "Keyboard" : "",
+        modelNo: "",
+        serialNo: kind === "PART" ? "5CD41226PO" : "",
+        baseAmount: 550,
+      },
+    ],
     sgstPercent: 9,
     cgstPercent: 9,
     sentAt: null,
@@ -281,7 +290,7 @@ describe("sending a Visit quotation", () => {
     expect(mocks.sendComposedEmail).toHaveBeenCalledTimes(1);
   });
 
-  it("tells a branch login, before anything is sent, that Visit quotations go out from trade@", async () => {
+  it("tells a branch login, before anything is sent, that quotations go out from trade@", async () => {
     const answer = await call(sendQuotationController, {
       ...HOSUR_ADMIN,
       body: { renderedVersion: CREATED, regionCode: "TRADE" },
@@ -289,7 +298,7 @@ describe("sending a Visit quotation", () => {
     });
     expect(answer.status).toBe(403);
     expect(answer.error?.message).toBe(
-      "Visit quotations go out from trade@renderways.in, and only a Super Admin can send from it.",
+      "Quotations go out from trade@renderways.in, and only a Super Admin can send from it.",
     );
     expect(mocks.sendComposedEmail).not.toHaveBeenCalled();
     expect(mocks.findQuotationWorkLocation).not.toHaveBeenCalled();
@@ -310,20 +319,41 @@ describe("sending a Visit quotation", () => {
 describe("sending a Part quotation", () => {
   beforeEach(() => mocks.findQuotationById.mockResolvedValue(quotation("PART")));
 
-  it("keeps the mail it has always had, whatever else the request carries", async () => {
-    await call(sendQuotationController, {
+  it("goes out as the trade desk's Part mail, from trade@, copied by branch, the sheet attached", async () => {
+    const answer = await call(sendQuotationController, {
       ...SUPER_ADMIN,
-      body: { regionCode: "CHENNAI", cc: "someone@renderways.in" },
+      // A page that still names a mailbox: the desk's is used whatever it says.
+      body: { renderedVersion: CREATED, regionCode: "CHENNAI", to: "rajiv@example.com" },
       files: [pdfFile()],
     });
+
+    expect(answer.status).toBe(200);
     const mail = sentMail();
-    expect(mail.regionCode).toBe("CHENNAI");
-    expect(mail.subject).toBe("Quotation RTPL/26-27/QEN/90 — WO-036344461");
-    expect(mail.cc).toBe("");
-    expect(mail.attachments).toEqual([]);
-    expect(mail).not.toHaveProperty("inlineImages");
-    expect(mail).not.toHaveProperty("messageId");
-    expect(mail.body).toContain("Kindly confirm so we may proceed with the repair.");
+    expect(mail.regionCode).toBe("TRADE");
+    expect(mail.subject).toBe("Serial No- 5CD41226PO- Righter with HP - Part Quote");
+    expect(mail.cc).toBe("radhika@renderways.in, dinesh@renderways.in, hosur@renderways.in");
+    expect(mail.body).toContain("Thank you for providing us an opportunity to serve you with Serial No: 5CD41226PO");
+    expect(mail.body).toContain("This Quotation is only for Parts.");
+    expect(mail.attachments).toEqual([
+      { filename: "RTPL_26-27_QEN_90.pdf", mimeType: "application/pdf", content: PDF },
+    ]);
+    expect(mail.inlineImages).toHaveLength(4);
+    expect(mail.messageId).toMatch(new RegExp(`^<quotation\\.${ID}\\.\\d+@renderways\\.in>$`));
+  });
+
+  it("needs its sheet and its version, as a Visit does", async () => {
+    const noSheet = await call(sendQuotationController, {
+      ...SUPER_ADMIN,
+      body: { renderedVersion: CREATED, regionCode: "TRADE" },
+    });
+    expect(noSheet.status).toBe(422);
+    const noVersion = await call(sendQuotationController, {
+      ...SUPER_ADMIN,
+      body: { regionCode: "CHENNAI" },
+      files: [pdfFile()],
+    });
+    expect(noVersion.status).toBe(422);
+    expect(mocks.sendComposedEmail).not.toHaveBeenCalled();
   });
 });
 
@@ -344,27 +374,26 @@ describe("what the Send dialog is shown before sending", () => {
     });
   });
 
-  it("tells a branch login it cannot send a Visit quotation, before a PDF is made", async () => {
+  it("tells a branch login it cannot send, before a PDF is made", async () => {
     mocks.findQuotationById.mockResolvedValue(quotation("VISIT"));
     const answer = await call(quotationSendDefaultsController, { ...HOSUR_ADMIN });
     expect(answer.data.canSend).toBe(false);
     expect(answer.data.blockedReason).toContain("trade@renderways.in");
   });
 
-  it("for a Part quotation: its subject, and nothing copied or attached", async () => {
+  it("for a Part quotation: the desk's Part subject, the CC by branch and the attachment's name", async () => {
     mocks.findQuotationById.mockResolvedValue(quotation("PART"));
     const answer = await call(quotationSendDefaultsController, { ...SUPER_ADMIN });
     expect(answer.data).toEqual({
       kind: "PART",
-      from: null,
-      subject: "Quotation RTPL/26-27/QEN/90 — WO-036344461",
-      cc: [],
-      branch: null,
-      attachmentName: null,
+      from: "trade@renderways.in",
+      subject: "Serial No- 5CD41226PO- Righter with HP - Part Quote",
+      cc: ["radhika@renderways.in", "dinesh@renderways.in", "hosur@renderways.in"],
+      branch: "HOSUR",
+      attachmentName: "RTPL_26-27_QEN_90.pdf",
       canSend: true,
       blockedReason: null,
     });
-    expect(mocks.findQuotationWorkLocation).not.toHaveBeenCalled();
   });
 
   it("says when the trade desk's mailbox is not set up, rather than naming another", async () => {

@@ -5,19 +5,14 @@ import { badRequest, conflict, forbidden, notFound, unprocessableEntity } from "
 import { findAllowedRegionsForUser } from "../services/rbac/regionAccessService.js";
 import { sendComposedEmail } from "../services/inboundEmail/composeService.js";
 import {
-  quotationMailHtml,
-  quotationMailText,
-  quotationSubject,
-} from "../services/quotations/quotationMailer.js";
-import {
-  VISIT_MAIL_FROM_MAILBOX,
-  visitQuotationAttachmentName,
-  visitQuotationInlineImages,
-  visitQuotationMailHtml,
-  visitQuotationMailText,
-  visitQuotationSubject,
-} from "../services/quotations/visitQuotationMail.js";
-import { visitMailRecipients } from "../services/quotations/visitQuotationRecipients.js";
+  DESK_MAIL_FROM_MAILBOX,
+  deskMailAttachmentName,
+  deskMailHtml,
+  deskMailInlineImages,
+  deskMailSubject,
+  deskMailText,
+} from "../services/quotations/tradeDeskMail.js";
+import { deskMailRecipients } from "../services/quotations/tradeDeskRecipients.js";
 import { quotationMessageId } from "../services/quotations/quotationSendVerifier.js";
 import {
   createQuotation,
@@ -302,7 +297,7 @@ export const updateQuotationController: RequestHandler = asyncHandler(
 );
 
 /**
- * Mail the quotation to the customer, through the region mailbox Customer Emails uses.
+ * Mail the quotation to the customer as the trade desk's own mail, from trade@renderways.in.
  *
  * Deliberately the same send path as Compose: one place that puts mail on the wire, one
  * audit row in `outbound_emails`, one copy filed in the mailbox's own Sent folder. A
@@ -312,14 +307,16 @@ export const updateQuotationController: RequestHandler = asyncHandler(
  * reading "not sent" rather than claiming a delivery that never happened.
  */
 const sendSchema = z.object({
-  regionCode: z.string().trim().min(1, "Choose which mailbox to send from"),
+  // Ignored: every quotation leaves from the trade desk. Accepted so a page that still names
+  // a mailbox is not refused for it.
+  regionCode: z.string().trim().max(100).optional(),
   to: z.string().trim().max(300).optional().default(""),
-  // Visit only: who is copied, as the sender left it in the dialog. Absent — a page from
-  // before the field existed — means the desk's own list (visitMailRecipients).
+  // Who is copied, as the sender left it in the dialog. Absent — a page from before the
+  // field existed — means the desk's own list (deskMailRecipients).
   cc: z.string().trim().max(2000).optional(),
   note: z.string().trim().max(2000).optional().default(""),
-  // Visit only: which version of the quotation the attached sheet was drawn from — its
-  // updatedAt, or createdAt while it has never been edited. See sendQuotationController.
+  // Which version of the quotation the attached sheet was drawn from — its updatedAt, or
+  // createdAt while it has never been edited. See sendQuotationController.
   renderedVersion: z.string().trim().max(100).optional(),
 });
 
@@ -344,28 +341,28 @@ async function allowedRegionCodesFor(request: Request): Promise<string[] | null>
 }
 
 /**
- * Why this login may not send a Visit quotation, or null when it may.
+ * Why this login may not send a quotation, or null when it may.
  *
- * Every Visit quotation leaves from the trade desk, and the send path lets a login write
- * only as the mailboxes of its own regions. A branch login owns its branch's mailbox, not the
- * desk's — the same rule that kept it from choosing the desk's mailbox before. Said up front,
- * in words, rather than as "no access to that region's mailbox" for a mailbox nobody chose.
+ * Every quotation leaves from the trade desk, and the send path lets a login write only as
+ * the mailboxes of its own regions. A branch login owns its branch's mailbox, not the desk's.
+ * Said up front, in words, rather than as "no access to that region's mailbox" for a mailbox
+ * nobody chose.
  */
-function visitSendBlockedReason(allowedRegionCodes: readonly string[] | null): string | null {
-  if (allowedRegionCodes === null || allowedRegionCodes.includes(VISIT_MAIL_FROM_MAILBOX)) {
+function deskSendBlockedReason(allowedRegionCodes: readonly string[] | null): string | null {
+  if (allowedRegionCodes === null || allowedRegionCodes.includes(DESK_MAIL_FROM_MAILBOX)) {
     return null;
   }
-  return "Visit quotations go out from trade@renderways.in, and only a Super Admin can send from it.";
+  return "Quotations go out from trade@renderways.in, and only a Super Admin can send from it.";
 }
 
 /**
- * The estimate the sender's browser attached: the Visit sheet as a PDF.
+ * The estimate the sender's browser attached: the quotation's sheet as a PDF.
  *
- * Required. The Visit mail says "Kindly make the payment as per attached estimate", and the
- * amount is in the estimate and nowhere else — sent without it, the customer is asked to pay
- * a figure nobody gave them. A page loaded before this existed attaches nothing, and is told
- * to reload rather than that mail going out. Recognised by its content, not by the name or
- * type the browser claims for it.
+ * Required. The mail says "Kindly make the payment as per attached estimate", and the amount
+ * is in the estimate and nowhere else — sent without it, the customer is asked to pay a
+ * figure nobody gave them. A page loaded before this existed attaches nothing, and is told to
+ * reload rather than that mail going out. Recognised by its content, not by the name or type
+ * the browser claims for it.
  */
 function readEstimatePdf(request: Request): Buffer {
   const files = Array.isArray(request.files) ? request.files : [];
@@ -379,9 +376,10 @@ function readEstimatePdf(request: Request): Buffer {
 }
 
 /**
- * What sending this quotation will put on the wire: the subject, who is copied, what is
- * attached. The Send dialog shows it before anything goes, and the send itself asks the same
- * functions, so the dialog cannot promise one mail and the server send another.
+ * What sending this quotation will put on the wire: where from, the subject, who is copied,
+ * what is attached — and whether this login may send it at all. The Send dialog shows it
+ * before anything goes, and the send itself asks the same functions, so the dialog cannot
+ * promise one mail and the server send another.
  */
 export const quotationSendDefaultsController: RequestHandler = asyncHandler(
   async (request, response) => {
@@ -392,33 +390,16 @@ export const quotationSendDefaultsController: RequestHandler = asyncHandler(
     const quotation = await findQuotationById(id);
     if (!quotation) throw notFound("Quotation not found", { id });
 
-    if (quotation.kind !== "VISIT") {
-      response.json({
-        data: {
-          kind: quotation.kind,
-          // The sender still chooses the mailbox for a Part quotation.
-          from: null,
-          subject: quotationSubject(quotation),
-          cc: [],
-          branch: null,
-          attachmentName: null,
-          canSend: true,
-          blockedReason: null,
-        },
-      });
-      return;
-    }
-
-    const blockedReason = visitSendBlockedReason(await allowedRegionCodesFor(request));
-    const { from, branch, cc } = await visitMailRecipients(quotation.id);
+    const blockedReason = deskSendBlockedReason(await allowedRegionCodesFor(request));
+    const { from, branch, cc } = await deskMailRecipients(quotation.id);
     response.json({
       data: {
         kind: quotation.kind,
         from,
-        subject: visitQuotationSubject(quotation),
+        subject: deskMailSubject(quotation),
         cc,
         branch,
-        attachmentName: visitQuotationAttachmentName(quotation),
+        attachmentName: deskMailAttachmentName(quotation),
         canSend: blockedReason === null,
         blockedReason,
       },
@@ -450,27 +431,25 @@ export const sendQuotationController: RequestHandler = asyncHandler(
     }
 
     // Region scope is enforced inside the send path itself, against the server's own
-    // mailbox list — the region named here cannot widen what this login may send as.
+    // mailbox list — nothing in the request can widen what this login may send as.
     const allowedRegionCodes = await allowedRegionCodesFor(request);
+    const blocked = deskSendBlockedReason(allowedRegionCodes);
+    if (blocked) throw forbidden(blocked);
 
-    if (quotation.kind === "VISIT") {
-      const blocked = visitSendBlockedReason(allowedRegionCodes);
-      if (blocked) throw forbidden(blocked);
-
-      // The sheet is drawn in the sender's browser from the quotation as that page had it.
-      // An edit made elsewhere since — another tab, another person — would put the old figures
-      // in the PDF and the new ones everywhere else in the mail, so the version it was drawn
-      // from must be the version on file.
-      const onFile = quotation.updatedAt ?? quotation.createdAt;
-      if (!parsed.data.renderedVersion) {
-        throw unprocessableEntity(
-          "This page is out of date. Reload it (Ctrl+Shift+R) and send again.",
-        );
-      }
-      if (parsed.data.renderedVersion !== onFile) {
-        throw conflict("This quotation was changed while the PDF was being made. Send it again.");
-      }
+    // The sheet is drawn in the sender's browser from the quotation as that page had it. An
+    // edit made elsewhere since — another tab, another person — would put the old figures in
+    // the PDF and the new ones everywhere else in the mail, so the version it was drawn from
+    // must be the version on file.
+    const onFile = quotation.updatedAt ?? quotation.createdAt;
+    if (!parsed.data.renderedVersion) {
+      throw unprocessableEntity("This page is out of date. Reload it (Ctrl+Shift+R) and send again.");
     }
+    if (parsed.data.renderedVersion !== onFile) {
+      throw conflict("This quotation was changed while the PDF was being made. Send it again.");
+    }
+
+    // Asked for before the CC is looked up, so a send without the sheet stops there.
+    const estimate = readEstimatePdf(request);
 
     const note = parsed.data.note.trim();
     const noteHtml = note
@@ -480,49 +459,27 @@ export const sendQuotationController: RequestHandler = asyncHandler(
           .replace(/>/g, "&gt;")
           .replace(/\n/g, "<br>")}</p>`
       : "";
-    const withNote = (text: string) => (note ? `${note}\n\n${text}` : text);
-
-    // A Visit quotation goes out as the trade desk's own mail, from the trade desk whatever
-    // mailbox the request names, with the sheet attached; a Part quotation keeps the mail and
-    // the mailbox choice it has always had until its format is given. The sheet is asked for
-    // before the CC is looked up, so a send without it stops there.
-    const estimate = quotation.kind === "VISIT" ? readEstimatePdf(request) : null;
-    const mail = estimate
-      ? {
-          regionCode: VISIT_MAIL_FROM_MAILBOX,
-          subject: visitQuotationSubject(quotation),
-          text: withNote(visitQuotationMailText(quotation)),
-          html: `${noteHtml}${visitQuotationMailHtml(quotation)}`,
-          cc: parsed.data.cc ?? (await visitMailRecipients(quotation.id)).cc.join(", "),
-          attachments: [
-            {
-              filename: visitQuotationAttachmentName(quotation),
-              mimeType: "application/pdf",
-              content: estimate,
-            },
-          ],
-          inlineImages: visitQuotationInlineImages(),
-          messageId: quotationMessageId(quotation.id),
-        }
-      : {
-          regionCode: parsed.data.regionCode,
-          subject: quotationSubject(quotation),
-          text: withNote(quotationMailText(quotation)),
-          html: `${noteHtml}${quotationMailHtml(quotation)}`,
-          cc: "",
-          attachments: [],
-        };
+    const cc = parsed.data.cc ?? (await deskMailRecipients(quotation.id)).cc.join(", ");
 
     await sendComposedEmail({
-      regionCode: mail.regionCode,
+      regionCode: DESK_MAIL_FROM_MAILBOX,
       to,
-      cc: mail.cc,
-      subject: mail.subject,
-      body: mail.text,
-      bodyHtml: mail.html,
+      cc,
+      subject: deskMailSubject(quotation),
+      body: note ? `${note}\n\n${deskMailText(quotation)}` : deskMailText(quotation),
+      bodyHtml: `${noteHtml}${deskMailHtml(quotation)}`,
       inReplyToId: null,
-      attachments: mail.attachments,
-      ...("inlineImages" in mail ? { inlineImages: mail.inlineImages, messageId: mail.messageId } : {}),
+      attachments: [
+        {
+          filename: deskMailAttachmentName(quotation),
+          mimeType: "application/pdf",
+          content: estimate,
+        },
+      ],
+      inlineImages: deskMailInlineImages(),
+      // Names the quotation, so the Sent-folder check can tell this mail from another
+      // quotation's now that the subject carries no quotation number.
+      messageId: quotationMessageId(quotation.id),
       allowedRegionCodes,
       sentByUserId: request.currentUser?.id ?? "",
     });
@@ -549,7 +506,7 @@ export const sendQuotationController: RequestHandler = asyncHandler(
         kind: "QUOTATION_SENT",
         quotationNo: sent.quotationNo,
         to,
-        ...(mail.cc ? { cc: mail.cc } : {}),
+        ...(cc ? { cc } : {}),
         sendCount: sent.sendCount,
       },
       request,

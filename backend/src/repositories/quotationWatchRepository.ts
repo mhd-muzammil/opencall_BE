@@ -1,5 +1,5 @@
 import { query } from "../config/database.js";
-import { visitQuotationPictureFingerprints } from "../services/quotations/visitQuotationMail.js";
+import { deskMailPictureFingerprints } from "../services/quotations/tradeDeskMail.js";
 
 /**
  * The join between a quotation and the reply it drew.
@@ -116,7 +116,7 @@ export interface QuotationReply {
 }
 
 /**
- * Not one of the Visit quotation mail's own signature pictures (attachment alias `a`).
+ * Not one of the trade desk mail's own signature pictures (attachment alias `a`).
  *
  * A reply quotes the mail it answers, and some clients send the quoted pictures back as
  * ordinary attachments. Our HP logo is not the customer's screenshot: counted as one, a bare
@@ -124,7 +124,7 @@ export interface QuotationReply {
  * gave them, or by name at signature size when a client re-encoded them. The hashes and names
  * are this code's own constants, so they are written into the statement rather than bound.
  */
-const OWN_PICTURES = visitQuotationPictureFingerprints();
+const OWN_PICTURES = deskMailPictureFingerprints();
 const NOT_OUR_SIGNATURE_SQL = `NOT (
              md5(a.content) IN (${OWN_PICTURES.md5s.map((hash) => `'${hash}'`).join(", ")})
              OR a.content_id ILIKE '%@opencall%'

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { detectPaymentSignal } from "./paymentSignal.js";
-import { visitQuotationMailText } from "./visitQuotationMail.js";
+import { deskMailText } from "./tradeDeskMail.js";
 
 const read = (body: string, hasImage = false) =>
   detectPaymentSignal({ subject: "", body, hasImage });
@@ -108,7 +108,14 @@ describe("detectPaymentSignal", () => {
  */
 describe("detectPaymentSignal, on a reply quoting the Visit quotation mail", () => {
   const quoted = (reply: string) => {
-    const original = visitQuotationMailText({ orderNumber: "WO-036344461", caseId: "5166159539" });
+    const original = deskMailText({
+      kind: "VISIT",
+      orderNumber: "WO-036344461",
+      caseId: "5166159539",
+      quotationNo: "RTPL/26-27/QEV/7",
+      serialNo: "",
+      lineItems: [],
+    });
     const quotedLines = original.split("\n").map((line) => `> ${line}`);
     return [reply, "", "On Fri, 30 Oct 2026, trade@renderways.in wrote:", ...quotedLines].join("\n");
   };

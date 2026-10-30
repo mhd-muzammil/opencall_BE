@@ -17,7 +17,7 @@
  * between "paid ₹5,900" and "paid ₹590 of ₹5,900". The figure stays a human's problem.
  */
 
-import { VISIT_MAIL_ACCOUNT_NUMBER } from "./visitQuotationMail.js";
+import { DESK_MAIL_ACCOUNT_NUMBER } from "./tradeDeskMail.js";
 
 export type PaymentSignalLevel = "STRONG" | "WEAK" | "NONE";
 
@@ -54,14 +54,14 @@ const REFERENCE_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
- * Our own account number, as the Visit quotation mail prints it.
+ * Our own account number, as the trade desk's quotation mail prints it.
  *
- * A reply quotes the mail it answers, so every reply to a Visit quotation carries these
+ * A reply quotes the mail it answers, so every reply to a quotation mail carries these
  * fourteen digits — exactly the shape of a transaction reference. Left in, an "ok noted"
  * would read as quoting a reference, and a bare "payment done" would pass as proven. The
  * customer pays INTO this number; it is never their proof of having paid.
  */
-const OWN_ACCOUNT_NUMBERS: readonly string[] = [VISIT_MAIL_ACCOUNT_NUMBER];
+const OWN_ACCOUNT_NUMBERS: readonly string[] = [DESK_MAIL_ACCOUNT_NUMBER];
 
 /** Said outright that they have NOT paid, or are asking how to. Never a payment. */
 const NEGATIONS: readonly RegExp[] = [

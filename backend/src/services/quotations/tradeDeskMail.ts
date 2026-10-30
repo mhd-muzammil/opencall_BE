@@ -5,58 +5,67 @@ import {
   MAIL_ICON_PNG,
   PHONE_ICON_PNG,
   RENDERWAYS_MARK_PNG,
-} from "./visitQuotationMailAssets.js";
+} from "./tradeDeskMailAssets.js";
 
 /**
- * The Visit quotation mail, as the trade desk has always sent it.
+ * A quotation mail, Visit or Part, as the trade desk has always sent it.
  *
- * Copied line by line from the desk's own mail for WO-036344461 (trade@renderways.in,
- * 24 Oct 2026): the same words in the same order, the case id on yellow, the bank details,
- * the four terms and the signature. Its slips are kept as well — "we here by enclosed",
- * "share your approval the payment details" — because this is the mail customers already
- * know, not a rewrite of it.
+ * Copied line by line from the desk's own mails (trade@renderways.in, 24 Oct 2026): the
+ * Visit one for WO-036344461 and the Part one for serial 5CD41226PO. The same words in the
+ * same order, the bank details, the four terms and the signature. Their slips are kept as
+ * well — "we here by enclosed", "share your approval the payment details", "Righter with
+ * HP" — because these are the mails customers already know, not a rewrite of them.
+ *
+ * The two differ in three places only, all from the samples:
+ *   - the subject: "WO-036344461-5166159539- Trade" for a Visit, "Serial No- 5CD41226PO-
+ *     Righter with HP - Part Quote" for a Part;
+ *   - who the letter thanks the customer for: the case id, on yellow, for a Visit; the serial
+ *     number, plain, for a Part;
+ *   - "This Quotation is only for service." against "... only for Parts."
  *
  * The amount is NOT in the body, and never was: "Kindly make the payment as per attached
- * estimate". The estimate is the Visit sheet itself, attached as a PDF that the sender's
+ * estimate". The estimate is the quotation's own sheet, attached as a PDF that the sender's
  * browser makes from the very component View / Print shows.
  *
- * Sizes are the sample's, read off a screenshot taken at 125%: Calibri 11pt for the letter,
+ * Sizes are the samples', read off screenshots taken at 125%: Calibri 11pt for the letter,
  * Bookman Old Style 11pt in Office's dark blue for the signature, Cambria bold for the
  * company name and Times New Roman for the address. Line height is left to the mail client,
- * as the original leaves it.
- *
- * The Part quotation keeps its own mail (quotationMailer.ts) until its format is given.
+ * as the originals leave it.
  */
+
+type MailQuotation = Pick<
+  Quotation,
+  "kind" | "orderNumber" | "caseId" | "quotationNo" | "serialNo" | "lineItems"
+>;
 
 /**
  * The company's Bank of Baroda account, printed in the mail for the customer to pay into.
  * Exported for the payment watch: a reply quoting this mail carries it, and it is not the
  * customer's transaction reference.
  */
-export const VISIT_MAIL_ACCOUNT_NUMBER = "43770200000450";
+export const DESK_MAIL_ACCOUNT_NUMBER = "43770200000450";
 
 /**
- * The mailbox every Visit quotation leaves from: the trade desk's, trade@renderways.in,
- * whichever branch the customer is in (the user's rule, 30 Oct 2026). Only the CC follows
- * the branch.
+ * The mailbox every quotation leaves from: the trade desk's, trade@renderways.in, whichever
+ * branch the customer is in (the user's rule, 30 Oct 2026). Only the CC follows the branch.
  */
-export const VISIT_MAIL_FROM_MAILBOX = "TRADE";
+export const DESK_MAIL_FROM_MAILBOX = "TRADE";
 
 /** Always copied, whichever branch the customer is in: the desk's own two. */
-export const VISIT_MAIL_FIXED_CC = ["radhika@renderways.in", "dinesh@renderways.in"] as const;
+export const DESK_MAIL_FIXED_CC = ["radhika@renderways.in", "dinesh@renderways.in"] as const;
 
 /**
  * The branch mailbox when the customer's branch cannot be told — no work order, or a
  * location no branch claims. Chennai, as on the sample: it is the head office.
  */
-export const VISIT_MAIL_FALLBACK_BRANCH = "CHENNAI";
+export const DESK_MAIL_FALLBACK_BRANCH = "CHENNAI";
 
 /**
- * Every CC: the desk's two, then the branch's mailbox (visitQuotationRecipients.ts finds
- * it). With no branch mailbox at all, just the two.
+ * Every CC: the desk's two, then the branch's mailbox (tradeDeskRecipients.ts finds it).
+ * With no branch mailbox at all, just the two.
  */
-export function visitQuotationCc(branchMailbox: string | null | undefined): string[] {
-  const all = [...VISIT_MAIL_FIXED_CC, String(branchMailbox ?? "").trim()].filter(Boolean);
+export function deskMailCc(branchMailbox: string | null | undefined): string[] {
+  const all = [...DESK_MAIL_FIXED_CC, String(branchMailbox ?? "").trim()].filter(Boolean);
   return all.filter(
     (address, index) =>
       all.findIndex((other) => other.toLowerCase() === address.toLowerCase()) === index,
@@ -64,33 +73,50 @@ export function visitQuotationCc(branchMailbox: string | null | undefined): stri
 }
 
 /**
- * "WO-036344461-5166159539- Trade": the work order, the case id, then "- Trade", exactly as
- * the desk types it. Whichever of the two is missing is skipped rather than left as "--".
+ * The serial number a Part mail names: the first line item's that has one, as the sheet
+ * lists them, else the quotation's own. A quotation with none falls back to its work order,
+ * then its number, rather than leaving "Serial No- " empty.
  */
-export function visitQuotationSubject(q: Pick<Quotation, "orderNumber" | "caseId" | "quotationNo">): string {
+function partSerial(q: MailQuotation): string {
+  const fromItems = (q.lineItems ?? []).map((item) => String(item.serialNo ?? "").trim()).find(Boolean);
+  return (
+    fromItems || String(q.serialNo ?? "").trim() || q.orderNumber.trim() || q.quotationNo.trim()
+  );
+}
+
+/** The number a Visit letter thanks the customer for: the case id, or the WO without one. */
+function visitCaseRef(q: MailQuotation): string {
+  return q.caseId.trim() || q.orderNumber.trim();
+}
+
+/**
+ * The desk's subject, exactly as it types it:
+ *   Visit: "WO-036344461-5166159539- Trade" — whichever of WO and case id is missing is
+ *          skipped rather than left as "--";
+ *   Part:  "Serial No- 5CD41226PO- Righter with HP - Part Quote".
+ */
+export function deskMailSubject(q: MailQuotation): string {
+  if (q.kind === "PART") return `Serial No- ${partSerial(q)}- Righter with HP - Part Quote`;
   const ref = [q.orderNumber.trim(), q.caseId.trim()].filter(Boolean).join("-");
   return `${ref || q.quotationNo}- Trade`;
 }
 
 /**
- * The attached estimate's file name. The desk names it by the case id (5166159539.pdf); a
- * quotation without one falls back to its work order, then to its own number.
+ * The attached estimate's file name. The desk names a Visit estimate by the case id
+ * (5166159539.pdf) and a Part one by the quotation number (RTPL_26-27_QEN_80.pdf). Whatever
+ * is missing falls back to the next thing that names the quotation.
  */
-export function visitQuotationAttachmentName(
-  q: Pick<Quotation, "orderNumber" | "caseId" | "quotationNo">,
-): string {
-  const base = q.caseId.trim() || q.orderNumber.trim() || q.quotationNo.trim() || "quotation";
+export function deskMailAttachmentName(q: MailQuotation): string {
+  const base =
+    q.kind === "PART"
+      ? q.quotationNo.trim() || q.orderNumber.trim() || "quotation"
+      : q.caseId.trim() || q.orderNumber.trim() || q.quotationNo.trim() || "quotation";
   return `${base.replace(/[^A-Za-z0-9-]+/g, "_")}.pdf`;
 }
 
-/** The number the letter thanks the customer for: the case id, or the WO when there is none. */
-function caseRef(q: Pick<Quotation, "orderNumber" | "caseId">): string {
-  return q.caseId.trim() || q.orderNumber.trim();
-}
-
 /**
- * Escape before interpolation, every time. The case id and work order are typed or
- * imported text; a stray `<` would break the layout and a deliberate one would put
+ * Escape before interpolation, every time. The case id, serial number and work order are
+ * typed or imported text; a stray `<` would break the layout and a deliberate one would put
  * someone else's markup into mail sent under our address.
  */
 function esc(value: string): string {
@@ -113,7 +139,7 @@ const CID = {
  * The signature's pictures, ready for nodemailer: inline parts of the mail, shown in place
  * by their cid. Not stored with the send record — they are the same on every mail.
  */
-export function visitQuotationInlineImages(): Array<{
+export function deskMailInlineImages(): Array<{
   cid: string;
   filename: string;
   contentType: string;
@@ -142,8 +168,8 @@ export function visitQuotationInlineImages(): Array<{
  * content id the mail gave them (`…@opencall`), or by name at signature size for a client
  * that re-encoded them.
  */
-export function visitQuotationPictureFingerprints(): { md5s: string[]; filenames: string[] } {
-  const images = visitQuotationInlineImages();
+export function deskMailPictureFingerprints(): { md5s: string[]; filenames: string[] } {
+  const images = deskMailInlineImages();
   return {
     md5s: images.map((image) => createHash("md5").update(image.content).digest("hex")),
     filenames: images.map((image) => image.filename.toLowerCase()),
@@ -176,7 +202,15 @@ const TERMS = [
   "Please do the online transaction, no Cash transaction is accepted.",
 ];
 
-export function visitQuotationMailHtml(q: Pick<Quotation, "orderNumber" | "caseId">): string {
+/** What the letter thanks the customer for, and what the quotation covers, by kind. */
+function particulars(q: MailQuotation): { label: string; ref: string; highlight: boolean; onlyFor: string } {
+  return q.kind === "PART"
+    ? { label: "Serial No", ref: partSerial(q), highlight: false, onlyFor: "Parts" }
+    : { label: "case id", ref: visitCaseRef(q), highlight: true, onlyFor: "service" };
+}
+
+export function deskMailHtml(q: MailQuotation): string {
+  const { label, ref, highlight, onlyFor } = particulars(q);
   const terms = TERMS.map(
     (text, index) =>
       `<tr><td style="${LETTER}padding:0;width:48px;vertical-align:top;">${index + 1}.</td>` +
@@ -189,14 +223,14 @@ export function visitQuotationMailHtml(q: Pick<Quotation, "orderNumber" | "caseI
     line("Greetings of the day!!"),
     BLANK,
     line(
-      "Thank you for providing us an opportunity to serve you with case id: " +
-        `<span style="background:yellow;">${esc(caseRef(q))}</span>`,
+      `Thank you for providing us an opportunity to serve you with ${label}: ` +
+        (highlight ? `<span style="background:yellow;">${esc(ref)}</span>` : esc(ref)),
     ),
     BLANK,
     line(
       "You have registered the case for providing the services support of the product. " +
         "As you know, since your product / service is not covered under the warranty we here " +
-        "by enclosed the quotation for the same. This Quotation is only for service.",
+        `by enclosed the quotation for the same. This Quotation is only for ${onlyFor}.`,
     ),
     BLANK,
     line(
@@ -209,7 +243,7 @@ export function visitQuotationMailHtml(q: Pick<Quotation, "orderNumber" | "caseI
     BLANK,
     line("Account Name: Renderways Technology Pvt Ltd"),
     line("Bank Name: BANK OF BARODA"),
-    line(`Account Number: ${VISIT_MAIL_ACCOUNT_NUMBER}`),
+    line(`Account Number: ${DESK_MAIL_ACCOUNT_NUMBER}`),
     line("IFSC Code: BARB0MADTHI"),
     line("Branch: Maduravoyal"),
     BLANK,
@@ -281,15 +315,16 @@ export function visitQuotationMailHtml(q: Pick<Quotation, "orderNumber" | "caseI
  * The same mail as plain text: the preview line, a text-only client, and the copy the send
  * record keeps. Every word of the HTML, none of the pictures.
  */
-export function visitQuotationMailText(q: Pick<Quotation, "orderNumber" | "caseId">): string {
+export function deskMailText(q: MailQuotation): string {
+  const { label, ref, onlyFor } = particulars(q);
   return [
     "Dear Customer",
     "",
     "Greetings of the day!!",
     "",
-    `Thank you for providing us an opportunity to serve you with case id: ${caseRef(q)}`,
+    `Thank you for providing us an opportunity to serve you with ${label}: ${ref}`,
     "",
-    "You have registered the case for providing the services support of the product. As you know, since your product / service is not covered under the warranty we here by enclosed the quotation for the same. This Quotation is only for service.",
+    `You have registered the case for providing the services support of the product. As you know, since your product / service is not covered under the warranty we here by enclosed the quotation for the same. This Quotation is only for ${onlyFor}.`,
     "",
     "Note: Kindly make the payment as per attached estimate, to the given below bank details and please share your approval the payment details on mail to trade@renderways.in Based on your confirmation we shall be assigning the engineer.",
     "",
@@ -297,7 +332,7 @@ export function visitQuotationMailText(q: Pick<Quotation, "orderNumber" | "caseI
     "",
     "Account Name: Renderways Technology Pvt Ltd",
     "Bank Name: BANK OF BARODA",
-    `Account Number: ${VISIT_MAIL_ACCOUNT_NUMBER}`,
+    `Account Number: ${DESK_MAIL_ACCOUNT_NUMBER}`,
     "IFSC Code: BARB0MADTHI",
     "Branch: Maduravoyal",
     "",

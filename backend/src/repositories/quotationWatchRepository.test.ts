@@ -7,7 +7,7 @@ import {
   listReplyImages,
   listUnplacedRepliesFromCustomer,
 } from "./quotationWatchRepository.js";
-import { visitQuotationInlineImages } from "../services/quotations/visitQuotationMail.js";
+import { deskMailInlineImages } from "../services/quotations/tradeDeskMail.js";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("../config/database.js", () => ({ query: mocks.query, pool: { connect: vi.fn() } }));
@@ -58,12 +58,12 @@ describe("listQuotationsNeedingSendCheck", () => {
 });
 
 /**
- * The Visit mail's own signature pictures, sent back in a reply as ordinary attachments by
+ * The desk mail's own signature pictures, sent back in a reply as ordinary attachments by
  * some mail clients, must never count as the customer's picture: with them, a bare "payment
  * done" would read as proven.
  */
 describe("the pictures a reply carried", () => {
-  const ours = visitQuotationInlineImages();
+  const ours = deskMailInlineImages();
   const hashes = ours.map((image) => createHash("md5").update(image.content).digest("hex"));
 
   async function sqlOf(run: () => Promise<unknown>): Promise<string> {
