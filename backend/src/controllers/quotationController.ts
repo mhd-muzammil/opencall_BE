@@ -318,7 +318,45 @@ const sendSchema = z.object({
   // before the field existed — means the desk's own list (visitMailRecipients).
   cc: z.string().trim().max(2000).optional(),
   note: z.string().trim().max(2000).optional().default(""),
+  // Visit only: which version of the quotation the attached sheet was drawn from — its
+  // updatedAt, or createdAt while it has never been edited. See sendQuotationController.
+  renderedVersion: z.string().trim().max(100).optional(),
 });
+
+/**
+ * The access check, as a middleware, for a route that must refuse BEFORE it reads a body:
+ * the send route takes an upload, and a login with no business here should be turned away
+ * before megabytes of it are held in memory, not after.
+ */
+export const requireQuotationAccessMiddleware: RequestHandler = (request, _response, next) => {
+  try {
+    requireQuotationAccess(request);
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** The region names this login may send as; null when unrestricted (Super Admin). */
+async function allowedRegionCodesFor(request: Request): Promise<string[] | null> {
+  const regions = request.currentUser ? await findAllowedRegionsForUser(request.currentUser) : null;
+  return regions === null ? null : regions.map((r) => r.name.trim().toUpperCase());
+}
+
+/**
+ * Why this login may not send a Visit quotation, or null when it may.
+ *
+ * Every Visit quotation leaves from the trade desk, and the send path lets a login write
+ * only as the mailboxes of its own regions. A branch login owns its branch's mailbox, not the
+ * desk's — the same rule that kept it from choosing the desk's mailbox before. Said up front,
+ * in words, rather than as "no access to that region's mailbox" for a mailbox nobody chose.
+ */
+function visitSendBlockedReason(allowedRegionCodes: readonly string[] | null): string | null {
+  if (allowedRegionCodes === null || allowedRegionCodes.includes(VISIT_MAIL_FROM_MAILBOX)) {
+    return null;
+  }
+  return "Visit quotations go out from trade@renderways.in, and only a Super Admin can send from it.";
+}
 
 /**
  * The estimate the sender's browser attached: the Visit sheet as a PDF.
@@ -364,11 +402,14 @@ export const quotationSendDefaultsController: RequestHandler = asyncHandler(
           cc: [],
           branch: null,
           attachmentName: null,
+          canSend: true,
+          blockedReason: null,
         },
       });
       return;
     }
 
+    const blockedReason = visitSendBlockedReason(await allowedRegionCodesFor(request));
     const { from, branch, cc } = await visitMailRecipients(quotation.id);
     response.json({
       data: {
@@ -378,6 +419,8 @@ export const quotationSendDefaultsController: RequestHandler = asyncHandler(
         cc,
         branch,
         attachmentName: visitQuotationAttachmentName(quotation),
+        canSend: blockedReason === null,
+        blockedReason,
       },
     });
   },
@@ -408,11 +451,26 @@ export const sendQuotationController: RequestHandler = asyncHandler(
 
     // Region scope is enforced inside the send path itself, against the server's own
     // mailbox list — the region named here cannot widen what this login may send as.
-    const regions = request.currentUser
-      ? await findAllowedRegionsForUser(request.currentUser)
-      : null;
-    const allowedRegionCodes =
-      regions === null ? null : regions.map((r) => r.name.trim().toUpperCase());
+    const allowedRegionCodes = await allowedRegionCodesFor(request);
+
+    if (quotation.kind === "VISIT") {
+      const blocked = visitSendBlockedReason(allowedRegionCodes);
+      if (blocked) throw forbidden(blocked);
+
+      // The sheet is drawn in the sender's browser from the quotation as that page had it.
+      // An edit made elsewhere since — another tab, another person — would put the old figures
+      // in the PDF and the new ones everywhere else in the mail, so the version it was drawn
+      // from must be the version on file.
+      const onFile = quotation.updatedAt ?? quotation.createdAt;
+      if (!parsed.data.renderedVersion) {
+        throw unprocessableEntity(
+          "This page is out of date. Reload it (Ctrl+Shift+R) and send again.",
+        );
+      }
+      if (parsed.data.renderedVersion !== onFile) {
+        throw conflict("This quotation was changed while the PDF was being made. Send it again.");
+      }
+    }
 
     const note = parsed.data.note.trim();
     const noteHtml = note
@@ -427,7 +485,7 @@ export const sendQuotationController: RequestHandler = asyncHandler(
     // A Visit quotation goes out as the trade desk's own mail, from the trade desk whatever
     // mailbox the request names, with the sheet attached; a Part quotation keeps the mail and
     // the mailbox choice it has always had until its format is given. The sheet is asked for
-    // first, so a send without it stops before anything else is looked up.
+    // before the CC is looked up, so a send without it stops there.
     const estimate = quotation.kind === "VISIT" ? readEstimatePdf(request) : null;
     const mail = estimate
       ? {

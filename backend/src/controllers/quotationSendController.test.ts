@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listActiveMailboxes: vi.fn(),
   sendComposedEmail: vi.fn(),
   recordActivity: vi.fn(),
+  findAllowedRegionsForUser: vi.fn(),
 }));
 
 // Nothing here reaches a database, a mailbox or an SMTP server: the send path is asked what
@@ -28,8 +29,15 @@ vi.mock("../services/inboundEmail/composeService.js", () => ({
   sendComposedEmail: mocks.sendComposedEmail,
 }));
 vi.mock("../services/audit/activityLogger.js", () => ({ recordActivity: mocks.recordActivity }));
+vi.mock("../services/rbac/regionAccessService.js", () => ({
+  findAllowedRegionsForUser: mocks.findAllowedRegionsForUser,
+}));
 
-import { quotationSendDefaultsController, sendQuotationController } from "./quotationController.js";
+import {
+  quotationSendDefaultsController,
+  requireQuotationAccessMiddleware,
+  sendQuotationController,
+} from "./quotationController.js";
 
 const SUPER_ADMIN = {
   currentUser: {
@@ -46,6 +54,14 @@ const SUPER_ADMIN = {
 
 const ID = "4f9c2d0e-8a1b-4c3d-9e2f-0a1b2c3d4e5f";
 
+/** A branch login: it owns its branch's mailbox, not the trade desk's. */
+const HOSUR_ADMIN = {
+  currentUser: { ...SUPER_ADMIN.currentUser, id: "user-2", email: "hosur.admin@renderways.in", role: "REGION_ADMIN", regionId: "r-hosur" },
+};
+
+/** The quotation as raised and never edited: its version is when it was raised. */
+const CREATED = "2026-10-30 09:00:00.123456+05:30";
+
 function quotation(kind: "VISIT" | "PART", overrides: Record<string, unknown> = {}) {
   return {
     id: ID,
@@ -61,6 +77,8 @@ function quotation(kind: "VISIT" | "PART", overrides: Record<string, unknown> = 
     cgstPercent: 9,
     sentAt: null,
     sendCount: 0,
+    createdAt: CREATED,
+    updatedAt: null,
     ...overrides,
   };
 }
@@ -115,6 +133,9 @@ function sentMail(): any {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.findAllowedRegionsForUser.mockImplementation(async (user: { role: string }) =>
+    user.role === "SUPER_ADMIN" ? null : [{ name: "Hosur" }],
+  );
   mocks.listActiveMailboxes.mockResolvedValue(MAILBOXES);
   mocks.findQuotationWorkLocation.mockResolvedValue("ASPS01511");
   mocks.sendComposedEmail.mockResolvedValue({ id: "out-1" });
@@ -133,7 +154,7 @@ describe("sending a Visit quotation", () => {
   it("goes out as the trade desk's mail, with the sheet attached under the case id", async () => {
     const answer = await call(sendQuotationController, {
       ...SUPER_ADMIN,
-      body: { regionCode: "TRADE", to: "rajiv@example.com" },
+      body: { renderedVersion: CREATED, regionCode: "TRADE", to: "rajiv@example.com" },
       files: [pdfFile()],
     });
 
@@ -155,7 +176,7 @@ describe("sending a Visit quotation", () => {
   it("leaves from the trade desk whatever mailbox the request names", async () => {
     await call(sendQuotationController, {
       ...SUPER_ADMIN,
-      body: { regionCode: "CHENNAI" },
+      body: { renderedVersion: CREATED, regionCode: "CHENNAI" },
       files: [pdfFile()],
     });
     expect(sentMail().regionCode).toBe("TRADE");
@@ -164,7 +185,7 @@ describe("sending a Visit quotation", () => {
   it("copies the desk's two and the customer's branch when the page names no CC", async () => {
     await call(sendQuotationController, {
       ...SUPER_ADMIN,
-      body: { regionCode: "TRADE" },
+      body: { renderedVersion: CREATED, regionCode: "TRADE" },
       files: [pdfFile()],
     });
     expect(sentMail().cc).toBe("radhika@renderways.in, dinesh@renderways.in, hosur@renderways.in");
@@ -174,7 +195,7 @@ describe("sending a Visit quotation", () => {
   it("copies whoever the sender left in the dialog, and does not look the branch up", async () => {
     await call(sendQuotationController, {
       ...SUPER_ADMIN,
-      body: { regionCode: "TRADE", cc: "radhika@renderways.in; salem@renderways.in" },
+      body: { renderedVersion: CREATED, regionCode: "TRADE", cc: "radhika@renderways.in; salem@renderways.in" },
       files: [pdfFile()],
     });
     expect(sentMail().cc).toBe("radhika@renderways.in; salem@renderways.in");
@@ -184,7 +205,7 @@ describe("sending a Visit quotation", () => {
   it("copies nobody when the sender cleared the CC", async () => {
     await call(sendQuotationController, {
       ...SUPER_ADMIN,
-      body: { regionCode: "TRADE", cc: "" },
+      body: { renderedVersion: CREATED, regionCode: "TRADE", cc: "" },
       files: [pdfFile()],
     });
     expect(sentMail().cc).toBe("");
@@ -192,20 +213,20 @@ describe("sending a Visit quotation", () => {
 
   it("falls back to Chennai when the branch cannot be told", async () => {
     mocks.findQuotationWorkLocation.mockResolvedValue("");
-    await call(sendQuotationController, { ...SUPER_ADMIN, body: { regionCode: "TRADE" }, files: [pdfFile()] });
+    await call(sendQuotationController, { ...SUPER_ADMIN, body: { renderedVersion: CREATED, regionCode: "TRADE" }, files: [pdfFile()] });
     expect(sentMail().cc).toBe("radhika@renderways.in, dinesh@renderways.in, chennai@renderways.in");
   });
 
   it("falls back to Chennai when the branch has no mailbox configured", async () => {
     mocks.findQuotationWorkLocation.mockResolvedValue("ASPS01489"); // Kanchipuram
-    await call(sendQuotationController, { ...SUPER_ADMIN, body: { regionCode: "TRADE" }, files: [pdfFile()] });
+    await call(sendQuotationController, { ...SUPER_ADMIN, body: { renderedVersion: CREATED, regionCode: "TRADE" }, files: [pdfFile()] });
     expect(sentMail().cc).toBe("radhika@renderways.in, dinesh@renderways.in, chennai@renderways.in");
   });
 
   it("refuses to send without the sheet, and says how to get it", async () => {
     const answer = await call(sendQuotationController, {
       ...SUPER_ADMIN,
-      body: { regionCode: "TRADE", to: "rajiv@example.com" },
+      body: { renderedVersion: CREATED, regionCode: "TRADE", to: "rajiv@example.com" },
     });
     expect(answer.status).toBe(422);
     expect(answer.error?.message).toContain("Reload the page");
@@ -218,17 +239,66 @@ describe("sending a Visit quotation", () => {
   it("does not take a file that is not a PDF for the sheet, whatever it claims to be", async () => {
     const answer = await call(sendQuotationController, {
       ...SUPER_ADMIN,
-      body: { regionCode: "TRADE" },
+      body: { renderedVersion: CREATED, regionCode: "TRADE" },
       files: [pdfFile(Buffer.from("<html>not a pdf</html>"))],
     });
     expect(answer.status).toBe(422);
     expect(mocks.sendComposedEmail).not.toHaveBeenCalled();
   });
 
+  it("refuses a page that does not say which version its sheet was drawn from", async () => {
+    const answer = await call(sendQuotationController, {
+      ...SUPER_ADMIN,
+      body: { regionCode: "TRADE" },
+      files: [pdfFile()],
+    });
+    expect(answer.status).toBe(422);
+    expect(answer.error?.message).toContain("Reload it");
+    expect(mocks.sendComposedEmail).not.toHaveBeenCalled();
+  });
+
+  it("refuses a sheet drawn from an older version of the quotation than the one on file", async () => {
+    mocks.findQuotationById.mockResolvedValue(quotation("VISIT", { updatedAt: "2026-10-30 10:05:00.5+05:30" }));
+    const answer = await call(sendQuotationController, {
+      ...SUPER_ADMIN,
+      body: { renderedVersion: CREATED, regionCode: "TRADE" },
+      files: [pdfFile()],
+    });
+    expect(answer.status).toBe(409);
+    expect(mocks.sendComposedEmail).not.toHaveBeenCalled();
+    expect(mocks.markQuotationSent).not.toHaveBeenCalled();
+  });
+
+  it("takes the last edit as the version once the quotation has been corrected", async () => {
+    const edited = "2026-10-30 10:05:00.5+05:30";
+    mocks.findQuotationById.mockResolvedValue(quotation("VISIT", { updatedAt: edited }));
+    const answer = await call(sendQuotationController, {
+      ...SUPER_ADMIN,
+      body: { renderedVersion: edited, regionCode: "TRADE" },
+      files: [pdfFile()],
+    });
+    expect(answer.status).toBe(200);
+    expect(mocks.sendComposedEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells a branch login, before anything is sent, that Visit quotations go out from trade@", async () => {
+    const answer = await call(sendQuotationController, {
+      ...HOSUR_ADMIN,
+      body: { renderedVersion: CREATED, regionCode: "TRADE" },
+      files: [pdfFile()],
+    });
+    expect(answer.status).toBe(403);
+    expect(answer.error?.message).toBe(
+      "Visit quotations go out from trade@renderways.in, and only a Super Admin can send from it.",
+    );
+    expect(mocks.sendComposedEmail).not.toHaveBeenCalled();
+    expect(mocks.findQuotationWorkLocation).not.toHaveBeenCalled();
+  });
+
   it("puts a covering note above the letter", async () => {
     await call(sendQuotationController, {
       ...SUPER_ADMIN,
-      body: { regionCode: "TRADE", note: "As discussed on the phone" },
+      body: { renderedVersion: CREATED, regionCode: "TRADE", note: "As discussed on the phone" },
       files: [pdfFile()],
     });
     const mail = sentMail();
@@ -269,7 +339,16 @@ describe("what the Send dialog is shown before sending", () => {
       cc: ["radhika@renderways.in", "dinesh@renderways.in", "hosur@renderways.in"],
       branch: "HOSUR",
       attachmentName: "5166159539.pdf",
+      canSend: true,
+      blockedReason: null,
     });
+  });
+
+  it("tells a branch login it cannot send a Visit quotation, before a PDF is made", async () => {
+    mocks.findQuotationById.mockResolvedValue(quotation("VISIT"));
+    const answer = await call(quotationSendDefaultsController, { ...HOSUR_ADMIN });
+    expect(answer.data.canSend).toBe(false);
+    expect(answer.data.blockedReason).toContain("trade@renderways.in");
   });
 
   it("for a Part quotation: its subject, and nothing copied or attached", async () => {
@@ -282,6 +361,8 @@ describe("what the Send dialog is shown before sending", () => {
       cc: [],
       branch: null,
       attachmentName: null,
+      canSend: true,
+      blockedReason: null,
     });
     expect(mocks.findQuotationWorkLocation).not.toHaveBeenCalled();
   });
@@ -297,5 +378,28 @@ describe("what the Send dialog is shown before sending", () => {
     mocks.findQuotationById.mockResolvedValue(null);
     const answer = await call(quotationSendDefaultsController, { ...SUPER_ADMIN });
     expect(answer.status).toBe(404);
+  });
+});
+
+describe("the access check ahead of the upload", () => {
+  const run = (request: object) =>
+    new Promise<unknown>((resolve) => {
+      requireQuotationAccessMiddleware(request as Request, {} as Response, (error?: unknown) => resolve(error));
+    });
+
+  it("lets a signed-in user through to the upload", async () => {
+    expect(await run(SUPER_ADMIN)).toBeUndefined();
+  });
+
+  it("lets a special-access login through only with Quotations granted", async () => {
+    expect(await run({ specialAccess: { username: "desk", sections: ["quotations"] } })).toBeUndefined();
+    const refused = (await run({ specialAccess: { username: "vendor", sections: ["inventory"] } })) as { statusCode?: number; status?: number };
+    expect(refused).toBeDefined();
+    expect(refused.statusCode ?? refused.status).toBe(403);
+  });
+
+  it("refuses a login that is neither", async () => {
+    const refused = (await run({})) as { statusCode?: number; status?: number };
+    expect(refused.statusCode ?? refused.status).toBe(403);
   });
 });

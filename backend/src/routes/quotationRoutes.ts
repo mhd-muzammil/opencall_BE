@@ -11,9 +11,10 @@ import {
   approveQuotationDraftController,
   removeQuotationDraftController,
   quotationSendDefaultsController,
+  requireQuotationAccessMiddleware,
 } from "../controllers/quotationController.js";
 import { requirePrincipal } from "../middlewares/authMiddleware.js";
-import { composeAttachmentMiddleware } from "../middlewares/composeAttachmentMiddleware.js";
+import { quotationEstimateUploadMiddleware } from "../middlewares/quotationEstimateUploadMiddleware.js";
 
 // Customer quotations. Mounted at /api/v1/quotations.
 // requirePrincipal accepts a regular user OR a special-access credential; the controller
@@ -38,10 +39,12 @@ quotationRouter.put("/:id", requirePrincipal, updateQuotationController);
 quotationRouter.get("/:id/send-defaults", requirePrincipal, quotationSendDefaultsController);
 // Mail the sheet to the customer through the region mailbox Customer Emails uses. Multipart
 // when a Visit quotation carries its sheet as a PDF; a JSON body passes the upload untouched.
+// The access check runs before the upload is read, not after.
 quotationRouter.post(
   "/:id/send",
   requirePrincipal,
-  composeAttachmentMiddleware,
+  requireQuotationAccessMiddleware,
+  quotationEstimateUploadMiddleware,
   sendQuotationController,
 );
 // What the customer did about it — a person's call, not something read out of a reply.

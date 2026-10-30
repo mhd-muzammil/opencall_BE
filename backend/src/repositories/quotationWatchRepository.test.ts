@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import {
   listQuotationsAwaitingReply,
   listQuotationsNeedingSendCheck,
+  listRepliesForQuotation,
+  listReplyImages,
+  listUnplacedRepliesFromCustomer,
 } from "./quotationWatchRepository.js";
+import { visitQuotationInlineImages } from "../services/quotations/visitQuotationMail.js";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("../config/database.js", () => ({ query: mocks.query, pool: { connect: vi.fn() } }));
@@ -49,5 +54,33 @@ describe("listQuotationsNeedingSendCheck", () => {
     const [check] = await listQuotationsNeedingSendCheck({ limit: 8, recheckAfterHours: 24 });
     expect(squash(mocks.query.mock.calls[0]![0])).toContain("created_at::TEXT AS created_at");
     expect(check).toMatchObject({ raisedAt: "2026-10-29 00:00:00+05:30", createdAt: "2026-10-29 16:00:00+05:30" });
+  });
+});
+
+/**
+ * The Visit mail's own signature pictures, sent back in a reply as ordinary attachments by
+ * some mail clients, must never count as the customer's picture: with them, a bare "payment
+ * done" would read as proven.
+ */
+describe("the pictures a reply carried", () => {
+  const ours = visitQuotationInlineImages();
+  const hashes = ours.map((image) => createHash("md5").update(image.content).digest("hex"));
+
+  async function sqlOf(run: () => Promise<unknown>): Promise<string> {
+    mocks.query.mockResolvedValue({ rows: [] });
+    await run();
+    return squash(mocks.query.mock.calls[0]![0]);
+  }
+
+  it.each([
+    ["listRepliesForQuotation", () => listRepliesForQuotation({ orderNumber: "WO-1", watchFrom: "2026-10-30" })],
+    ["listUnplacedRepliesFromCustomer", () => listUnplacedRepliesFromCustomer({ fromEmail: "c@example.com", watchFrom: "2026-10-30" })],
+    ["listReplyImages", () => listReplyImages("e-1")],
+  ])("%s leaves our own signature pictures out", async (_name, run) => {
+    const sql = await sqlOf(run);
+    for (const hash of hashes) expect(sql).toContain(`'${hash}'`);
+    expect(sql).toContain("md5(a.content) IN (");
+    expect(sql).toContain("a.content_id ILIKE '%@opencall%'");
+    expect(sql).toContain("'hp.png'");
   });
 });

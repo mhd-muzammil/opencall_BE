@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Quotation } from "../../repositories/quotationRepository.js";
 import {
   HP_LOGO_PNG,
@@ -130,6 +131,23 @@ export function visitQuotationInlineImages(): Array<{
     png(CID.mark, "renderways.png", RENDERWAYS_MARK_PNG),
     png(CID.hp, "hp.png", HP_LOGO_PNG),
   ];
+}
+
+/**
+ * How the payment watch recognises these pictures coming back in a customer's reply.
+ *
+ * A reply quotes the mail it answers, and some mail clients send the quoted pictures back
+ * as ordinary attachments rather than inline. Counted as "the customer attached a picture",
+ * our own HP logo would turn a bare "payment done" into proof. Known by their bytes, by the
+ * content id the mail gave them (`…@opencall`), or by name at signature size for a client
+ * that re-encoded them.
+ */
+export function visitQuotationPictureFingerprints(): { md5s: string[]; filenames: string[] } {
+  const images = visitQuotationInlineImages();
+  return {
+    md5s: images.map((image) => createHash("md5").update(image.content).digest("hex")),
+    filenames: images.map((image) => image.filename.toLowerCase()),
+  };
 }
 
 const LETTER = "font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt;";

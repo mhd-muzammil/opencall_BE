@@ -1,4 +1,5 @@
 import { query } from "../config/database.js";
+import { visitQuotationPictureFingerprints } from "../services/quotations/visitQuotationMail.js";
 
 /**
  * The join between a quotation and the reply it drew.
@@ -114,12 +115,30 @@ export interface QuotationReply {
   isAutoReply: boolean;
 }
 
+/**
+ * Not one of the Visit quotation mail's own signature pictures (attachment alias `a`).
+ *
+ * A reply quotes the mail it answers, and some clients send the quoted pictures back as
+ * ordinary attachments. Our HP logo is not the customer's screenshot: counted as one, a bare
+ * "payment done" would read as proven. Recognised by their bytes, by the content id the mail
+ * gave them, or by name at signature size when a client re-encoded them. The hashes and names
+ * are this code's own constants, so they are written into the statement rather than bound.
+ */
+const OWN_PICTURES = visitQuotationPictureFingerprints();
+const NOT_OUR_SIGNATURE_SQL = `NOT (
+             md5(a.content) IN (${OWN_PICTURES.md5s.map((hash) => `'${hash}'`).join(", ")})
+             OR a.content_id ILIKE '%@opencall%'
+             OR (lower(a.filename) IN (${OWN_PICTURES.filenames.map((name) => `'${name}'`).join(", ")})
+                 AND a.size_bytes < 20000)
+           )`;
+
 /** The `hasImage` test, written once because three queries select it. */
 const HAS_IMAGE_SQL = `EXISTS (
         SELECT 1 FROM inbound_email_attachments a
          WHERE a.inbound_email_id = inbound_emails.id
            AND NOT a.is_inline
            AND a.mime_type ILIKE 'image/%'
+           AND ${NOT_OUR_SIGNATURE_SQL}
       ) AS has_image`;
 
 /**
@@ -245,12 +264,13 @@ export async function listReplyImages(inboundEmailId: string): Promise<ReplyImag
     size_bytes: number;
     content: Buffer;
   }>(
-    `SELECT id::TEXT, filename, mime_type, size_bytes, content
-       FROM inbound_email_attachments
-      WHERE inbound_email_id = $1
-        AND NOT is_inline
-        AND mime_type ILIKE 'image/%'
-      ORDER BY size_bytes
+    `SELECT a.id::TEXT, a.filename, a.mime_type, a.size_bytes, a.content
+       FROM inbound_email_attachments a
+      WHERE a.inbound_email_id = $1
+        AND NOT a.is_inline
+        AND a.mime_type ILIKE 'image/%'
+        AND ${NOT_OUR_SIGNATURE_SQL}
+      ORDER BY a.size_bytes
       LIMIT 5`,
     [inboundEmailId],
   );
