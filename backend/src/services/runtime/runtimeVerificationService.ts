@@ -101,6 +101,9 @@ const FEATURE_TABLES = [
   // 072 (applyQuotationDraftsMigration) — the Waiting Approval box and the report's auto
   // quotations need it; without it the box shows a dash and nothing else breaks.
   "quotation_drafts",
+  // 073 (applyQuotationRemarksMigration) — the Quotations table's Remark column; without it
+  // the column shows a dash and nothing else breaks.
+  "quotation_remarks",
   // migrate:region-eod — the Final-EOD endpoints 500 without these.
   "region_eod_state",
   "region_productivity_snapshot",

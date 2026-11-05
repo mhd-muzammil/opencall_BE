@@ -12,6 +12,9 @@ import {
   removeQuotationDraftController,
   quotationSendDefaultsController,
   requireQuotationAccessMiddleware,
+  listQuotationRemarksController,
+  setQuotationRemarkController,
+  setQuotationDraftRemarkController,
 } from "../controllers/quotationController.js";
 import { requirePrincipal } from "../middlewares/authMiddleware.js";
 import { quotationEstimateUploadMiddleware } from "../middlewares/quotationEstimateUploadMiddleware.js";
@@ -30,6 +33,11 @@ quotationRouter.get("/drafts", requirePrincipal, listQuotationDraftsController);
 // Approving is filling in the amount: same body as create, and it takes the next number.
 quotationRouter.post("/drafts/:id/approve", requirePrincipal, approveQuotationDraftController);
 quotationRouter.post("/drafts/:id/remove", requirePrincipal, removeQuotationDraftController);
+// The table's Remark column: every remark at once (declared before /:id, which would otherwise
+// read "remarks" as a quotation id), and one written against a waiting quotation or a quotation.
+quotationRouter.get("/remarks", requirePrincipal, listQuotationRemarksController);
+quotationRouter.put("/drafts/:id/remark", requirePrincipal, setQuotationDraftRemarkController);
+quotationRouter.put("/:id/remark", requirePrincipal, setQuotationRemarkController);
 quotationRouter.get("/", requirePrincipal, listQuotationsController);
 quotationRouter.get("/:id", requirePrincipal, getQuotationController);
 quotationRouter.post("/", requirePrincipal, createQuotationController);

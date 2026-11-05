@@ -28,6 +28,12 @@ import {
   listQuotationDrafts,
   removeQuotationDraft,
 } from "../repositories/quotationDraftRepository.js";
+import {
+  REMARK_MAX_LENGTH,
+  listQuotationRemarks,
+  setQuotationDraftRemark,
+  setQuotationRemark,
+} from "../repositories/quotationRemarkRepository.js";
 import { autofillQuotation } from "../services/quotations/quotationAutofillService.js";
 import { recordActivity } from "../services/audit/activityLogger.js";
 
@@ -709,5 +715,110 @@ export const removeQuotationDraftController: RequestHandler = asyncHandler(
     });
 
     response.json({ data: result.draft });
+  },
+);
+
+// --- Remarks ------------------------------------------------------------------------------
+//
+// A line the office types against a quotation, or a waiting one, in the Quotations table's
+// Remark column (the user, 5 Nov 2026). Only the table shows it: not the sheet, not the mail,
+// not the boxes.
+
+/** The remark as typed, trimmed. Empty is allowed: it clears the remark. */
+const remarkSchema = z.object({
+  remark: z.string().trim().max(REMARK_MAX_LENGTH, `A remark can be at most ${REMARK_MAX_LENGTH} characters`),
+});
+
+function readRemark(body: unknown): string {
+  const parsed = remarkSchema.safeParse(body ?? {});
+  if (!parsed.success) {
+    throw badRequest("Invalid remark", parsed.error.flatten());
+  }
+  return parsed.data.remark;
+}
+
+/** A quotation's id is a UUID like a waiting one's; anything else would reach Postgres as a cast error. */
+function readQuotationId(request: Request): string {
+  const id = String(request.params.id ?? "").trim();
+  if (!DRAFT_ID.test(id)) throw notFound("Quotation not found", { id });
+  return id;
+}
+
+/** Every remark at once, by quotation id and by waiting quotation id. */
+export const listQuotationRemarksController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    requireQuotationAccess(request);
+    response.json({ data: await listQuotationRemarks() });
+  },
+);
+
+/** Write a quotation's remark. The quotation itself — its sheet, its version — is untouched. */
+export const setQuotationRemarkController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const actor = requireQuotationAccess(request);
+    const id = readQuotationId(request);
+    const remark = readRemark(request.body);
+
+    const saved = await setQuotationRemark({ quotationId: id, remark, actor });
+    if (!saved) throw notFound("Quotation not found", { id });
+
+    recordActivity({
+      eventType: "UPLOAD_CREATED",
+      actorEmailFallback: actor,
+      ...(request.currentUser
+        ? {
+            actor: {
+              id: request.currentUser.id,
+              email: request.currentUser.email,
+              role: request.currentUser.role,
+            },
+            regionId: request.currentUser.regionId ?? null,
+          }
+        : {}),
+      targetType: "quotation",
+      targetId: id,
+      metadata: { kind: "QUOTATION_REMARK", remark },
+      request,
+    });
+
+    response.json({ data: saved });
+  },
+);
+
+/** Write a waiting quotation's remark, while it still waits. */
+export const setQuotationDraftRemarkController: RequestHandler = asyncHandler(
+  async (request, response) => {
+    const actor = requireQuotationAccess(request);
+    const id = readDraftId(request);
+    const remark = readRemark(request.body);
+
+    const result = await setQuotationDraftRemark({ draftId: id, remark, actor });
+    if (result.outcome === "NOT_FOUND") {
+      throw notFound("Waiting quotation not found", { id });
+    }
+    if (result.outcome === "DECIDED") {
+      throw conflict(decidedMessage(result.draft));
+    }
+
+    recordActivity({
+      eventType: "UPLOAD_CREATED",
+      actorEmailFallback: actor,
+      ...(request.currentUser
+        ? {
+            actor: {
+              id: request.currentUser.id,
+              email: request.currentUser.email,
+              role: request.currentUser.role,
+            },
+            regionId: request.currentUser.regionId ?? null,
+          }
+        : {}),
+      targetType: "quotation",
+      targetId: id,
+      metadata: { kind: "QUOTATION_DRAFT_REMARK", remark },
+      request,
+    });
+
+    response.json({ data: result.remark });
   },
 );

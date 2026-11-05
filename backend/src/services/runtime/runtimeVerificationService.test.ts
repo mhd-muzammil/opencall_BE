@@ -44,6 +44,7 @@ const FEATURE_TABLES = [
   "quotation_sequences",
   "quotation_visit_sequences",
   "quotation_drafts",
+  "quotation_remarks",
   "region_eod_state",
   "region_productivity_snapshot",
   "flex_raw_records",
@@ -194,6 +195,23 @@ describe("verifyRuntimeSchema", () => {
     const result = await verifyRuntimeSchema();
 
     expect(result.missingFeatureTables).toEqual(["quotation_drafts"]);
+    expect(result.missingFeatureColumns).toEqual([]);
+    expect(result.degraded).toBe(true);
+    expect(result.ok).toBe(true);
+  });
+
+  /**
+   * 073 comes after 072 in the boot runner, so whatever stops 072 stops it too. The Quotations
+   * table's Remark column is what goes; the rest of the section reads nothing from it.
+   */
+  it("reports an unapplied 073 as degraded WITHOUT failing readiness", async () => {
+    mocks.query.mockResolvedValue({
+      rows: schemaRows([...CORE_TABLES, ...FEATURE_TABLES].filter((table) => table !== "quotation_remarks")),
+    });
+
+    const result = await verifyRuntimeSchema();
+
+    expect(result.missingFeatureTables).toEqual(["quotation_remarks"]);
     expect(result.missingFeatureColumns).toEqual([]);
     expect(result.degraded).toBe(true);
     expect(result.ok).toBe(true);

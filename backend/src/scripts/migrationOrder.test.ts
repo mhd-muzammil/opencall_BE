@@ -90,5 +90,12 @@ describe("MIGRATION_SCRIPTS", () => {
     expect(at("applyRenewalLeadsMigration")).toBeGreaterThan(
       at("applyUserManagementMigration"),
     );
+    // quotation_remarks FKs quotations(id) and quotation_drafts(id).
+    expect(at("applyQuotationRemarksMigration")).toBeGreaterThan(
+      at("applyQuotationsMigration"),
+    );
+    expect(at("applyQuotationRemarksMigration")).toBeGreaterThan(
+      at("applyQuotationDraftsMigration"),
+    );
   });
 });
