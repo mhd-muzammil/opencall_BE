@@ -24,9 +24,31 @@ const STATEMENTS = [
   `DROP INDEX IF EXISTS daily_call_plan_report_rows_customer_mail_lower_idx;`,
 ];
 
+// Applied already: both composites present and valid, both superseded indexes gone. Without
+// this check every deploy re-ran the drop-and-rebuild, and on production's 30M-row table that
+// holds an ACCESS EXCLUSIVE lock for minutes -- the live app's queries on the table queued
+// behind it (deploy of 2026-11-10).
+const APPLIED_CHECK = `
+  SELECT
+    (SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE c.relname IN ('daily_call_plan_report_rows_ticket_upper_id_idx',
+                          'daily_call_plan_report_rows_cust_mail_lower_id_idx')
+        AND i.indisvalid) = 2
+    AND
+    (SELECT count(*) FROM pg_class
+      WHERE relname IN ('daily_call_plan_report_rows_ticket_upper_idx',
+                        'daily_call_plan_report_rows_customer_mail_lower_idx')) = 0
+    AS applied`;
+
 async function run(): Promise<void> {
   const client = await pool.connect();
   try {
+    const { rows } = await client.query<{ applied: boolean }>(APPLIED_CHECK);
+    if (rows[0]?.applied) {
+      console.log("Skipped migration 059_inbound_email_match_indexes_plain.sql — already applied");
+      return;
+    }
+
     // A statement_timeout inherited from the environment would abort the build mid-way; this
     // is a migration run by hand and is meant to finish.
     await client.query("SET statement_timeout = 0");
