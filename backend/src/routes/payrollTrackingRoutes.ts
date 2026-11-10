@@ -14,7 +14,12 @@ import {
   getRouteKmController,
   getRouteKmDayController,
 } from "../controllers/payrollTrackingController.js";
+import {
+  getReportsAttendanceController,
+  getReportsPayslipsController,
+} from "../controllers/reportsHubController.js";
 import { requireAuthenticatedUser } from "../middlewares/authMiddleware.js";
+import { requireRole } from "../middlewares/roleMiddleware.js";
 
 export const payrollTrackingRouter = Router();
 
@@ -55,3 +60,7 @@ payrollTrackingRouter.post("/cases-by-day", getCasesByDayController);
 // The Day Report tab: what the day panel says about each engineer-day, for a period of at most 31 days:
 // POST /day-report {from, to, engineer_ids}
 payrollTrackingRouter.post("/day-report", getDayReportController);
+// The Reports section (SUPER_ADMIN only, read-only): Payroll's attendance register and payslips for a range of
+// at most 31 days: /reports/attendance?from=YYYY-MM-DD&to=YYYY-MM-DD, /reports/payslips?from=…&to=…
+payrollTrackingRouter.get("/reports/attendance", requireRole(["SUPER_ADMIN"]), getReportsAttendanceController);
+payrollTrackingRouter.get("/reports/payslips", requireRole(["SUPER_ADMIN"]), getReportsPayslipsController);

@@ -820,3 +820,13 @@ export async function getDayReport(
     body: JSON.stringify({ engineers: engineerIds, from, to }),
   });
 }
+
+// ---- Reports (read-only) -------------------------------------------------
+
+/**
+ * A read-only GET against Payroll as the service account, for the Reports
+ * section. Only ever GET: nothing the Reports section does can change Payroll.
+ */
+export async function payrollGet<T>(path: string): Promise<T> {
+  return authed<T>(path, { method: "GET" });
+}
