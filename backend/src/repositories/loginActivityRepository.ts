@@ -1,5 +1,6 @@
 import { query } from "../config/database.js";
 import type { ActivityEventType } from "./activityLogRepository.js";
+import type { ClientLocation } from "../services/audit/clientLocation.js";
 
 /**
  * Read-only helpers over the existing `user_activity_log` to surface WHERE a principal has
@@ -21,6 +22,11 @@ export interface ActivityPing {
   /** Text form of the INET (host()), or null when not captured. */
   ip: string | null;
   userAgent: string | null;
+  /** The browser's GPS fix (or why there is none), when the client sent one. */
+  clientLocation: ClientLocation | null;
+  /** For case edits: which ticket, and the RTPL status move if the status changed. */
+  ticketId: string | null;
+  rtplStatusChange: { fromStatus: string | null; toStatus: string | null } | null;
 }
 
 interface ActivityPingDb {
@@ -29,6 +35,39 @@ interface ActivityPingDb {
   event_type: ActivityEventType;
   ip: string | null;
   user_agent: string | null;
+  client_location: unknown;
+  ticket_id: string | null;
+  rtpl_status_change: unknown;
+}
+
+/** Re-validates the stored JSON — older rows and hand-edited metadata must not break the view. */
+function toClientLocation(value: unknown): ClientLocation | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (v.status === "denied" || v.status === "unavailable") return { status: v.status };
+  if (
+    v.status === "ok" &&
+    typeof v.lat === "number" &&
+    typeof v.lon === "number" &&
+    typeof v.accuracyM === "number" &&
+    typeof v.capturedAt === "string"
+  ) {
+    return {
+      status: "ok",
+      lat: v.lat,
+      lon: v.lon,
+      accuracyM: v.accuracyM,
+      capturedAt: v.capturedAt,
+    };
+  }
+  return null;
+}
+
+function toStatusChange(value: unknown): ActivityPing["rtplStatusChange"] {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const str = (x: unknown) => (typeof x === "string" ? x : null);
+  return { fromStatus: str(v.fromStatus), toStatus: str(v.toStatus) };
 }
 
 function mapPing(row: ActivityPingDb): ActivityPing {
@@ -38,6 +77,9 @@ function mapPing(row: ActivityPingDb): ActivityPing {
     eventType: row.event_type,
     ip: row.ip,
     userAgent: row.user_agent,
+    clientLocation: toClientLocation(row.client_location),
+    ticketId: row.ticket_id,
+    rtplStatusChange: toStatusChange(row.rtpl_status_change),
   };
 }
 
@@ -50,7 +92,10 @@ export async function getLastActivityForUsers(): Promise<ActivityPing[]> {
         occurred_at::TEXT        AS occurred_at,
         event_type,
         host(ip_address)         AS ip,
-        user_agent
+        user_agent,
+        metadata->'clientLocation'   AS client_location,
+        metadata->>'ticketId'        AS ticket_id,
+        metadata->'rtplStatusChange' AS rtpl_status_change
       FROM user_activity_log
       WHERE status = 'SUCCESS'
         AND actor_user_id IS NOT NULL
@@ -72,7 +117,10 @@ export async function getActivityHistoryForUser(
         occurred_at::TEXT        AS occurred_at,
         event_type,
         host(ip_address)         AS ip,
-        user_agent
+        user_agent,
+        metadata->'clientLocation'   AS client_location,
+        metadata->>'ticketId'        AS ticket_id,
+        metadata->'rtplStatusChange' AS rtpl_status_change
       FROM user_activity_log
       WHERE status = 'SUCCESS'
         AND actor_user_id = $1
@@ -93,7 +141,10 @@ export async function getLastActivityForSpecialAccess(): Promise<ActivityPing[]>
         occurred_at::TEXT            AS occurred_at,
         event_type,
         host(ip_address)             AS ip,
-        user_agent
+        user_agent,
+        metadata->'clientLocation'   AS client_location,
+        metadata->>'ticketId'        AS ticket_id,
+        metadata->'rtplStatusChange' AS rtpl_status_change
       FROM user_activity_log
       WHERE status = 'SUCCESS'
         AND metadata->>'specialAccessId' IS NOT NULL
@@ -115,7 +166,10 @@ export async function getActivityHistoryForSpecialAccess(
         occurred_at::TEXT            AS occurred_at,
         event_type,
         host(ip_address)             AS ip,
-        user_agent
+        user_agent,
+        metadata->'clientLocation'   AS client_location,
+        metadata->>'ticketId'        AS ticket_id,
+        metadata->'rtplStatusChange' AS rtpl_status_change
       FROM user_activity_log
       WHERE status = 'SUCCESS'
         AND metadata->>'specialAccessId' = $1

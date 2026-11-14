@@ -5,6 +5,7 @@ import {
   type ActivityEventType,
   type ActivityStatus,
 } from "../../repositories/activityLogRepository.js";
+import { CLIENT_LOCATION_HEADER, parseClientLocationHeader } from "./clientLocation.js";
 
 export interface RecordActivityInput {
   eventType: ActivityEventType;
@@ -37,6 +38,16 @@ function extractUserAgent(request: Request | null | undefined): string | null {
   return ua ? ua.slice(0, 500) : null;
 }
 
+/** Adds the browser's GPS fix (or its absence) to the event, when the client sent one. */
+function withClientLocation(
+  metadata: Record<string, unknown>,
+  request: Request | null | undefined,
+): Record<string, unknown> {
+  if (!request || "clientLocation" in metadata) return metadata;
+  const clientLocation = parseClientLocationHeader(request.header(CLIENT_LOCATION_HEADER));
+  return clientLocation ? { ...metadata, clientLocation } : metadata;
+}
+
 export function recordActivity(input: RecordActivityInput): void {
   const payload = {
     actorUserId: input.actor?.id ?? null,
@@ -48,7 +59,7 @@ export function recordActivity(input: RecordActivityInput): void {
     targetId: input.targetId ?? null,
     ipAddress: extractIp(input.request),
     userAgent: extractUserAgent(input.request),
-    metadata: input.metadata ?? {},
+    metadata: withClientLocation(input.metadata ?? {}, input.request),
     status: input.status ?? "SUCCESS",
   };
 
