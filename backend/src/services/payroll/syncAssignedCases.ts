@@ -133,7 +133,14 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
       };
       const brandCall = brandCallByTicket.get(ticket.toUpperCase());
       if (brandCall) {
-        input.title = `${CALL_BRAND_LABELS[brandCall.brand]} service call (${ticket})`.slice(0, 200);
+        // The engineer app's case card shows the title and none of the brand-only
+        // details, so the fault goes in the title: "Acer · CANT POWER ON SYSTEM (ACER-…)".
+        const issue = brandCall.issueDescription.trim();
+        input.title = (
+          issue
+            ? `${CALL_BRAND_LABELS[brandCall.brand]} · ${issue} (${ticket})`
+            : `${CALL_BRAND_LABELS[brandCall.brand]} service call (${ticket})`
+        ).slice(0, 200);
       }
       if (detail) {
         // The address the engineer travels to. Common Address is the more
