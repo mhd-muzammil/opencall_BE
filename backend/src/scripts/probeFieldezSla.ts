@@ -32,9 +32,9 @@ import { chromium, type Page } from "playwright";
  */
 
 const config = {
-  loginUrl: process.env.FIELDEZ_URL ?? "https://prod.fsmsupport.com/frontend/auth/login",
+  loginUrl: process.env.FIELDEZ_URL ?? "https://fieldez.flex.com/frontend/auth/login",
   summaryUrl:
-    process.env.FIELDEZ_SUMMARY_URL ?? "https://prod.fsmsupport.com/frontend/tlm/summary-list",
+    process.env.FIELDEZ_SUMMARY_URL ?? "https://fieldez.flex.com/frontend/tlm/summary-list",
   username: process.env.FIELDEZ_USERNAME ?? "",
   password: process.env.FIELDEZ_PASSWORD ?? "",
   profileDir:
@@ -438,7 +438,7 @@ async function run(): Promise<void> {
       const tried = new Set<string>();
       outer: for (const [idKey, id] of big) {
         for (const [bpKey, bp] of small.length > 0 ? small : ([["guess", 2]] as Array<[string, number]>)) {
-          const url = `https://prod.fsmsupport.com/frontend/tlm/ticket-view/${bp}/${id}/summary`;
+          const url = `${new URL(config.loginUrl).origin}/frontend/tlm/ticket-view/${bp}/${id}/summary`;
           if (tried.has(url) || tried.size >= 6) break outer;
           tried.add(url);
           log(`trying ${bpKey}=${bp}, ${idKey}=${id} → ${url}`);

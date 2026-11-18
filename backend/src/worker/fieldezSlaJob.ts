@@ -298,7 +298,7 @@ async function inPool<T, R>(
 
 export interface SlaSyncOptions {
   page: Page;
-  /** FieldEZ origin, e.g. https://prod.fsmsupport.com */
+  /** FieldEZ origin, e.g. https://fieldez.flex.com */
   fieldezBase: string;
   /** OpenCall API base, e.g. http://opencall:4000 */
   apiUrl: string;

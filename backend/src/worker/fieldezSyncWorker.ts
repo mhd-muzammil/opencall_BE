@@ -33,8 +33,8 @@ function num(name: string, fallback: number): number {
 }
 
 const config = {
-  loginUrl: str("FIELDEZ_URL", "https://prod.fsmsupport.com/frontend/auth/login"),
-  reportsUrl: str("FIELDEZ_REPORTS_URL", "https://prod.fsmsupport.com/frontend/birt/viewlist"),
+  loginUrl: str("FIELDEZ_URL", "https://fieldez.flex.com/frontend/auth/login"),
+  reportsUrl: str("FIELDEZ_REPORTS_URL", "https://fieldez.flex.com/frontend/birt/viewlist"),
   username: str("FIELDEZ_USERNAME"),
   password: str("FIELDEZ_PASSWORD"),
   reportName: str("FIELDEZ_REPORT_NAME", "Flex WIP Report ASP"),
@@ -75,7 +75,7 @@ const config = {
   // the report jobs, and `FIELDEZ_SLA_ENABLED=false` turns it off without a code change.
   slaEnabled: (process.env.FIELDEZ_SLA_ENABLED ?? "true").trim().toLowerCase() !== "false",
   slaIntervalMs: num("FIELDEZ_SLA_INTERVAL_MS", 15 * 60 * 1000), // 15 min
-  fieldezBase: str("FIELDEZ_BASE_URL", "https://prod.fsmsupport.com").replace(/\/$/, ""),
+  fieldezBase: str("FIELDEZ_BASE_URL", "https://fieldez.flex.com").replace(/\/$/, ""),
   // Pause between two jobs that came due in the same cycle, so the second one does
   // not hit the API while the first one's report generation is still finishing.
   jobStaggerMs: num("FIELDEZ_JOB_STAGGER_MS", 60 * 1000),

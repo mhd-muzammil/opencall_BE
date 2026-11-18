@@ -126,8 +126,8 @@ services:
       # --- FieldEZ (source) — required for the worker to start ---
       FIELDEZ_USERNAME: ${FIELDEZ_USERNAME:-}
       FIELDEZ_PASSWORD: ${FIELDEZ_PASSWORD:-}
-      FIELDEZ_URL: ${FIELDEZ_URL:-https://prod.fsmsupport.com/frontend/auth/login}
-      FIELDEZ_REPORTS_URL: ${FIELDEZ_REPORTS_URL:-https://prod.fsmsupport.com/frontend/birt/viewlist}
+      FIELDEZ_URL: ${FIELDEZ_URL:-https://fieldez.flex.com/frontend/auth/login}
+      FIELDEZ_REPORTS_URL: ${FIELDEZ_REPORTS_URL:-https://fieldez.flex.com/frontend/birt/viewlist}
       FIELDEZ_REPORT_NAME: ${FIELDEZ_REPORT_NAME:-Flex WIP Report ASP}
       # Folder path walked before looking for a report row ("A>B" = A then B). FieldEZ
       # moved the reports into REPORTS > OTB REPORT on 2026-08-21 and the list now lands
