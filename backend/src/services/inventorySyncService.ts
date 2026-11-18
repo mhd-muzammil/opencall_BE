@@ -1,4 +1,5 @@
 import { query as pgQuery } from "../config/database.js";
+import { brandForTicketId } from "@opencall/shared";
 import { extractPartLine } from "./normalization/dedupeRowsByTicket.js";
 
 export function mapAspCodeToRegion(workLocation: string | null | undefined): string {
@@ -446,6 +447,11 @@ function releaseSyncSlot(): void {
  */
 export async function syncPartToInventory(row: SyncRowInput): Promise<void> {
   if (!row.case_id || !row.part) {
+    return;
+  }
+  // Inventory's stock here is HP stock. An Acer (or any non-HP) call's part must
+  // never be written into it, whatever someone types in the row's Part column.
+  if (brandForTicketId(row.ticket_id) !== "HP") {
     return;
   }
 
