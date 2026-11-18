@@ -61,6 +61,25 @@ describe("parseAcerCallsText", () => {
     });
   });
 
+  it("keeps a call whole when Excel quotes a cell with a line break in it", () => {
+    const paste = [
+      "1900004C\tPUMS ARCOT HITECH LAB\tAwaiting Onsite Visit\tOn-Site\tVeriton M4670G\tDT COMMERCIAL\tUD33X\tNO POWER\tIn Warranty\t\"PUMS ARCOT\nHITECH LAB \"\"B\"\" BLOCK 632503\"\t632503\t\t91-9123456780",
+      "1900005C\tGOVT HSS CHENNAI\tAwaiting Onsite Visit\tOn-Site\tEV226HQL\tMONITOR PROFESSIONAL\tZLM01\tNO DISPLAY\tIn Warranty\tANNA NAGAR 600040\t600040\t\t91-9876543210",
+    ].join("\n");
+    const result = parseAcerCallsText(paste);
+
+    expect(result.ignoredLines).toEqual([]);
+    expect(result.calls.map((call) => [call.lineNumber, call.caseId])).toEqual([
+      [1, "1900004C"],
+      [3, "1900005C"],
+    ]);
+    expect(result.calls[0]).toMatchObject({
+      fullAddress: 'PUMS ARCOT HITECH LAB "B" BLOCK 632503',
+      pincode: "632503",
+      primaryContact: "9123456780",
+    });
+  });
+
   it("flags the same case pasted twice", () => {
     const line = TABBED.split("\n")[1] ?? "";
     const result = parseAcerCallsText(`${line}\n${line}`);

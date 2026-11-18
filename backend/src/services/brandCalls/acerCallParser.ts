@@ -193,13 +193,69 @@ function parseCallLine(cells: readonly string[], lineNumber: number, sourceLine:
   return call;
 }
 
+/**
+ * The pasted text as logical lines, each with the line number it starts on.
+ *
+ * Excel copies a cell that holds a line break (an address typed over two lines) in
+ * double quotes, with the break inside — so one call spans two physical lines. In a
+ * tab-separated paste a cell that starts with a quote is read up to its closing
+ * quote ("" is a literal quote) and its line breaks become spaces. A paste with no
+ * tabs is read line by line, as typed.
+ */
+function logicalLines(text: string): { lineNumber: number; text: string }[] {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  if (!normalized.includes("\t")) {
+    return normalized.split("\n").map((line, index) => ({ lineNumber: index + 1, text: line }));
+  }
+  const lines: { lineNumber: number; text: string }[] = [];
+  let physical = 1;
+  let start = 1;
+  let current = "";
+  let cellStart = true;
+  let quoted = false;
+  for (let i = 0; i < normalized.length; i += 1) {
+    const ch = normalized[i] as string;
+    if (quoted) {
+      if (ch === '"') {
+        if (normalized[i + 1] === '"') {
+          current += '"';
+          i += 1;
+        } else {
+          quoted = false;
+        }
+      } else if (ch === "\n") {
+        physical += 1;
+        current += " ";
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === '"' && cellStart) {
+      quoted = true;
+      cellStart = false;
+      continue;
+    }
+    if (ch === "\n") {
+      lines.push({ lineNumber: start, text: current });
+      physical += 1;
+      start = physical;
+      current = "";
+      cellStart = true;
+      continue;
+    }
+    current += ch;
+    cellStart = ch === "\t";
+  }
+  lines.push({ lineNumber: start, text: current });
+  return lines;
+}
+
 export function parseAcerCallsText(text: string): ParsedAcerPaste {
   const calls: ParsedAcerCall[] = [];
   const ignoredLines: ParsedAcerPaste["ignoredLines"] = [];
 
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
-  lines.forEach((rawLine, index) => {
-    const lineNumber = index + 1;
+  logicalLines(text).forEach(({ lineNumber, text: rawLine }) => {
     if (!rawLine.trim()) {
       return;
     }
