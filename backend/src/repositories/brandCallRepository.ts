@@ -655,6 +655,11 @@ export async function reviveBrandCall(
   actor: string,
   isClosedStatus: (status: string) => boolean,
 ): Promise<BrandCall | null> {
+  const before = await client.query<{ was_deleted: boolean }>(
+    `SELECT deleted_at IS NOT NULL AS was_deleted FROM brand_calls WHERE brand = $1 AND case_id = $2`,
+    [brand, call.caseId],
+  );
+  const wasDeleted = before.rows[0]?.was_deleted === true;
   const result = await client.query<BrandCallDbRow>(
     `
       UPDATE brand_calls SET
@@ -693,17 +698,16 @@ export async function reviveBrandCall(
   if (!row) {
     return null;
   }
-  // A deleted call's rows were excluded; today's come back with it.
-  await client.query(
-    `
-      UPDATE daily_call_plan_report_rows r SET is_excluded = FALSE, updated_at = NOW()
-      FROM daily_call_plan_reports d
-      WHERE d.id = r.report_id AND r.is_excluded
-        AND UPPER(TRIM(r.ticket_id)) = $1
-        AND d.report_date >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date
-    `,
-    [row.ticket_id],
-  );
+  // Deleting excluded the call's rows in every report. Pasting it back undoes that
+  // everywhere, so it returns as it was — engineer, statuses and remarks carry forward
+  // from its last report instead of starting blank.
+  if (wasDeleted) {
+    await client.query(
+      `UPDATE daily_call_plan_report_rows SET is_excluded = FALSE, updated_at = NOW()
+       WHERE UPPER(TRIM(ticket_id)) = $1 AND is_excluded`,
+      [row.ticket_id],
+    );
+  }
   await clearClosedStatusesFromToday(client, row.ticket_id, isClosedStatus);
   return mapRow(row);
 }
