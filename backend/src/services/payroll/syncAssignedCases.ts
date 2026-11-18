@@ -17,6 +17,8 @@ import {
 import { findLatestCompletedSessionByReportDate } from "../../repositories/historyRepository.js";
 import { findEngineerContactByName } from "../../repositories/engineerRepository.js";
 import { getReportProductivity } from "../productivity/eodService.js";
+import { findBrandCallDetailsByTicketIds } from "../../repositories/brandCallRepository.js";
+import { brandForTicketId, CALL_BRAND_LABELS } from "@opencall/shared";
 import { HttpError } from "../../utils/httpError.js";
 import {
   bulkDispatchCases,
@@ -105,6 +107,12 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
   }
 
   // Resolve each engineer's email + phone once (reliable Payroll match keys).
+  // Acer (non-HP) calls have no Flex row for the address join above; their address,
+  // issue and contacts come from the call the admin entered.
+  const brandCallByTicket = await findBrandCallDetailsByTicketIds(
+    assignedTickets.filter((ticket) => brandForTicketId(ticket) !== "HP"),
+  );
+
   const contactByName = new Map<string, { email: string | null; phone: string | null } | null>();
   for (const name of assignedByEngineer.keys()) {
     contactByName.set(name, await findEngineerContactByName(name));
@@ -123,15 +131,24 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
         engineer_name: name,
         status: "assigned",
       };
+      const brandCall = brandCallByTicket.get(ticket.toUpperCase());
+      if (brandCall) {
+        input.title = `${CALL_BRAND_LABELS[brandCall.brand]} service call (${ticket})`.slice(0, 200);
+      }
       if (detail) {
         // The address the engineer travels to. Common Address is the more
         // complete of the two on most rows and is present where Customer
         // Address is blank, so it leads; the ASP work-location code is only a
         // last resort because it is not somewhere you can navigate to.
-        const address = detail.commonAddress || detail.customerAddress || detail.workLocation;
+        const address =
+          (brandCall?.fullAddress ?? "") ||
+          detail.commonAddress ||
+          detail.customerAddress ||
+          detail.workLocation;
+        const pincode = detail.customerPincode || (brandCall?.pincode ?? "");
         if (address) {
-          input.address = detail.customerPincode
-            ? `${address} - ${detail.customerPincode}`
+          input.address = pincode && !address.includes(pincode)
+            ? `${address} - ${pincode}`
             : address;
         }
         if (detail.customerName) {
@@ -159,7 +176,11 @@ export async function syncAssignedCasesForDate(workingDate: string): Promise<Pay
             customer_mail: detail.customerMail,
             common_address: detail.commonAddress,
             customer_address: detail.customerAddress,
-            customer_pincode: detail.customerPincode,
+            customer_pincode: pincode,
+            brand: brandCall ? CALL_BRAND_LABELS[brandCall.brand] : "",
+            issue_description: brandCall?.issueDescription ?? "",
+            warranty_status: brandCall?.warrantyStatus ?? "",
+            alt_contact: brandCall?.altContact ?? "",
           }).filter(([, value]) => value !== ""),
         );
       }

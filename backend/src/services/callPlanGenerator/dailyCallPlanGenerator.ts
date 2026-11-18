@@ -1,4 +1,18 @@
-import { DAILY_CALL_PLAN_COLUMNS, regionNameForAspCode } from "@opencall/shared";
+import {
+  brandForTicketId,
+  classifyProductivityStatus,
+  DAILY_CALL_PLAN_COLUMNS,
+  regionNameForAspCode,
+} from "@opencall/shared";
+import {
+  findBrandCallDetailsByTicketIds,
+  findOpenBrandCalls,
+} from "../../repositories/brandCallRepository.js";
+import {
+  brandCallEnrichedRow,
+  brandCallExtraOutput,
+  brandCallMatch,
+} from "../brandCalls/brandCallReportRows.js";
 import {
   findAddressRoadDistances,
   findPincodeCoordinates,
@@ -992,6 +1006,33 @@ export async function generateDailyCallPlanReport(
         ),
       };
     });
+    // Acer (and any later non-HP brand) calls: no file brings them, so every one open
+    // on the report's day is added here, before the carry-forward, as an ordinary row — see
+    // services/brandCalls/brandCallReportRows.ts. A region-scoped generation adds only
+    // its regions' calls, like the Flex rows above; the rest are carried forward
+    // untouched by the carry-forward's out-of-scope rule.
+    const openBrandCalls = (await findOpenBrandCalls(client, input.reportDate)).filter(
+      (call) =>
+        !allowedWorkLocations ||
+        allowedWorkLocations.has(call.regionCode.trim().toUpperCase()),
+    );
+    for (const call of openBrandCalls) {
+      const enriched = brandCallEnrichedRow(call, areaNameByPincode);
+      const serialNo = generatedRows.length + 1;
+      generatedRows.push({
+        id: null,
+        serialNo,
+        enriched,
+        match: brandCallMatch(enriched),
+        comparison: null,
+        carryForward: initialCarryForwardMetadata(),
+        updatedAt: null,
+        updatedBy: null,
+        rowEditable: true,
+        carryForwardSource: "PREVIOUS_FINAL_REPORT",
+        output: orderedDailyCallPlanRow(formatDailyCallPlanRow(serialNo, enriched)),
+      });
+    }
     const previousFinalRows =
       await findPreviousFinalReportRowsForManualCarryForward(client, {
         reportDate: input.reportDate,
@@ -1031,6 +1072,28 @@ export async function generateDailyCallPlanReport(
       sameDayEveningAuthority,
     });
     let rows = carryForwardResult.rows;
+    // A brand call reopened after it closed must not come back as "Case-Closed": the
+    // carry-forward promotes yesterday's Evening into today's Morning. Drop a CLOSED
+    // Morning/Evening on a reopened call that is open now (closing it again clears
+    // reopened_at, so a fresh close is never undone here).
+    const reopenedTickets = new Set(
+      openBrandCalls
+        .filter((call) => call.reopenedAt && !call.closedAt)
+        .map((call) => call.ticketId),
+    );
+    if (reopenedTickets.size > 0) {
+      const isClosed = (value: unknown) => {
+        const text = String(value ?? "").trim();
+        return text !== "" && classifyProductivityStatus(text) === "CLOSED";
+      };
+      for (const row of rows) {
+        const ticketId = String(row.enriched.ticket_id ?? "").trim().toUpperCase();
+        if (!reopenedTickets.has(ticketId) || row.carryForward.closedSyntheticRow) continue;
+        if (isClosed(row.enriched.rtpl_status)) row.enriched.rtpl_status = "";
+        if (isClosed(row.enriched.evening_rtpl_status)) row.enriched.evening_rtpl_status = null;
+        row.output = orderedDailyCallPlanRow(formatDailyCallPlanRow(row.serialNo, row.enriched));
+      }
+    }
     console.info("[dailyCallPlanGenerator] RTPL carry-forward input", {
       reportDate: input.reportDate,
       regionId: input.regionId,
@@ -1245,6 +1308,24 @@ export async function generateDailyCallPlanReport(
       }
     }
 
+    // The brand portal's own fields (issue, warranty, address, …) for the brand's tab
+    // on Records — what the raw Flex columns above are for HP rows. Closed brand rows
+    // get them too, so a call closed today still reads fully on its last day.
+    const brandTicketIds = rows
+      .map((row) => String(row.enriched.ticket_id ?? ""))
+      .filter((ticketId) => brandForTicketId(ticketId) !== "HP");
+    if (brandTicketIds.length > 0) {
+      const brandCallByTicket = await findBrandCallDetailsByTicketIds(brandTicketIds, client);
+      for (const row of rows) {
+        const call = brandCallByTicket.get(
+          String(row.enriched.ticket_id ?? "").trim().toUpperCase(),
+        );
+        if (call) {
+          Object.assign(row.output as Record<string, string | number>, brandCallExtraOutput(call));
+        }
+      }
+    }
+
     return {
       reportId: reportId as string,
       sessionId: historySession.id,
@@ -1256,7 +1337,11 @@ export async function generateDailyCallPlanReport(
       duplicateTracking,
       carryForward: carryForwardResult.summary,
       comparison,
-      regionBreakdown: computeRegionBreakdown(rows),
+      // HP's regional counts (the Overview region cards, the ASP filter): Acer rows have
+      // their own tab and must not swell HP's numbers.
+      regionBreakdown: computeRegionBreakdown(
+        rows.filter((row) => brandForTicketId(row.enriched.ticket_id) === "HP"),
+      ),
       regionScope,
       rows,
     };

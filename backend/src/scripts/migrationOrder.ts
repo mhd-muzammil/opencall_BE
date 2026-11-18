@@ -81,6 +81,7 @@ export const MIGRATION_SCRIPTS: readonly string[] = [
   "applyQuotationKindMigration", // 071 Visit vs Part quotations, and the Visit QEV number series
   "applyQuotationDraftsMigration", // 072 quotations raised from the report, waiting for approval
   "applyQuotationRemarksMigration", // 073 a remark on a quotation or a waiting one (FK quotations, quotation_drafts)
+  "applyBrandCallsMigration", // 074 Acer (and later brands) calls pasted in by a SUPER_ADMIN
 ];
 
 /**

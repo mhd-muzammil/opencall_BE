@@ -45,6 +45,7 @@ const FEATURE_TABLES = [
   "quotation_visit_sequences",
   "quotation_drafts",
   "quotation_remarks",
+  "brand_calls",
   "region_eod_state",
   "region_productivity_snapshot",
   "flex_raw_records",

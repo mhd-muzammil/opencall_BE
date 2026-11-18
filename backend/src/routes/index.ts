@@ -25,6 +25,7 @@ import { renewalRouter } from "./renewalRoutes.js";
 import { payrollTrackingRouter } from "./payrollTrackingRoutes.js";
 import { fieldezSlaRouter } from "./fieldezSlaRoutes.js";
 import { renderwaysTicketingRouter } from "./renderwaysTicketingRoutes.js";
+import { brandCallRouter } from "./brandCallRoutes.js";
 
 export const apiRouter = Router();
 
@@ -33,6 +34,8 @@ apiRouter.use("/health", healthRouter);
 apiRouter.use("/matches", matchRouter);
 apiRouter.use("/reports", reportRouter);
 apiRouter.use("/report-rows", reportRowRouter);
+// Acer (and later non-HP brands): calls a SUPER_ADMIN pastes in. See brandCallRoutes.
+apiRouter.use("/brand-calls", brandCallRouter);
 apiRouter.use("/uploads", uploadRouter);
 apiRouter.use("/closure-dates", closureDateRouter);
 apiRouter.use("/flex-raw", flexRawDataRouter);

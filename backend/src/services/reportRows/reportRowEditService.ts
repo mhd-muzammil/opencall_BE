@@ -15,6 +15,7 @@ import { findRegionById } from "../../repositories/regionRepository.js";
 import { workLocationMatchesRegion } from "../rbac/regionRowAccess.js";
 import { forbidden, unprocessableEntity } from "../../utils/httpError.js";
 import { schedulePayrollSyncSoon } from "../payroll/payrollSyncScheduler.js";
+import { syncBrandCallClosureFromRow } from "../brandCalls/brandCallService.js";
 import {
   appendCustomerPendingKci,
   buildScheduledRemark,
@@ -425,6 +426,17 @@ export async function applyReportRowManualFieldEdit(input: {
   // Engineer Productivity flows through even without a Scheduled toggle). Runs
   // a debounced (~2s) full sync + mirror — never blocks or fails this save,
   // idempotent, and a no-op unless Payroll is configured.
+  // Acer (non-HP) calls have no file to close them: a CLOSED status set here closes
+  // the call, and moving it off CLOSED reopens it. A no-op for HP rows.
+  if (hasEditedField(values, "rtplStatus") || hasEditedField(values, "eveningRtplStatus")) {
+    await syncBrandCallClosureFromRow({
+      ticketId: updated.ticketId,
+      rtplStatus: merged.rtplStatus,
+      eveningRtplStatus: merged.eveningRtplStatus,
+      actor: `${editor.kind}:${editor.id}`,
+    });
+  }
+
   const engineerAssignedNow =
     hasEditedField(values, "engineer") && isCarryForwardValue(merged.engineer);
   if (settingScheduled || engineerAssignedNow) {

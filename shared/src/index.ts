@@ -2,6 +2,7 @@ export * from "./constants/reportColumns.js";
 export * from "./constants/sourceColumns.js";
 export * from "./constants/rtplStatusOptions.js";
 export * from "./constants/regions.js";
+export * from "./constants/brands.js";
 export * from "./constants/specialAccess.js";
 export * from "./constants/vendorAccess.js";
 export * from "./constants/userSections.js";

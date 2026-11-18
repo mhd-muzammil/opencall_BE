@@ -78,6 +78,7 @@
     "migrate:quotation-kind": "tsx src/scripts/applyQuotationKindMigration.ts",
     "migrate:quotation-drafts": "tsx src/scripts/applyQuotationDraftsMigration.ts",
     "migrate:quotation-remarks": "tsx src/scripts/applyQuotationRemarksMigration.ts",
+    "migrate:brand-calls": "tsx src/scripts/applyBrandCallsMigration.ts",
     "migrate:all": "tsx src/scripts/applyAllMigrations.ts",
     "warranty:worker": "tsx src/worker/warrantyWorker.ts",
     "fieldez:worker": "tsx src/worker/fieldezSyncWorker.ts",

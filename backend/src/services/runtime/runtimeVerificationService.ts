@@ -104,6 +104,9 @@ const FEATURE_TABLES = [
   // 073 (applyQuotationRemarksMigration) — the Quotations table's Remark column; without it
   // the column shows a dash and nothing else breaks.
   "quotation_remarks",
+  // 074 (applyBrandCallsMigration) — Acer calls. Without it the Acer tab cannot save a
+  // paste and no Acer rows reach the reports; HP is untouched (readers ask to_regclass).
+  "brand_calls",
   // migrate:region-eod — the Final-EOD endpoints 500 without these.
   "region_eod_state",
   "region_productivity_snapshot",

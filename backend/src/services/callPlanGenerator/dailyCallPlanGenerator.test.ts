@@ -74,6 +74,12 @@ vi.mock("../../repositories/reportComparisonRepository.js", () => ({
   replaceReportComparison: mocks.replaceReportComparison,
 }));
 
+// No Acer (non-HP) calls in these HP scenarios.
+vi.mock("../../repositories/brandCallRepository.js", () => ({
+  findOpenBrandCalls: vi.fn(async () => []),
+  findBrandCallDetailsByTicketIds: vi.fn(async () => new Map()),
+}));
+
 vi.mock("../../repositories/sourceRecordRepository.js", () => ({
   findCallPlanRecordsByBatchId: mocks.findCallPlanRecordsByBatchId,
   findFlexWipRecordsByBatchId: mocks.findFlexWipRecordsByBatchId,
