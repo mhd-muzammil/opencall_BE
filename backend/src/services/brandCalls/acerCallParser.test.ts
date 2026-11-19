@@ -80,6 +80,79 @@ describe("parseAcerCallsText", () => {
     });
   });
 
+  // Acer's shorter view (production, 19 Nov 2026): no Call Status / Service Type columns.
+  const SHORT_CELLS = [
+    "1893265C",
+    "33030304603 KANCHEEPURAM PUMS MALAYANKULAM HITECH",
+    "Veriton M4670G",
+    "DT COMMERCIAL",
+    "UD33LSI0034300D8670700",
+    "CANT POWER ON SYSTEM",
+    "In Warranty",
+    "33030304603 KANCHEEPURAM PUMS MALAYANKULAM HITECH LAB 631603 9952531056 9787475577",
+    "631603",
+    "",
+    "91-9952531056",
+  ];
+  const SHORT_EXPECTED = {
+    caseId: "1893265C",
+    customerName: "33030304603 KANCHEEPURAM PUMS MALAYANKULAM HITECH",
+    callStatus: "",
+    serviceType: "",
+    model: "Veriton M4670G",
+    productCategory: "DT COMMERCIAL",
+    serialNumber: "UD33LSI0034300D8670700",
+    issueDescription: "CANT POWER ON SYSTEM",
+    warrantyStatus: "In Warranty",
+    fullAddress: "33030304603 KANCHEEPURAM PUMS MALAYANKULAM HITECH LAB 631603 9952531056 9787475577",
+    pincode: "631603",
+    primaryContact: "9952531056",
+    altContact: "9787475577",
+    errors: [],
+    warnings: [],
+  };
+
+  it("reads Acer's shorter view (no Call Status / Service Type) by content — tabs", () => {
+    const result = parseAcerCallsText(SHORT_CELLS.join("\t"));
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0]).toMatchObject(SHORT_EXPECTED);
+  });
+
+  it("reads Acer's shorter view by content — spaces", () => {
+    const result = parseAcerCallsText(SHORT_CELLS.filter(Boolean).join("    "));
+    expect(result.calls[0]).toMatchObject(SHORT_EXPECTED);
+  });
+
+  it("reads a view with only one of Call Status / Service Type", () => {
+    const cells = [...SHORT_CELLS];
+    cells.splice(2, 0, "On-Site");
+    const result = parseAcerCallsText(cells.join("\t"));
+    expect(result.calls[0]).toMatchObject({ ...SHORT_EXPECTED, serviceType: "On-Site" });
+  });
+
+  it("follows a pasted header row whatever its column order", () => {
+    const header = ["Case ID", "Customer Name", "Pincode", "Model", "Serial Number", "Warranty Status", "Primary Contact", "Full Address"];
+    const line = ["1893266C", "GOVT HSS", "600040", "EV226HQL", "ZLM01SI00243401C299F00", "In Warranty", "91-9876543210", "ANNA NAGAR"];
+    const result = parseAcerCallsText(`${header.join("\t")}\n${line.join("\t")}`);
+    expect(result.calls[0]).toMatchObject({
+      caseId: "1893266C",
+      customerName: "GOVT HSS",
+      pincode: "600040",
+      model: "EV226HQL",
+      serialNumber: "ZLM01SI00243401C299F00",
+      warrantyStatus: "In Warranty",
+      primaryContact: "9876543210",
+      fullAddress: "ANNA NAGAR",
+    });
+  });
+
+  it("warns when a line cannot be placed by content", () => {
+    const cells = ["1893267C", "SOME SCHOOL", "a", "b", "c", "d", "e", "f", "g", "ADDRESS", "123", "", "91-9876543210"];
+    const result = parseAcerCallsText(cells.join("\t"));
+    expect(result.calls[0]?.warnings.join(" ")).toMatch(/Could not recognise/);
+    expect(result.calls[0]?.warnings.join(" ")).toMatch(/not a 6-digit pincode/);
+  });
+
   it("flags the same case pasted twice", () => {
     const line = TABBED.split("\n")[1] ?? "";
     const result = parseAcerCallsText(`${line}\n${line}`);

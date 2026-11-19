@@ -48,7 +48,7 @@ export interface ParsedAcerPaste {
   ignoredLines: { lineNumber: number; text: string }[];
 }
 
-/** The fixed columns before Full Address. */
+/** The columns before Full Address, in the portal's full (13-column) order. */
 const LEADING_FIELDS = [
   "caseId",
   "customerName",
@@ -61,10 +61,70 @@ const LEADING_FIELDS = [
   "warrantyStatus",
 ] as const;
 
-/** A call line has at least the leading columns plus an address or pincode. */
-const MIN_CALL_COLUMNS = LEADING_FIELDS.length + 1;
+type CallField =
+  | (typeof LEADING_FIELDS)[number]
+  | "fullAddress"
+  | "pincode"
+  | "altContact"
+  | "primaryContact";
+
+/**
+ * A call line has at least Case ID, Customer, Model, Category, Serial, Issue,
+ * Warranty and an address or pincode. Acer's portal has more than one view: the
+ * full one has Call Status and Service Type after the customer, a shorter one
+ * (seen 19 Nov 2026) leaves both out — so columns are found by what they hold,
+ * not by position.
+ */
+const MIN_CALL_COLUMNS = 8;
 
 const PINCODE_RE = /^\d{6}$/;
+
+const TAB = String.fromCharCode(9);
+
+/** "In Warranty", "Out of Warranty", "OOW", "AMC", "Extended Warranty"… */
+const WARRANTY_RE = /warrant|^\s*(iw|oow|ow|amc|ew|cmc)\s*$/i;
+
+/** A product serial: one word of letters and digits, at least 10 long. */
+const SERIAL_RE = /^(?=.*\d)(?=.*[a-z])[a-z0-9]{10,}$/i;
+
+/** A Service Type value, to tell it from a Call Status when only one of them is there. */
+const SERVICE_TYPE_RE = /on[\s-]?site|carry|pick[\s-]?up|walk[\s-]?in|depot|drop/i;
+
+/** Header names (lower-cased, letters only) -> field. */
+const HEADER_FIELDS: Record<string, CallField> = {
+  caseid: "caseId",
+  customername: "customerName",
+  customer: "customerName",
+  callstatus: "callStatus",
+  status: "callStatus",
+  servicetype: "serviceType",
+  model: "model",
+  productcategory: "productCategory",
+  category: "productCategory",
+  serialnumber: "serialNumber",
+  serialno: "serialNumber",
+  serial: "serialNumber",
+  issuedescription: "issueDescription",
+  issue: "issueDescription",
+  problemdescription: "issueDescription",
+  warrantystatus: "warrantyStatus",
+  warranty: "warrantyStatus",
+  fulladdress: "fullAddress",
+  address: "fullAddress",
+  pincode: "pincode",
+  pin: "pincode",
+  altcontact: "altContact",
+  alternatecontact: "altContact",
+  primarycontact: "primaryContact",
+  contact: "primaryContact",
+  mobile: "primaryContact",
+};
+
+/** A header row's columns as fields, or null when it names no Case ID column. */
+function headerMapFor(cells: readonly string[]): (CallField | null)[] | null {
+  const map = cells.map((cell) => HEADER_FIELDS[cell.toLowerCase().replace(/[^a-z]/g, "")] ?? null);
+  return map[0] === "caseId" ? map : null;
+}
 
 function splitColumns(line: string): string[] {
   const cells = line.includes("\t") ? line.split("\t") : line.split(/ {2,}/);
@@ -104,7 +164,57 @@ function isHeaderRow(cells: readonly string[]): boolean {
   return /^case\s*id$/i.test(cells[0] ?? "");
 }
 
-function parseCallLine(cells: readonly string[], lineNumber: number, sourceLine: string): ParsedAcerCall {
+/**
+ * Places the cells before the address — Call Status / Service Type (when the view has
+ * them), Model, Category, Serial, Issue, Warranty — by content: the Serial is the long
+ * letters-and-digits word, Model and Category are the two cells before it, the Warranty
+ * cell says "warranty", and the Issue is what lies between them. Returns the index of
+ * the first cell after Warranty, or -1 when the line does not look like that (then the
+ * caller falls back to the full view's fixed positions and warns).
+ */
+function placeLeadingByContent(cells: readonly string[], call: ParsedAcerCall): number {
+  let warrantyIndex = -1;
+  for (let index = 2; index < cells.length; index += 1) {
+    if (WARRANTY_RE.test(cells[index] ?? "")) {
+      warrantyIndex = index;
+      break;
+    }
+  }
+  if (warrantyIndex < 0) return -1;
+
+  let serialIndex = -1;
+  for (let index = warrantyIndex - 1; index >= 4; index -= 1) {
+    if (SERIAL_RE.test(cells[index] ?? "")) {
+      serialIndex = index;
+      break;
+    }
+  }
+  if (serialIndex < 0) return -1;
+
+  const statusCells = cells.slice(2, serialIndex - 2);
+  if (statusCells.length > 2) return -1;
+  if (statusCells.length === 2) {
+    call.callStatus = statusCells[0] ?? "";
+    call.serviceType = statusCells[1] ?? "";
+  } else if (statusCells.length === 1) {
+    const only = statusCells[0] ?? "";
+    if (SERVICE_TYPE_RE.test(only)) call.serviceType = only;
+    else call.callStatus = only;
+  }
+  call.model = cells[serialIndex - 2] ?? "";
+  call.productCategory = cells[serialIndex - 1] ?? "";
+  call.serialNumber = cells[serialIndex] ?? "";
+  call.issueDescription = cells.slice(serialIndex + 1, warrantyIndex).filter(Boolean).join(" ");
+  call.warrantyStatus = cells[warrantyIndex] ?? "";
+  return warrantyIndex + 1;
+}
+
+function parseCallLine(
+  cells: readonly string[],
+  lineNumber: number,
+  sourceLine: string,
+  headerMap: readonly (CallField | null)[] | null = null,
+): ParsedAcerCall {
   const call: ParsedAcerCall = {
     lineNumber,
     caseId: "",
@@ -125,12 +235,39 @@ function parseCallLine(cells: readonly string[], lineNumber: number, sourceLine:
     warnings: [],
   };
 
-  LEADING_FIELDS.forEach((field, index) => {
-    call[field] = cells[index] ?? "";
-  });
-  call.caseId = call.caseId.toUpperCase();
+  call.caseId = (cells[0] ?? "").toUpperCase();
+  call.customerName = cells[1] ?? "";
 
-  const rest = cells.slice(LEADING_FIELDS.length);
+  // A pasted header row names every column: the surest way to read the lines under it.
+  if (headerMap) {
+    headerMap.forEach((field, index) => {
+      if (!field || field === "caseId") return;
+      const value = cells[index] ?? "";
+      if (field === "fullAddress") {
+        call.fullAddress = [call.fullAddress, value].filter(Boolean).join(", ");
+      } else if (field === "primaryContact" || field === "altContact") {
+        call[field] = normalizeIndianPhone(value);
+      } else {
+        call[field] = value;
+      }
+    });
+    finishCall(call);
+    return call;
+  }
+
+  let restStart = placeLeadingByContent(cells, call);
+  if (restStart < 0) {
+    // Not recognisable by content: read the full view's fixed positions, and say so.
+    LEADING_FIELDS.forEach((field, index) => {
+      if (index >= 2) call[field] = cells[index] ?? "";
+    });
+    restStart = LEADING_FIELDS.length;
+    call.warnings.push(
+      "Could not recognise the Serial Number / Warranty columns — check every field before saving.",
+    );
+  }
+
+  const rest = cells.slice(restStart);
   // The Pincode column: the LAST 6-digit cell (an address can hold a pincode too,
   // but never as a whole column of its own after the pincode column).
   let pincodeIndex = -1;
@@ -164,6 +301,12 @@ function parseCallLine(cells: readonly string[], lineNumber: number, sourceLine:
     call.primaryContact = normalizeIndianPhone(nonEmptyContacts[0] ?? "");
   }
 
+  finishCall(call);
+  return call;
+}
+
+/** Fills Alt Contact from the address, and checks every field is the kind it should be. */
+function finishCall(call: ParsedAcerCall): void {
   // The portal usually leaves Alt Contact blank but writes both numbers at the end
   // of the address. Take the one that is not the primary.
   if (!call.altContact) {
@@ -185,12 +328,22 @@ function parseCallLine(cells: readonly string[], lineNumber: number, sourceLine:
   }
   if (!call.primaryContact) {
     call.warnings.push("No primary contact number.");
+  } else if (!/^[6-9]\d{9}$/.test(call.primaryContact)) {
+    call.warnings.push(`Primary Contact "${call.primaryContact}" is not a 10-digit mobile number.`);
   }
   if (!call.serialNumber) {
     call.warnings.push("No serial number.");
   }
-
-  return call;
+  // The checks that catch a line read into the wrong columns.
+  if (call.pincode && !PINCODE_RE.test(call.pincode)) {
+    call.warnings.push(`Pincode "${call.pincode}" is not a 6-digit pincode — the columns may be out of line.`);
+  }
+  if (call.warrantyStatus && !WARRANTY_RE.test(call.warrantyStatus)) {
+    call.warnings.push(`Warranty Status "${call.warrantyStatus}" does not look like a warranty — the columns may be out of line.`);
+  }
+  if (SERIAL_RE.test(call.model) && !SERIAL_RE.test(call.serialNumber)) {
+    call.warnings.push("Model looks like a serial number — the columns may be out of line.");
+  }
 }
 
 /**
@@ -255,16 +408,25 @@ export function parseAcerCallsText(text: string): ParsedAcerPaste {
   const calls: ParsedAcerCall[] = [];
   const ignoredLines: ParsedAcerPaste["ignoredLines"] = [];
 
+  // A header row, when one is pasted, decides the columns of the lines under it.
+  let headerMap: (CallField | null)[] | null = null;
   logicalLines(text).forEach(({ lineNumber, text: rawLine }) => {
     if (!rawLine.trim()) {
       return;
     }
     const cells = splitColumns(rawLine);
-    if (cells.length < MIN_CALL_COLUMNS || isHeaderRow(cells)) {
+    if (isHeaderRow(cells)) {
+      headerMap = headerMapFor(cells);
       ignoredLines.push({ lineNumber, text: rawLine.trim() });
       return;
     }
-    calls.push(parseCallLine(cells, lineNumber, rawLine.trim()));
+    if (cells.length < MIN_CALL_COLUMNS) {
+      ignoredLines.push({ lineNumber, text: rawLine.trim() });
+      return;
+    }
+    // Only a tab-separated line keeps its empty cells, so only it lines up with a header.
+    const lineHeader = rawLine.includes(TAB) ? headerMap : null;
+    calls.push(parseCallLine(cells, lineNumber, rawLine.trim(), lineHeader));
   });
 
   // The same case pasted twice in one go.
